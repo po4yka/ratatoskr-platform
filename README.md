@@ -97,8 +97,8 @@ Every user-visible action that may outlive one HTTP request is represented as an
 accepted
 queued
 running
-partially_completed
-completed
+succeeded
+partially_succeeded
 failed
 cancelled
 ```
