@@ -1,0 +1,34 @@
+[package]
+name        = "ratatoskr-platform-eventing"
+description = "The transactional outbox, the inbox, the NATS subject grammar, and the JetStream publisher."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+
+[lib]
+name = "platform_eventing"
+path = "src/lib.rs"
+
+[dependencies]
+ratatoskr-platform-core.workspace        = true
+ratatoskr-platform-persistence.workspace = true
+ratatoskr-identifiers.workspace          = true
+ratatoskr-event-envelope.workspace       = true
+async-nats.workspace = true
+sqlx.workspace       = true
+uuid.workspace       = true
+time.workspace       = true
+jiff.workspace       = true
+serde.workspace      = true
+serde_json.workspace = true
+thiserror.workspace  = true
+tracing.workspace    = true
+
+[dev-dependencies]
+ratatoskr-platform-persistence = { workspace = true, features = ["test-support"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
+
+[lints]
+workspace = true

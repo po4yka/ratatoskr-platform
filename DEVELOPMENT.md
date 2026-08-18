@@ -1,6 +1,6 @@
 # Developing Ratatoskr Platform
 
-> Status: Implemented for milestones 1, 2 and 3; milestones 4 through 10 are Proposed.  
+> Status: Implemented for milestones 1 through 4; milestones 5 through 10 are Proposed.  
 > Owner: `ratatoskr-platform`  
 > Last reviewed: 2026-08-18
 
@@ -21,7 +21,11 @@ PostgreSQL in `compose.yaml`, the `ratatoskr-platform-persistence` pool and embe
 No binary opens a pool yet — `database` is an optional configuration section that is validated but not
 yet consumed, and the first route that reads persisted data is milestone 5.
 
-Absent: NATS in any form;
+Present since milestone 4: the transactional outbox and the inbox in `operations`, the NATS subject
+grammar, a `JetStream` publisher, and the pump that moves claimed rows onto the bus. No service binary
+runs the pump yet — the first command is published by the capture API at milestone 5.
+
+Absent:
 any versioned public route; OpenAPI in any form; authentication, authorization, idempotency, SSE,
 capability discovery, ingress adapters and scheduled command publication; a `Dockerfile` and
 deployment profiles. Those are milestones 2 through 10, and none of them is scaffolded, stubbed or
@@ -48,7 +52,7 @@ makes it real.
 | Local run | **real** | — |
 | PostgreSQL | **real** | milestone 2 |
 | Migration | **real** | milestone 2 |
-| NATS | **does not exist** | milestone 4 |
+| NATS | **real** | milestone 4 |
 | OpenAPI | **does not exist** | milestone 5 |
 
 ### Rust — also the CI gate, in this order
@@ -143,11 +147,22 @@ docker exec -i ratatoskr-platform-postgres psql -U platform -d platform < migrat
 queries are checked at run time rather than by the `sqlx::query!` macros. Both choices, and the
 reasons, are ADR-0004.
 
-### NATS — does not exist, milestone 4
+### NATS — real
 
-No binary connects to NATS and Platform publishes and consumes nothing. Streams, subjects, service
-identities and JetStream configuration are milestone 4, gated on the ADR-0003 amendment. The commands
-that will exist are `docker compose up -d nats` and `nats stream ls`.
+```bash
+docker compose up -d                 # PostgreSQL and NATS JetStream together
+docker exec ratatoskr-platform-nats wget -q -O- http://127.0.0.1:8222/healthz   # {"status":"ok"}
+```
+
+`PLATFORM_TEST_NATS_URL` overrides the broker the suite uses; the default matches `compose.yaml`.
+JetStream is required, not optional: the publisher waits for an acknowledgement, and core NATS
+acknowledges nothing.
+
+Subjects are `cmd.<type>` and `evt.<type>` where `<type>` is the contract type name (ADR-0005). The
+class prefix is the privilege boundary a NATS credential is granted over.
+
+No service binary runs the pump yet. `platform_eventing::pump::run_once` is one pass, driven by its
+caller; the first caller is the capture API at milestone 5.
 
 ### OpenAPI — does not exist, milestone 5
 

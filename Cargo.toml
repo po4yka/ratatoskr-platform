@@ -6,6 +6,7 @@ members = [
     "crates/persistence",
     "crates/identity",
     "crates/operations",
+    "crates/eventing",
     "crates/http",
     "services/edge",
     "services/ingest",
@@ -26,6 +27,7 @@ ratatoskr-platform-telemetry = { version = "0.1.0", path = "crates/telemetry" }
 ratatoskr-platform-persistence = { version = "0.1.0", path = "crates/persistence" }
 ratatoskr-platform-identity    = { version = "0.1.0", path = "crates/identity" }
 ratatoskr-platform-operations  = { version = "0.1.0", path = "crates/operations" }
+ratatoskr-platform-eventing    = { version = "0.1.0", path = "crates/eventing" }
 ratatoskr-platform-http      = { version = "0.1.0", path = "crates/http" }
 
 # ---- ratatoskr-contracts ----------------------------------------------------------------------
@@ -84,6 +86,11 @@ uuid = { version = "1.18.1", features = ["v7", "serde"] }
 # nanoseconds, which needs no calendar and cannot be ambiguous.
 time = { version = "0.3.44", default-features = false, features = ["std"] }
 jiff = { version = "0.2.15", default-features = false, features = ["std"] }
+
+# ---- the bus ----
+# JetStream, not core NATS: ARCHITECTURE S8.2 assumes at-least-once delivery with redelivery and a
+# dead-letter path, and core NATS is at-most-once with no persistence at all.
+async-nats = "0.42.0"
 
 # ---- serialization and errors ----
 serde      = { version = "1.0.229", features = ["derive"] }

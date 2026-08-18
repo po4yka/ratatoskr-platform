@@ -1,11 +1,13 @@
 # Platform implementation plan
 
-> **Status:** items 1, 2 and 3 are implemented (see `DEVELOPMENT.md`). Items 4 through 10 are planned,
+> **Status:** items 1 through 4 are implemented (see `DEVELOPMENT.md`). Items 5 through 10 are planned,
 > and none of them is scaffolded or stubbed in the checkout.
 >
-> Item 2 and 3 deliver the two owned schemas, their crates and their integration suites. They do not
-> wire a pool into a running binary: no request path reads persisted data until item 5, so the
-> `database` configuration section is validated but not yet consumed.
+> Items 2 and 3 deliver the two owned schemas, their crates and their integration suites. Item 4
+> adds the transactional outbox, the inbox, the subject grammar and the JetStream publisher. None of
+> them is wired into a running binary: no request path reads persisted data or publishes a command
+> until item 5, so the `database` configuration section is validated but not yet consumed and the
+> pump has no caller.
 
 Open questions that block a later item are recorded in `DEVELOPMENT.md`. Q2 (the `platform_ingress` versus `platform_ingest` schema spelling) blocks item 2 and Q4 (the `correlation` entity kind in `contracts.toml`) blocks item 4; neither can be worked around in the item that hits it.
 

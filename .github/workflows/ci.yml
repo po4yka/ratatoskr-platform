@@ -47,6 +47,7 @@ jobs:
       # Where the suite creates and drops its disposable databases. Matches compose.yaml, so the
       # same command works on a laptop and here.
       PLATFORM_TEST_DATABASE_URL: postgres://platform:platform@127.0.0.1:5432/platform
+      PLATFORM_TEST_NATS_URL: nats://127.0.0.1:4222
 
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.3.0
@@ -62,6 +63,21 @@ jobs:
         run: rustup show           # rust-toolchain.toml is the only supported toolchain
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.8.1
+
+      # NATS runs as an explicit container rather than a service, because a service container cannot
+      # be given a command and `--jetstream` is not the image default. Without the flag every publish
+      # is refused and the publisher tests fail for a reason that has nothing to do with the code.
+      - name: Start NATS with JetStream
+        run: |
+          docker run -d --name nats -p 4222:4222 -p 8222:8222 nats:2-alpine \
+            --jetstream --http_port 8222
+          for _ in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:8222/healthz | grep -q ok; then exit 0; fi
+            sleep 1
+          done
+          echo "NATS did not become healthy" >&2
+          docker logs nats >&2
+          exit 1
 
       - run: cargo fetch --locked
       - run: cargo fmt --all -- --check

@@ -1,7 +1,6 @@
 # Local development dependencies. Not a deployment artifact: deployment profiles are milestone 9.
 #
-# Only PostgreSQL, because milestone 2 and 3 own only the `identity` and `operations` schemas.
-# NATS arrives with the outbox at milestone 4, and adding it now would be a broker nobody connects to.
+# PostgreSQL for the two owned schemas, and NATS JetStream for the outbox publisher (milestone 4).
 #
 # The credentials here are local-only and deliberately obvious. SECURITY.md forbids production
 # credentials in the repository, and a password that looks like a real one invites reuse.
@@ -32,5 +31,24 @@ services:
     volumes:
       - platform-postgres-data:/var/lib/postgresql/data
 
+  nats:
+    # JetStream, not core NATS: the outbox assumes at-least-once delivery with redelivery and a
+    # dead-letter path, and core NATS is at-most-once with no persistence at all.
+    image: nats:2-alpine
+    container_name: ratatoskr-platform-nats
+    command: ["--jetstream", "--store_dir=/data", "--http_port=8222"]
+    ports:
+      - "127.0.0.1:4222:4222"
+      - "127.0.0.1:8222:8222"
+    healthcheck:
+      # `/healthz` reports JetStream readiness, not just that the port is open.
+      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:8222/healthz | grep -q ok"]
+      interval: 1s
+      timeout: 5s
+      retries: 30
+    volumes:
+      - platform-nats-data:/data
+
 volumes:
   platform-postgres-data:
+  platform-nats-data:

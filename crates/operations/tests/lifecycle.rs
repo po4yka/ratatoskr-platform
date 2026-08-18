@@ -1,5 +1,12 @@
 //! The operations schema and its state machine, against a real `PostgreSQL`.
 
+#![allow(
+    clippy::expect_used,
+    clippy::panic,
+    clippy::unwrap_used,
+    reason = "assertions in a test binary"
+)]
+
 use platform_operations::OperationError;
 use platform_operations::transition::{self, Transition};
 use platform_persistence::test_support::TestDatabase;
