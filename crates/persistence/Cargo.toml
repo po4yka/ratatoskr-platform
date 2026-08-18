@@ -1,0 +1,36 @@
+[package]
+name        = "ratatoskr-platform-persistence"
+description = "The PostgreSQL pool, the embedded migrator, and the readiness probe for both."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+
+[lib]
+name = "platform_persistence"
+path = "src/lib.rs"
+
+# No axum and no telemetry crate: `identity` and `operations` depend on this one and must not
+# inherit an HTTP server or an exporter to run a query.
+[dependencies]
+ratatoskr-platform-core.workspace = true
+sqlx.workspace      = true
+secrecy.workspace   = true
+thiserror.workspace = true
+tracing.workspace   = true
+tokio.workspace     = true
+
+[features]
+# The disposable-database harness. Never enabled by a service binary.
+test-support = ["dep:uuid"]
+
+[dependencies.uuid]
+workspace = true
+optional  = true
+
+[dev-dependencies]
+uuid.workspace = true
+
+[lints]
+workspace = true

@@ -118,7 +118,7 @@ fn source_chain(error: &(dyn std::error::Error + 'static)) -> String {
 }
 
 /// Which part of the process failed. Bounded-cardinality telemetry only: never on a wire, never in
-/// a response body. Milestone 2 adds `Database`; milestone 4 adds `Bus`.
+/// a response body. Milestone 4 adds `Bus`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Subsystem {
@@ -128,6 +128,8 @@ pub enum Subsystem {
     Telemetry,
     /// The HTTP harness: a listener, a middleware, or a handler.
     Http,
+    /// The database pool, a migration, or a query.
+    Persistence,
 }
 
 impl core::fmt::Display for Subsystem {
@@ -136,6 +138,7 @@ impl core::fmt::Display for Subsystem {
             Self::Config => "config",
             Self::Telemetry => "telemetry",
             Self::Http => "http",
+            Self::Persistence => "persistence",
         })
     }
 }

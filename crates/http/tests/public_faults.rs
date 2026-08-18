@@ -138,11 +138,28 @@ fn oversized() -> Request<Body> {
         .unwrap()
 }
 
-/// F-1: there is no `ErrorEnvelope::new` anywhere in the repository outside `platform_http::fault`.
+/// Every permitted `ErrorEnvelope::new` site, with the reason it is permitted. Adding a row here is
+/// a deliberate act a reviewer sees; adding a construction site without one fails F-1.
+const ALLOWED_ENVELOPE_SITES: [&str; 2] =
+    ["crates/http/src/fault.rs", "crates/operations/src/lib.rs"];
+
+/// F-1: every `ErrorEnvelope::new` site in the repository is one this test names and justifies.
 ///
 /// The scan walks the workspace, not this package: `crates/core` also depends on
-/// `ratatoskr-error-contracts`, so a second construction site there is exactly the regression this
-/// test exists to catch, and a package-local scan would not see it.
+/// `ratatoskr-error-contracts`, so a construction site there is exactly the regression this test
+/// exists to catch, and a package-local scan would not see it.
+///
+/// The assertion is set equality against an allowlist rather than a count. A count would pass the
+/// moment somebody deleted one site and added another, and it would say nothing about why a site is
+/// allowed. Two sites exist and they do different things:
+///
+///   * `crates/http/src/fault.rs` is the ONLY place that authors an envelope as an HTTP RESPONSE
+///     BODY. That is the rule milestone 1 established and it is unchanged: no handler writes its
+///     own error body.
+///   * `crates/operations/src/lib.rs` reconstitutes a diagnostic that is already stored in
+///     `operations.operation_errors` into the `errors` field of an `OperationSnapshot`. It is data
+///     inside a successful response, not the response to a failure, and routing it through
+///     `fault.rs` would mean mapping a stored row onto a `FailureKind` that does not describe it.
 #[test]
 fn error_envelope_is_constructed_in_exactly_one_place() {
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
@@ -161,12 +178,31 @@ fn error_envelope_is_constructed_in_exactly_one_place() {
         scanned > 0,
         "the source scan found no files, so it proves nothing"
     );
+
+    // Compare workspace-relative paths. The scan yields absolute paths whose prefix depends on
+    // where the checkout lives, so the suffix from the last `crates/` onward is the stable part.
+    let mut found: Vec<String> = sites
+        .iter()
+        .map(|path| {
+            let text = path.to_string_lossy().replace('\\', "/");
+            text.rfind("crates/")
+                .map_or(text.clone(), |index| text[index..].to_owned())
+        })
+        .collect();
+    found.sort();
+    found.dedup();
+
+    let mut expected: Vec<String> = ALLOWED_ENVELOPE_SITES
+        .iter()
+        .map(|site| (*site).to_owned())
+        .collect();
+    expected.sort();
+
     assert_eq!(
-        sites.len(),
-        1,
-        "ErrorEnvelope::new appears in {sites:?}; §4.3 permits exactly one site",
+        found, expected,
+        "the set of ErrorEnvelope::new sites changed; every site must be named and justified in \
+         ALLOWED_ENVELOPE_SITES above",
     );
-    assert!(sites[0].ends_with("fault.rs"), "{sites:?}");
 }
 
 /// Reads every `.rs` file under a `src/` directory below `root`. Test sources are excluded: they

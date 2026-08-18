@@ -24,6 +24,30 @@ jobs:
   gate:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+
+    # The integration suite talks to a real PostgreSQL on purpose: ADR-0004 chose runtime-checked
+    # queries, so this service is what replaces the compile-time checking the `sqlx::query!` macros
+    # would have given. Without it the suite does not run and the queries are unverified.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: platform
+          POSTGRES_PASSWORD: platform
+          POSTGRES_DB: platform
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U platform -d platform"
+          --health-interval 1s
+          --health-timeout 5s
+          --health-retries 30
+
+    env:
+      # Where the suite creates and drops its disposable databases. Matches compose.yaml, so the
+      # same command works on a laptop and here.
+      PLATFORM_TEST_DATABASE_URL: postgres://platform:platform@127.0.0.1:5432/platform
+
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.3.0
 

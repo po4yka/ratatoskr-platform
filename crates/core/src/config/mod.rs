@@ -29,8 +29,8 @@ use figment::Figment;
 use figment::providers::{Env, Serialized};
 
 pub use crate::config::model::{
-    AdminConfig, LogFormat, OtlpConfig, PlatformConfig, PublicConfig, ShutdownConfig,
-    TelemetryConfig,
+    AdminConfig, DatabaseConfig, LogFormat, OtlpConfig, PlatformConfig, PublicConfig,
+    ShutdownConfig, TelemetryConfig,
 };
 pub use crate::config::validate::Violation;
 use crate::role::RuntimeRole;
@@ -104,6 +104,11 @@ impl PlatformConfig {
             admin: AdminConfig {
                 bind: SocketAddr::new(loopback, role.default_admin_port()),
             },
+            // Absent by default, in every role. A database URL carries a credential, so there is
+            // no default that is not either wrong or a secret in the source tree. Milestone 5 makes
+            // it required for the roles that serve data; until then a process without one starts and
+            // reports no database check.
+            database: None,
             // Role-aware: the table is present for the one role that may serve public traffic and
             // absent from the others, so rule V1 is satisfied by the defaults alone.
             public: role.may_have_public_listener().then(|| PublicConfig {

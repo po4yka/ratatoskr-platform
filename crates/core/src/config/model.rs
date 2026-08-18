@@ -27,6 +27,14 @@ pub struct PlatformConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub public: Option<PublicConfig>,
 
+    /// The `PostgreSQL` connection. Optional until the first route that reads persisted data, which
+    /// is milestone 5; a binary configured without it starts, serves its probes, and reports no
+    /// database check. That is deliberately not "degraded": at milestone 2 and 3 no request path
+    /// touches the database, so claiming degradation would make readiness lie in the safe direction,
+    /// which is still a lie.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub database: Option<DatabaseConfig>,
+
     /// The two phases of a graceful stop.
     pub shutdown: ShutdownConfig,
 
@@ -69,6 +77,40 @@ pub struct PublicConfig {
     /// `THREAT_MODEL.md`, "Ingress/upload abuse". Same serde-default requirement as above.
     #[serde(default = "default_max_body_bytes")]
     pub max_body_bytes: u64,
+}
+
+/// The `PostgreSQL` connection Platform owns. `identity` and `operations` only; ARCHITECTURE S4.2 and
+/// S19 invariant 6 forbid this pool ever reaching a domain service's schema.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DatabaseConfig {
+    /// `RATATOSKR__DATABASE__URL`. The whole URL is a secret because a `PostgreSQL` URL carries the
+    /// password in its user information, so it can never be `Debug`-printed the way the endpoint
+    /// URL of the collector is (rule V10).
+    #[serde(default, skip_serializing)]
+    pub url: SecretString,
+
+    /// `RATATOSKR__DATABASE__MAX_CONNECTIONS`. 1..=100, default 10.
+    ///
+    /// A ceiling, not a target. `PostgreSQL`'s own `max_connections` is the real limit and three
+    /// roles share it; a pool that can exhaust the server is a self-inflicted outage.
+    #[serde(default = "default_max_connections")]
+    pub max_connections: u32,
+
+    /// `RATATOSKR__DATABASE__ACQUIRE_TIMEOUT_SECONDS`. 1..=30, default 5.
+    ///
+    /// Bounded well below the public request timeout so a saturated pool surfaces as a fast,
+    /// truthful failure rather than as a request that times out with no explanation.
+    #[serde(default = "default_acquire_timeout_seconds")]
+    pub acquire_timeout_seconds: u64,
+}
+
+const fn default_max_connections() -> u32 {
+    10
+}
+
+const fn default_acquire_timeout_seconds() -> u64 {
+    5
 }
 
 /// The two phases of a graceful stop. They are separate knobs because they answer different

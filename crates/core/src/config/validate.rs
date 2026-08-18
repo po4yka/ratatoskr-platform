@@ -13,6 +13,8 @@ use figment::error::Kind;
 use tracing_subscriber::EnvFilter;
 
 use crate::config::model::PlatformConfig;
+use secrecy::ExposeSecret;
+
 use crate::role::RuntimeRole;
 
 /// One startup-rule violation.
@@ -156,6 +158,56 @@ pub(crate) fn validate(role: RuntimeRole, config: &PlatformConfig) -> Vec<Violat
                 rule: "must not embed a user name, a password or a query string; a collector \
                        credential belongs in telemetry.otlp.headers, which cannot be printed \
                        (SECURITY.md)",
+            });
+        }
+    }
+
+    found.extend(database_violations(config));
+
+    found
+}
+
+/// V11 and V12 — the database rules.
+///
+/// Extracted so [`validate`] stays inside the workspace's function-length lint. The split is along
+/// the subsystem boundary rather than an arbitrary line count, so the next rule has an obvious home.
+fn database_violations(config: &PlatformConfig) -> Vec<Violation> {
+    let mut found = Vec::new();
+
+    // V11 — the pool bounds. A pool larger than the server's own `max_connections` divided by the
+    // number of roles is an outage the first time all three scale out together, and an acquire
+    // timeout at or above the public request timeout hides pool saturation behind a request
+    // timeout, which points the investigation at the wrong subsystem.
+    let Some(database) = &config.database else {
+        return found;
+    };
+
+    {
+        if !(1..=100).contains(&database.max_connections) {
+            found.push(Violation {
+                key: "database.max_connections",
+                env_var: "RATATOSKR__DATABASE__MAX_CONNECTIONS",
+                rule: "must be 1..=100",
+            });
+        }
+
+        if !(1..=30).contains(&database.acquire_timeout_seconds) {
+            found.push(Violation {
+                key: "database.acquire_timeout_seconds",
+                env_var: "RATATOSKR__DATABASE__ACQUIRE_TIMEOUT_SECONDS",
+                rule: "must be 1..=30",
+            });
+        }
+
+        // V12 — the scheme. `postgres://` and `postgresql://` are the two sqlx accepts; anything
+        // else fails at connect time, which is after the process has already reported itself
+        // started. A configuration error must be a startup error.
+        let url = database.url.expose_secret();
+        if !(url.starts_with("postgres://") || url.starts_with("postgresql://")) {
+            found.push(Violation {
+                key: "database.url",
+                env_var: "RATATOSKR__DATABASE__URL",
+                rule: "must be a postgres:// or postgresql:// URL",
             });
         }
     }

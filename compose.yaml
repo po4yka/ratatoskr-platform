@@ -1,0 +1,36 @@
+# Local development dependencies. Not a deployment artifact: deployment profiles are milestone 9.
+#
+# Only PostgreSQL, because milestone 2 and 3 own only the `identity` and `operations` schemas.
+# NATS arrives with the outbox at milestone 4, and adding it now would be a broker nobody connects to.
+#
+# The credentials here are local-only and deliberately obvious. SECURITY.md forbids production
+# credentials in the repository, and a password that looks like a real one invites reuse.
+
+services:
+  postgres:
+    # Pinned to the major version the deployment targets. 16 is what is available offline here;
+    # a major upgrade is a migration exercise, not a tag bump, so it gets its own pull request.
+    image: postgres:16
+    container_name: ratatoskr-platform-postgres
+    environment:
+      POSTGRES_USER: platform
+      POSTGRES_PASSWORD: platform
+      POSTGRES_DB: platform
+      # Deterministic collation, so an index built on a developer's laptop sorts like one built in CI.
+      POSTGRES_INITDB_ARGS: "--locale-provider=icu --icu-locale=und-x-icu --encoding=UTF8"
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      # `pg_isready` returns success while the server is still replaying WAL, so the check also runs a
+      # trivial query. A migration that starts too early fails with a confusing connection error.
+      test: ["CMD-SHELL", "pg_isready -U platform -d platform && psql -U platform -d platform -c 'select 1' > /dev/null"]
+      interval: 1s
+      timeout: 5s
+      retries: 30
+    # The data directory is a named volume rather than a bind mount, so `docker compose down -v` is
+    # the documented reset and no stray directory appears in the working tree.
+    volumes:
+      - platform-postgres-data:/var/lib/postgresql/data
+
+volumes:
+  platform-postgres-data:

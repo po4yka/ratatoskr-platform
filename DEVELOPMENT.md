@@ -1,6 +1,6 @@
 # Developing Ratatoskr Platform
 
-> Status: Implemented for milestone 1; milestones 2 through 10 are Proposed.  
+> Status: Implemented for milestones 1, 2 and 3; milestones 4 through 10 are Proposed.  
 > Owner: `ratatoskr-platform`  
 > Last reviewed: 2026-08-18
 
@@ -15,7 +15,13 @@ configuration with secret-aware values; the internal error type and its public p
 `tracing` subscriber with optional OTLP span export; liveness, readiness, Prometheus metrics and
 version on an operator listener; SIGTERM draining; and the CI gate in `.github/workflows/ci.yml`.
 
-Absent: any PostgreSQL connection, `DATABASE_URL`, `migrations/` or `compose.yaml`; NATS in any form;
+Present since milestone 2 and 3: the `identity` and `operations` schemas in `migrations/`, a local
+PostgreSQL in `compose.yaml`, the `ratatoskr-platform-persistence` pool and embedded migrator, and the
+`ratatoskr-platform-identity` and `ratatoskr-platform-operations` crates with their integration suites.
+No binary opens a pool yet — `database` is an optional configuration section that is validated but not
+yet consumed, and the first route that reads persisted data is milestone 5.
+
+Absent: NATS in any form;
 any versioned public route; OpenAPI in any form; authentication, authorization, idempotency, SSE,
 capability discovery, ingress adapters and scheduled command publication; a `Dockerfile` and
 deployment profiles. Those are milestones 2 through 10, and none of them is scaffolded, stubbed or
@@ -35,13 +41,13 @@ OpenAPI, and local-run commands. It does not make all seven runnable: three of t
 milestones 2, 4 and 5. Each family below therefore carries a truthful status and the milestone that
 makes it real.
 
-| Family | Status at milestone 1 | Arrives |
+| Family | Status | Arrives |
 |---|---|---|
 | Rust | **real** | — |
 | Test | **real** | — |
 | Local run | **real** | — |
-| PostgreSQL | **does not exist** | milestone 2 |
-| Migration | **does not exist** | milestone 2 |
+| PostgreSQL | **real** | milestone 2 |
+| Migration | **real** | milestone 2 |
 | NATS | **does not exist** | milestone 4 |
 | OpenAPI | **does not exist** | milestone 5 |
 
@@ -108,18 +114,34 @@ kill -TERM "$(pgrep -f ratatoskr-edge)"
 `ErrorEnvelope`. `ratatoskr-ingest` binds no public listener until milestone 7, and
 `ratatoskr-scheduler` never binds one (`docs/ARCHITECTURE.md` S18).
 
-### PostgreSQL — does not exist, milestone 2
+### PostgreSQL — real
 
-No milestone-1 binary opens a database connection. There is no `DATABASE_URL` configuration field, no
-`compose.yaml`, and no PostgreSQL readiness check. All four arrive together in the milestone-2 pull
-request that adds the first SQL query, so the service definition and the code that uses it are
-reviewed against each other. The command that will exist is `docker compose up -d postgres`.
+```bash
+docker compose up -d                 # PostgreSQL 16 on 127.0.0.1:5432, user/password/database `platform`
+docker compose down -v               # the documented reset: drops the named volume with the data
+```
 
-### Migration — does not exist, milestone 2
+The default `PLATFORM_TEST_DATABASE_URL` matches this compose file, so `docker compose up -d` followed
+by `cargo test --workspace` needs no further setup. The integration suite creates a disposable
+database per test and drops it afterwards; a test that panics deliberately leaves its database behind
+so the failure can be inspected.
 
-`migrations/` is deliberately absent rather than empty: an empty migrations directory makes
-`sqlx migrate info` report success against nothing. Milestone 2 creates `migrations/identity/` and the
-command `sqlx migrate run --source migrations/identity`.
+No service binary opens a pool yet. `RATATOSKR__DATABASE__URL` is validated at startup when it is set
+(rules V11 and V12) but nothing consumes it: the first route that reads persisted data is milestone 5,
+and a pool with no reader would be a connection held open to prove a point.
+
+### Migration — real
+
+```bash
+# Migrations are embedded in the binary by `sqlx::migrate!`, so there is no separate apply step in a
+# deployment: `Database::migrate` runs them under a PostgreSQL advisory lock, which makes a rolling
+# deployment of several replicas safe.
+docker exec -i ratatoskr-platform-postgres psql -U platform -d platform < migrations/0001_identity.sql
+```
+
+`migrations/` is one flat directory rather than the two `docs/ARCHITECTURE.md` S3 draws, and the
+queries are checked at run time rather than by the `sqlx::query!` macros. Both choices, and the
+reasons, are ADR-0004.
 
 ### NATS — does not exist, milestone 4
 

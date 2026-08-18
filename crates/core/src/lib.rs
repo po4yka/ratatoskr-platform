@@ -15,6 +15,6 @@ pub mod config;
 pub mod error;
 pub mod role;
 
-pub use crate::config::{ConfigError, PlatformConfig, Violation};
+pub use crate::config::{ConfigError, DatabaseConfig, PlatformConfig, Violation};
 pub use crate::error::{FailureKind, PlatformError, PublicFault, Subsystem};
 pub use crate::role::RuntimeRole;

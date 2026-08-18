@@ -3,6 +3,9 @@ resolver = "3"
 members = [
     "crates/core",
     "crates/telemetry",
+    "crates/persistence",
+    "crates/identity",
+    "crates/operations",
     "crates/http",
     "services/edge",
     "services/ingest",
@@ -20,6 +23,9 @@ repository   = "https://github.com/po4yka/ratatoskr-platform"
 # ---- in-repo ----
 ratatoskr-platform-core      = { version = "0.1.0", path = "crates/core" }
 ratatoskr-platform-telemetry = { version = "0.1.0", path = "crates/telemetry" }
+ratatoskr-platform-persistence = { version = "0.1.0", path = "crates/persistence" }
+ratatoskr-platform-identity    = { version = "0.1.0", path = "crates/identity" }
+ratatoskr-platform-operations  = { version = "0.1.0", path = "crates/operations" }
 ratatoskr-platform-http      = { version = "0.1.0", path = "crates/http" }
 
 # ---- ratatoskr-contracts ----------------------------------------------------------------------
@@ -32,8 +38,15 @@ ratatoskr-platform-http      = { version = "0.1.0", path = "crates/http" }
 ratatoskr-identifiers     = { git = "ssh://git@github.com/po4yka/ratatoskr-contracts.git", rev = "6b3ddd961a733af293a035931fed2ce3cc8599dd" }
 ratatoskr-error-contracts = { git = "ssh://git@github.com/po4yka/ratatoskr-contracts.git", rev = "6b3ddd961a733af293a035931fed2ce3cc8599dd" }
 ratatoskr-event-envelope  = { git = "ssh://git@github.com/po4yka/ratatoskr-contracts.git", rev = "6b3ddd961a733af293a035931fed2ce3cc8599dd" }
-# ratatoskr-operation-contracts: deliberately NOT a dependency at milestone 1. Nothing here
-# constructs or reads an operation. It arrives at milestone 3, at the same rev.
+ratatoskr-operation-contracts = { git = "ssh://git@github.com/po4yka/ratatoskr-contracts.git", rev = "6b3ddd961a733af293a035931fed2ce3cc8599dd" }
+
+# ---- persistence ----
+# `migrate` embeds migrations/ into the binary, so a deployment cannot drift from its schema.
+# `time` rather than `chrono`: contracts uses jiff on the wire, neither is a native sqlx type, and
+# `time::OffsetDateTime` converts to a jiff::Timestamp through unix nanoseconds without a calendar.
+sqlx = { version = "0.8.6", default-features = false, features = [
+    "runtime-tokio", "tls-rustls-ring", "postgres", "uuid", "time", "macros", "migrate",
+] }
 
 # ---- async runtime and HTTP ----
 tokio      = { version = "1.53.1", features = ["rt-multi-thread", "macros", "signal", "net", "time", "sync"] }
@@ -63,6 +76,14 @@ opentelemetry_sdk           = { version = "0.32.1", features = ["rt-tokio", "tra
 opentelemetry-otlp          = { version = "0.32.0", default-features = false, features = ["grpc-tonic", "trace", "tls-ring", "tls-roots", "tls-webpki-roots"] }
 metrics                     = "0.24.6"
 metrics-exporter-prometheus = { version = "0.18.3", default-features = false }
+
+# ---- identity and time on the boundary between the database and the wire ----
+# `uuid` v7 because ratatoskr-contracts mints v7 and the database stores the same bytes.
+uuid = { version = "1.18.1", features = ["v7", "serde"] }
+# `time` is sqlx's timestamptz type here; contracts speaks jiff. The two convert through unix
+# nanoseconds, which needs no calendar and cannot be ambiguous.
+time = { version = "0.3.44", default-features = false, features = ["std"] }
+jiff = { version = "0.2.15", default-features = false, features = ["std"] }
 
 # ---- serialization and errors ----
 serde      = { version = "1.0.229", features = ["derive"] }
