@@ -80,7 +80,7 @@ Never solve a missing integration by reading or writing another service's schema
 1. **Clients call Platform, not internal services.** Web, mobile, extensions, Mini Apps, and local agents use the public Edge API.
 2. **Long-running work is asynchronous.** Accept the request, create an `operation_id`, publish a command, and return promptly.
 3. **Every retriable write is idempotent.** Require or derive a stable idempotency key and persist the result.
-4. **Operations are truthful.** Distinguish accepted, queued, running, partially completed, completed, failed, and cancelled states.
+4. **Operations are truthful.** Distinguish accepted, queued, running, succeeded, partially succeeded, failed, and cancelled states.
 5. **Errors are stable and actionable.** Return contract error codes; keep provider diagnostics in authorized internal records.
 6. **Capabilities replace frontend assumptions.** Expose supported features and minimum compatible client versions.
 7. **Pagination, filtering, and ordering are explicit.** Do not expose unbounded list endpoints.
