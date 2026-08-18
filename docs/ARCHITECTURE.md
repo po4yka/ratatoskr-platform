@@ -1,6 +1,6 @@
 # Ratatoskr Platform Architecture
 
-> Status: target architecture. The repository is currently in architecture bootstrap; binaries, schemas, routes, and infrastructure described here are planned boundaries rather than claims about implemented behavior.
+> Status: target architecture. The crates and services marked `(m1)` in S3 exist; everything else in this document remains a planned boundary rather than a claim about implemented behavior. Schemas, routes, and event infrastructure described here are not implemented.
 
 ## 1. Purpose
 
@@ -51,6 +51,9 @@ Public clients communicate only with Edge. Provider-specific services own provid
 ```text
 ratatoskr-platform/
 ├── crates/
+│   ├── core/            (m1)  runtime role, typed configuration, the internal error type
+│   ├── telemetry/       (m1)  subscriber, wire identity, correlation, metrics
+│   ├── http/            (m1)  shared server harness, operator plane, lifecycle
 │   ├── platform-domain/
 │   ├── identity/
 │   ├── operations/
@@ -59,12 +62,11 @@ ratatoskr-platform/
 │   ├── public-api/
 │   ├── eventing/
 │   ├── persistence/
-│   ├── telemetry/
 │   └── test-support/
 ├── services/
-│   ├── edge/
-│   ├── ingest/
-│   └── scheduler/
+│   ├── edge/            (m1)
+│   ├── ingest/          (m1)
+│   └── scheduler/       (m1)
 ├── migrations/
 │   ├── identity/
 │   └── operations/
@@ -73,6 +75,10 @@ ratatoskr-platform/
 │   └── integration/
 └── docs/
 ```
+
+`core` and `http` are additions to the original ten: the listed crates have no home for configuration, the internal error type, process lifecycle or the operator plane, since `platform-domain` is domain, `persistence` is SQL, and `public-api` is the milestone-5 route surface. `telemetry` is unchanged in name and scope.
+
+Only the paths marked `(m1)` exist. An unmarked path is a planned boundary and is deliberately not created as an empty shell; the milestone that needs it creates it.
 
 Service binaries may share platform primitives, but they must not become one universal worker with all domain dependencies.
 

@@ -1,0 +1,107 @@
+//! THE `ErrorEnvelope` construction site, and the `CatchPanicLayer` responder.
+
+use std::any::Any;
+use std::fmt;
+
+use axum::Json;
+use axum::body::Body;
+use axum::response::{IntoResponse as _, Response};
+use http::StatusCode;
+use platform_core::{PlatformError, Subsystem};
+use ratatoskr_error_contracts::ErrorEnvelope;
+
+use crate::observe::RequestContext;
+
+/// THE place an [`ErrorEnvelope`] is constructed. There is no other `ErrorEnvelope::new` call in
+/// this repository; test F-1 proves it by scanning the source tree.
+///
+/// `extensions` is left empty. Contracts ADR-0008: a producer never authors a key there, and the
+/// testable rule is `extensions.is_empty()` on the envelopes it CONSTRUCTS.
+///
+/// `field_violations` is left empty: nothing at milestone 1 validates a payload field. The wire
+/// shape is already correct because contracts marks it `skip_serializing_if = "Vec::is_empty"`, so
+/// milestone 5's addition is provably additive (test F-9).
+///
+/// The `Internal` arm of `error` is unreachable from here: this function reads
+/// [`PlatformError::fault`] and nothing else, so no `subsystem` and no `source` has a path into a
+/// response body.
+pub(crate) fn render(error: &PlatformError, ctx: &RequestContext) -> Response {
+    let fault = error.fault();
+    let mut envelope =
+        ErrorEnvelope::new(fault.code.clone(), fault.message.clone(), fault.retryable);
+    envelope.correlation_id = Some(ctx.correlation_id.clone());
+    envelope.trace_id.clone_from(&ctx.trace_id);
+    (fault.status, Json(envelope)).into_response()
+}
+
+/// The `CatchPanicLayer` responder.
+///
+/// Extracts the panic payload and carries it in a response extension to the one logging site in
+/// [`crate::observe`], which is inside the request span and therefore logs it with the request's
+/// correlation. The payload never reaches the response: the body is empty and the middleware
+/// replaces it with an `ErrorEnvelope` built from static text.
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "the tower-http `ResponseForPanic` contract hands the payload over by value"
+)]
+pub(crate) fn panic_response(payload: Box<dyn Any + Send + 'static>) -> http::Response<Body> {
+    let mut response = http::Response::new(Body::empty());
+    *response.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
+    response
+        .extensions_mut()
+        .insert(CaughtPanic(describe(payload.as_ref())));
+    response
+}
+
+/// The failure a caught panic represents, carried from [`panic_response`] to the one logging site.
+///
+/// Cloneable because `http::Extensions` requires it, and an error because it becomes the `source`
+/// of a [`PlatformError::Internal`].
+#[derive(Debug, Clone)]
+pub(crate) struct CaughtPanic(String);
+
+impl fmt::Display for CaughtPanic {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "a request handler panicked: {}", self.0)
+    }
+}
+
+impl std::error::Error for CaughtPanic {}
+
+/// A status no [`platform_core::FailureKind`] maps to. Reaching this is itself a defect, which is
+/// why it is an internal failure and not a silent pass-through.
+#[derive(Debug)]
+struct UnmappedStatus(StatusCode);
+
+impl fmt::Display for UnmappedStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "no failure kind maps to status {}", self.0.as_u16())
+    }
+}
+
+impl std::error::Error for UnmappedStatus {}
+
+/// The failure a response no handler authored represents.
+///
+/// A caught panic first, because it carries diagnostics the status alone cannot; then the static
+/// status table; then an internal failure, because an unmapped status escaping the process is a
+/// defect rather than a client-visible fact.
+pub(crate) fn classify(response: &Response) -> PlatformError {
+    if let Some(panic) = response.extensions().get::<CaughtPanic>() {
+        return PlatformError::internal(Subsystem::Http, panic.clone());
+    }
+    PlatformError::from_status(response.status()).unwrap_or_else(|| {
+        PlatformError::internal(Subsystem::Http, UnmappedStatus(response.status()))
+    })
+}
+
+/// The panic payload as text, for the log record only.
+fn describe(payload: &(dyn Any + Send + 'static)) -> String {
+    if let Some(message) = payload.downcast_ref::<&'static str>() {
+        return (*message).to_owned();
+    }
+    if let Some(message) = payload.downcast_ref::<String>() {
+        return message.clone();
+    }
+    "the payload is not a string".to_owned()
+}

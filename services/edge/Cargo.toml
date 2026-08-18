@@ -1,0 +1,20 @@
+[package]
+name        = "ratatoskr-edge"
+description = "Public control-plane listener: the Ratatoskr Edge deployable."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+
+[[bin]]
+name = "ratatoskr-edge"
+path = "src/main.rs"
+
+[dependencies]
+ratatoskr-platform-core.workspace = true
+ratatoskr-platform-http.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true

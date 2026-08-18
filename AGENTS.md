@@ -28,7 +28,9 @@ It accepts work, routes it to the owning bounded context, and reports progress. 
 
 ## Current phase
 
-The repository is in architecture bootstrap. Do not assume Rust crates, binaries, migrations, API routes, NATS streams, or CI commands exist unless they are present in the checkout.
+Milestone 1 of `docs/IMPLEMENTATION_PLAN.md` is implemented. Do not assume Rust crates, binaries, migrations, API routes, NATS streams, or CI commands exist unless they are present in the checkout.
+
+What now exists: the `ratatoskr-edge`, `ratatoskr-ingest` and `ratatoskr-scheduler` binaries; the `crates/core`, `crates/telemetry` and `crates/http` libraries; and the CI gate in `.github/workflows/ci.yml`. Migrations, database connections, API routes, NATS streams and OpenAPI remain absent, and the instruction above still applies to them in full. `DEVELOPMENT.md` states what is present and what is absent, command family by command family.
 
 When creating initial scaffolding:
 
@@ -87,6 +89,10 @@ Never solve a missing integration by reading or writing another service's schema
 8. **Public contracts are versioned.** Breaking changes require a new API/contract version and coordinated migration.
 9. **Authorization is resource-based.** Never rely only on route-level authentication when the object has an owner.
 10. **No provider secrets cross the public boundary.** OAuth tokens remain in provider services.
+
+## Errors
+
+A domain crate defines its own error enum and converts into `platform_core::PlatformError` at the HTTP boundary through `From`. It never implements `IntoResponse`, never constructs an `ErrorEnvelope`, and never returns a bare `StatusCode`. There is exactly one `ErrorEnvelope` construction site in this repository, `platform_http::fault::render`.
 
 ## Operation model
 
@@ -205,6 +211,7 @@ Never log bearer tokens, authorization codes, cookies, raw Mini App `initData`, 
 - Public request acceptance must remain compatible during rolling deployment.
 - Destructive schema contraction follows expand/migrate/contract.
 - Audit/event records required for security or idempotency are not deleted as incidental cleanup.
+- The milestone that introduces a runtime dependency introduces, in the same pull request, its compose service, its command family in `DEVELOPMENT.md`, and at least one test that fails if the dependency is absent or misconfigured. A dependency is never added to the local stack before code connects to it.
 
 If a feature requires a new service-owned field, change that service contract instead of adding a shadow copy to Platform without an explicit projection design.
 
@@ -272,7 +279,7 @@ The changeset must list producers, consumers, compatible rollout order, and roll
 
 ## Git and PR workflow
 
-- Keep Edge, Ingest, and Scheduler changes separated by concern even when they share one repository.
+- Keep Edge, Ingest, and Scheduler changes separated by concern even when they share one repository. The milestone-1 scaffold pull request necessarily touches all three binaries; this rule applies from milestone 2 onward.
 - Avoid combining public API changes with unrelated infrastructure refactors.
 - Document all new endpoints, permissions, commands, and operation states.
 - State whether the change is backward compatible.

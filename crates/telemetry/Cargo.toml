@@ -1,0 +1,44 @@
+[package]
+name        = "ratatoskr-platform-telemetry"
+description = "Tracing subscriber, OpenTelemetry resource and wire identity, correlation, and metrics."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+
+[lib]
+name = "platform_telemetry"
+path = "src/lib.rs"
+
+# No axum: milestone 3 `operations` and milestone 4 `eventing` emit spans and metrics and must not
+# inherit an HTTP server to do it.
+[dependencies]
+ratatoskr-platform-core.workspace   = true
+ratatoskr-identifiers.workspace     = true
+ratatoskr-error-contracts.workspace = true
+tracing.workspace                     = true
+tracing-subscriber.workspace          = true
+tracing-opentelemetry.workspace       = true
+opentelemetry.workspace               = true
+opentelemetry_sdk.workspace           = true
+opentelemetry-otlp.workspace          = true
+metrics.workspace                     = true
+metrics-exporter-prometheus.workspace = true
+http.workspace      = true
+secrecy.workspace   = true
+thiserror.workspace = true
+
+[dev-dependencies]
+# Dev-only at milestone 1: nothing publishes an event yet, so there is no wire value to type. It is
+# here to prove SERVICE_NAME parses as a `ProducerName` (test X-1). Real dependency at milestone 4.
+ratatoskr-event-envelope.workspace = true
+serde_json.workspace = true
+# Dev-only. `init` is documented as requiring a Tokio runtime when an OTLP endpoint is configured —
+# the tonic channel spawns a task — so the test that the exporter builds for an `https` endpoint
+# cannot run without one. The specification's per-package table omits it because it specifies no
+# test of the OTLP path; that omission is what let the missing TLS feature ship.
+tokio.workspace = true
+
+[lints]
+workspace = true

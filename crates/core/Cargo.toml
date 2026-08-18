@@ -1,0 +1,36 @@
+[package]
+name        = "ratatoskr-platform-core"
+description = "Runtime role, typed platform configuration, and the platform error taxonomy."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+
+[lib]
+name = "platform_core"
+path = "src/lib.rs"
+
+# No axum, no OpenTelemetry, no HTTP server: milestone 2's `identity` and `persistence` crates need
+# `PlatformError` and `PlatformConfig` without serving HTTP.
+[dependencies]
+ratatoskr-identifiers.workspace     = true
+ratatoskr-error-contracts.workspace = true
+http.workspace      = true
+figment.workspace   = true
+secrecy.workspace   = true
+url.workspace       = true
+serde.workspace     = true
+thiserror.workspace = true
+tracing.workspace   = true
+# Used only by validation rule V5, which parses the log filter with `EnvFilter::try_new`.
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+# `figment::Jail` is the only supported way to set an environment variable in a test:
+# `std::env::set_var` is `unsafe` in edition 2024 and the workspace forbids unsafe code.
+figment = { workspace = true, features = ["test"] }
+serde_json.workspace = true
+
+[lints]
+workspace = true

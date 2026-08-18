@@ -1,0 +1,44 @@
+[package]
+name        = "ratatoskr-platform-http"
+description = "The shared HTTP harness: run(role), observability middleware, faults, admin, lifecycle."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+
+# Deliberately NOT named `public-api`: ARCHITECTURE S3 reserves that name for the milestone-5 route
+# surface.
+[lib]
+name = "platform_http"
+path = "src/lib.rs"
+
+[dependencies]
+ratatoskr-platform-core.workspace      = true
+ratatoskr-platform-telemetry.workspace = true
+ratatoskr-identifiers.workspace        = true
+ratatoskr-error-contracts.workspace    = true
+axum.workspace       = true
+tower.workspace      = true
+tower-http.workspace = true
+http.workspace       = true
+tokio.workspace      = true
+serde.workspace      = true
+serde_json.workspace = true
+tracing.workspace    = true
+metrics.workspace    = true
+# `Span::set_parent` (§6.3 step 4, continuing an inbound W3C `traceparent`) is an extension trait of
+# this crate, so the one middleware cannot adopt a parent context without it. The specification's
+# per-package table omits it; the middleware it specifies does not compile without it.
+tracing-opentelemetry.workspace = true
+
+[dev-dependencies]
+tower = { workspace = true, features = ["util"] }
+tokio = { workspace = true, features = ["test-util", "rt"] }
+http-body-util.workspace = true
+hyper.workspace          = true
+hyper-util.workspace     = true
+serde_json.workspace     = true
+
+[lints]
+workspace = true

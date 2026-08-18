@@ -1,0 +1,46 @@
+# The gate DEVELOPMENT.md documents, enforced. The command list here and the command list in
+# DEVELOPMENT.md are the same list; if they drift, DEVELOPMENT.md is wrong.
+#
+# PREREQUISITE: `secrets.CONTRACTS_DEPLOY_KEY` must be a read-only deploy key for
+# po4yka/ratatoskr-contracts. Without it `cargo fetch --locked` cannot resolve the git dependency.
+# This is the honest operational cost of the ssh:// pin and the most likely thing to block the first
+# pull request.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# SECURITY.md: deny by default. The gate reads the tree and needs nothing else.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.3.0
+
+      - name: Authorise the contracts git dependency
+        # Pinned by commit: a moved tag on a third-party action that handles a private key is a
+        # supply-chain compromise, not an inconvenience (THREAT_MODEL.md, generator compromise).
+        uses: webfactory/ssh-agent@dc588b651fe13675774614f8e6a936a468676387 # v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.CONTRACTS_DEPLOY_KEY }}
+
+      - name: Show the pinned toolchain
+        run: rustup show           # rust-toolchain.toml is the only supported toolchain
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.8.1
+
+      - run: cargo fetch --locked
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --locked
+      - run: cargo build --workspace --locked --release

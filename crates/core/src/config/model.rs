@@ -1,0 +1,177 @@
+//! The typed configuration tree.
+//!
+//! One shape for all three roles. Role-specific requirements are validation rules
+//! (`crate::config::validate`), not separate types.
+
+use std::collections::BTreeMap;
+use std::net::SocketAddr;
+
+use secrecy::SecretString;
+use url::Url;
+
+/// Everything a Platform binary must know before it can serve.
+///
+/// One shape for all three roles; role-specific requirements are validation rules, not separate
+/// types, so there is one thing to document and one thing to test.
+///
+/// `Serialize` exists for exactly one reason — it seeds the built-in defaults provider.
+/// The one secret member is `#[serde(skip_serializing)]`, so a default can never carry a secret and
+/// a serialized configuration can never leak one.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PlatformConfig {
+    /// The operator listener. Every role binds one.
+    pub admin: AdminConfig,
+
+    /// The public listener. Present for `Edge` only at milestone 1 (rule V1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub public: Option<PublicConfig>,
+
+    /// The two phases of a graceful stop.
+    pub shutdown: ShutdownConfig,
+
+    /// Logging, filtering and span export.
+    pub telemetry: TelemetryConfig,
+}
+
+/// The operator plane: `/health/live`, `/health/ready`, `/metrics`, `/version`. Never the public API
+/// (`AGENTS.md`: "Keep admin and diagnostic endpoints separate from the public user surface").
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AdminConfig {
+    /// `RATATOSKR__ADMIN__BIND`. Default `127.0.0.1:<role default port>`.
+    ///
+    /// Loopback by default because `SECURITY.md` says "deny by default". A container deployment MUST
+    /// set `0.0.0.0:<port>` so the kubelet, which reaches the pod IP, can run the probes; that is a
+    /// loud, immediate, one-variable failure, whereas an any-address default silently exposes
+    /// `/metrics` on a developer's LAN.
+    pub bind: SocketAddr,
+}
+
+/// The public client surface. `Edge` only at milestone 1.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PublicConfig {
+    /// `RATATOSKR__PUBLIC__BIND`. Default `127.0.0.1:8080`.
+    pub bind: SocketAddr,
+
+    /// `RATATOSKR__PUBLIC__REQUEST_TIMEOUT_SECONDS`. 1..=300, default 15.
+    /// `ARCHITECTURE.md` S5.2 layer 2, "transport limits and timeouts".
+    ///
+    /// The serde default is REQUIRED, not cosmetic: without it, setting only
+    /// `RATATOSKR__PUBLIC__BIND` on a role whose defaults omit the `public` table fails extraction
+    /// with `MissingField`, and validation rule V1 can never produce its message.
+    #[serde(default = "default_request_timeout_seconds")]
+    pub request_timeout_seconds: u64,
+
+    /// `RATATOSKR__PUBLIC__MAX_BODY_BYTES`. `1024..=104_857_600`, default `1_048_576`.
+    /// `ARCHITECTURE.md` S14, "Edge applies request, body, concurrency, and per-actor limits";
+    /// `THREAT_MODEL.md`, "Ingress/upload abuse". Same serde-default requirement as above.
+    #[serde(default = "default_max_body_bytes")]
+    pub max_body_bytes: u64,
+}
+
+/// The two phases of a graceful stop. They are separate knobs because they answer different
+/// questions: how long until the load balancer notices, and how long a request may take.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ShutdownConfig {
+    /// `RATATOSKR__SHUTDOWN__DRAIN_SECONDS`. 0..=60, default 5.
+    ///
+    /// Seconds to keep serving after SIGTERM while readiness already reports 503, so the endpoint
+    /// controller removes this instance before the listener closes. Zero is legal for local
+    /// development and guarantees 502s in a rolling deployment.
+    #[serde(default = "default_drain_seconds")]
+    pub drain_seconds: u64,
+
+    /// `RATATOSKR__SHUTDOWN__GRACE_SECONDS`. 1..=120, default 25.
+    /// Seconds allowed for in-flight requests after the listener stops accepting.
+    #[serde(default = "default_grace_seconds")]
+    pub grace_seconds: u64,
+}
+
+/// Logging and span export.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TelemetryConfig {
+    /// `RATATOSKR__TELEMETRY__LOG_FORMAT`. Default `json`.
+    #[serde(default)]
+    pub log_format: LogFormat,
+
+    /// `RATATOSKR__TELEMETRY__LOG_FILTER`. A `tracing_subscriber::EnvFilter` directive string.
+    /// Default `info,tower_http=info,hyper=warn,h2=warn`.
+    /// Validated at startup (V5), not at subscriber construction, so a bad filter is a
+    /// configuration error on stderr rather than a failure inside telemetry initialisation.
+    #[serde(default = "default_log_filter")]
+    pub log_filter: String,
+
+    /// `RATATOSKR__TELEMETRY__OTLP__*`. Absent means no span exporter.
+    ///
+    /// Absence does NOT mean absent trace ids: an `SdkTracerProvider` with zero span processors
+    /// still mints a valid, sampled, non-zero W3C trace id, so `trace_id` is real in every log line
+    /// and every `ErrorEnvelope` with no collector deployed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub otlp: Option<OtlpConfig>,
+}
+
+/// How a log line is rendered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LogFormat {
+    /// One JSON object per line. The default, because production log collectors parse it.
+    #[default]
+    Json,
+    /// Human-readable, for `cargo run`.
+    Pretty,
+}
+
+/// The OTLP span exporter.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OtlpConfig {
+    /// `RATATOSKR__TELEMETRY__OTLP__ENDPOINT`, e.g. `https://collector.example:4317`.
+    pub endpoint: Url,
+
+    /// `RATATOSKR__TELEMETRY__OTLP__TIMEOUT_SECONDS`. 1..=60, default 5.
+    #[serde(default = "default_otlp_timeout_seconds")]
+    pub timeout_seconds: u64,
+
+    /// `RATATOSKR__TELEMETRY__OTLP__HEADERS__<NAME>` — collector authentication.
+    ///
+    /// The ONLY secret in milestone 1. `Debug` renders `[REDACTED]` even nested four levels deep;
+    /// there is no `Display`; `skip_serializing` means it cannot be written out; the value is
+    /// zeroized on drop; and `rg expose_secret` enumerates every site that has ever touched the
+    /// plaintext.
+    #[serde(default, skip_serializing)]
+    pub headers: BTreeMap<String, SecretString>,
+}
+
+/// The default of [`PublicConfig::request_timeout_seconds`]. Written once, here.
+pub(super) fn default_request_timeout_seconds() -> u64 {
+    15
+}
+
+/// The default of [`PublicConfig::max_body_bytes`].
+pub(super) fn default_max_body_bytes() -> u64 {
+    1_048_576
+}
+
+/// The default of [`ShutdownConfig::drain_seconds`].
+pub(super) fn default_drain_seconds() -> u64 {
+    5
+}
+
+/// The default of [`ShutdownConfig::grace_seconds`].
+pub(super) fn default_grace_seconds() -> u64 {
+    25
+}
+
+/// The default of [`TelemetryConfig::log_filter`].
+pub(super) fn default_log_filter() -> String {
+    "info,tower_http=info,hyper=warn,h2=warn".to_owned()
+}
+
+/// The default of [`OtlpConfig::timeout_seconds`].
+pub(super) fn default_otlp_timeout_seconds() -> u64 {
+    5
+}

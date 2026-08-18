@@ -1,0 +1,20 @@
+[package]
+name        = "ratatoskr-scheduler"
+description = "Thin periodic trigger deployable."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+
+[[bin]]
+name = "ratatoskr-scheduler"
+path = "src/main.rs"
+
+[dependencies]
+ratatoskr-platform-core.workspace = true
+ratatoskr-platform-http.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true

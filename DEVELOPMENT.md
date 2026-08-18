@@ -1,9 +1,300 @@
 # Developing Ratatoskr Platform
 
-> Status: Proposed  
-> Last reviewed: 2026-08-17
+> Status: Implemented for milestone 1; milestones 2 through 10 are Proposed.  
+> Owner: `ratatoskr-platform`  
+> Last reviewed: 2026-08-18
 
-The repository is in architecture bootstrap; Edge, Ingest, Scheduler, schemas, and APIs are not implemented. Expected stack: Rust/Tokio, Axum/Tower, SQLx/PostgreSQL, NATS JetStream, OpenAPI, and OpenTelemetry.
+## Current stage
+
+Milestone 1 of `docs/IMPLEMENTATION_PLAN.md` exists and the commands marked **real** below are real.
+
+Present: the Cargo workspace, its pinned toolchain and its committed `Cargo.lock`; the
+`ratatoskr-platform-core`, `ratatoskr-platform-telemetry` and `ratatoskr-platform-http` library
+crates; the `ratatoskr-edge`, `ratatoskr-ingest` and `ratatoskr-scheduler` binaries; typed
+configuration with secret-aware values; the internal error type and its public projection; the
+`tracing` subscriber with optional OTLP span export; liveness, readiness, Prometheus metrics and
+version on an operator listener; SIGTERM draining; and the CI gate in `.github/workflows/ci.yml`.
+
+Absent: any PostgreSQL connection, `DATABASE_URL`, `migrations/` or `compose.yaml`; NATS in any form;
+any versioned public route; OpenAPI in any form; authentication, authorization, idempotency, SSE,
+capability discovery, ingress adapters and scheduled command publication; a `Dockerfile` and
+deployment profiles. Those are milestones 2 through 10, and none of them is scaffolded, stubbed or
+present in the checkout.
+
+## Toolchain
+
+Rust and Tokio, Axum and Tower, figment for configuration, `tracing` with OpenTelemetry, and
+Prometheus text exposition. SQLx/PostgreSQL, NATS JetStream and OpenAPI are in the intended stack but
+arrive with the milestones named below. The pinned toolchain in `rust-toolchain.toml` is the only
+supported one, and every command is run with `--locked` against the committed `Cargo.lock`.
+
+## Command families
+
+The first scaffold pull request must **document** exact Rust, PostgreSQL, NATS, migration, test,
+OpenAPI, and local-run commands. It does not make all seven runnable: three of them describe
+milestones 2, 4 and 5. Each family below therefore carries a truthful status and the milestone that
+makes it real.
+
+| Family | Status at milestone 1 | Arrives |
+|---|---|---|
+| Rust | **real** | — |
+| Test | **real** | — |
+| Local run | **real** | — |
+| PostgreSQL | **does not exist** | milestone 2 |
+| Migration | **does not exist** | milestone 2 |
+| NATS | **does not exist** | milestone 4 |
+| OpenAPI | **does not exist** | milestone 5 |
+
+### Rust — also the CI gate, in this order
+
+```bash
+cargo fetch --locked
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo test --workspace --locked
+cargo build --workspace --locked --release
+```
+
+This list and the step list in `.github/workflows/ci.yml` are the same list. If they drift, this
+document is wrong.
+
+`cargo fetch --locked` needs read access to `ratatoskr-contracts` over SSH; CI supplies it through
+the `CONTRACTS_DEPLOY_KEY` repository secret, and `.cargo/config.toml` makes a local checkout use the
+system git client and the SSH agent. That is a **build** credential, not a test credential.
+
+### Test
+
+```bash
+cargo test --workspace --locked
+cargo test -p ratatoskr-platform-core --locked --test config_validation
+```
+
+No test opens a network socket to anything but `127.0.0.1`, starts a container, or reads a
+credential. Production credentials are never required for the default tests.
+
+Configuration tests use `figment::Jail`, which gives each test an isolated environment and working
+directory. They cannot use `std::env::set_var`: it is `unsafe` in edition 2024 and the workspace
+inherits `unsafe_code = "forbid"`.
+
+### Local run
+
+```bash
+# edge, with a public listener
+RATATOSKR__PUBLIC__BIND=127.0.0.1:8080 \
+RATATOSKR__ADMIN__BIND=127.0.0.1:9464 \
+RATATOSKR__TELEMETRY__LOG_FORMAT=pretty \
+  cargo run --locked -p ratatoskr-edge
+
+# scheduler and ingest, on defaults alone, no environment at all
+cargo run --locked -p ratatoskr-scheduler
+cargo run --locked -p ratatoskr-ingest
+
+# validate a configuration without starting anything (exit 0 or 78)
+cargo run --locked -p ratatoskr-edge -- check-config
+
+# probe it
+curl -si localhost:9464/health/live
+curl -si localhost:9464/health/ready
+curl -s  localhost:9464/metrics | grep '^platform_'
+curl -s  localhost:9464/version
+curl -si localhost:8080/nope        # 404 + ErrorEnvelope + x-correlation-id
+curl -si localhost:8080/health/live # 404 — probes are NOT on the public listener
+
+# watch the drain: readiness flips to 503 while the listener still answers
+kill -TERM "$(pgrep -f ratatoskr-edge)"
+```
+
+`ratatoskr-edge` binds a public listener that serves no routes; every request to it returns a contract
+`ErrorEnvelope`. `ratatoskr-ingest` binds no public listener until milestone 7, and
+`ratatoskr-scheduler` never binds one (`docs/ARCHITECTURE.md` S18).
+
+### PostgreSQL — does not exist, milestone 2
+
+No milestone-1 binary opens a database connection. There is no `DATABASE_URL` configuration field, no
+`compose.yaml`, and no PostgreSQL readiness check. All four arrive together in the milestone-2 pull
+request that adds the first SQL query, so the service definition and the code that uses it are
+reviewed against each other. The command that will exist is `docker compose up -d postgres`.
+
+### Migration — does not exist, milestone 2
+
+`migrations/` is deliberately absent rather than empty: an empty migrations directory makes
+`sqlx migrate info` report success against nothing. Milestone 2 creates `migrations/identity/` and the
+command `sqlx migrate run --source migrations/identity`.
+
+### NATS — does not exist, milestone 4
+
+No binary connects to NATS and Platform publishes and consumes nothing. Streams, subjects, service
+identities and JetStream configuration are milestone 4, gated on the ADR-0003 amendment. The commands
+that will exist are `docker compose up -d nats` and `nats stream ls`.
+
+### OpenAPI — does not exist, milestone 5
+
+The public API has no versioned routes at milestone 1, so there is nothing to describe.
+`/health/live`, `/health/ready`, `/metrics` and `/version` are **admin-plane** endpoints and are
+deliberately excluded from the public OpenAPI document — they are not a client contract (`AGENTS.md`:
+"Keep admin and diagnostic endpoints separate from the public user surface"). The document and its
+drift check arrive with the capture API at milestone 5, gated on ADR-0006.
+
+## The runtime-dependency rule
+
+**The milestone that introduces a runtime dependency introduces, in the same pull request, its compose
+service, its command family in this document, and at least one test that fails if the dependency is
+absent or misconfigured. A dependency is never added to the local stack before code connects to it.**
+
+That is why milestone 1 ships no `compose.yaml`. A compose file nothing dials reports two services
+healthy while no binary can open a connection to either, which is the failure `AGENTS.md` forbids
+twice: do not assume infrastructure exists unless it is present in the checkout, and document
+implemented behavior separately from planned architecture. It also cannot be reviewed a milestone
+early — the image tag, the `initdb` grants, the schema list and the JetStream account, stream and
+subject model all depend on decisions milestones 2 and 4 produce, and the NATS half is reserved for
+an unwritten ADR-0003 amendment.
+
+The counter-argument is real: milestone 2's author must write the compose file before any SQL, so
+milestone 1 saved nothing. True — and it cost nothing, and it avoided committing a reviewed artifact
+full of guesses.
+
+## Configuration
+
+Sources, lowest precedence first:
+
+1. built-in defaults for the runtime role;
+2. `RATATOSKR__`-prefixed environment variables, with `__` separating nesting levels.
+
+There is no configuration file at milestone 1. `.env.example` is the single authoritative list of
+every variable and its built-in default; a test asserts that every variable named there really
+overrides its field, so it is executable documentation rather than prose that rots. There is no
+`dotenvy` dependency — load a local file with `set -a && . ./.env && set +a`.
+
+The naming scheme is settled today even though the file provider is not, because environment variable
+names are an operational contract and renaming them later breaks every deployment manifest.
+
+**A container deployment must set `RATATOSKR__ADMIN__BIND=0.0.0.0:<port>`**: the default is loopback,
+deny by default (`SECURITY.md`), and the kubelet probes the pod IP rather than loopback. The admin
+listener must never be published through an ingress — it serves `/metrics` and `/version`.
+
+The only secret at milestone 1 is the OTLP collector authorization header. It is held as a
+`secrecy::SecretString`: it has no `Display`, its `Debug` renders `[REDACTED]` at any nesting depth,
+and it is `skip_serializing`, so it cannot reach a log line, a defaults provider or a response body.
+Supply it from the orchestrator's secret store. Never put a real credential in `.env.example`.
+
+**A credential must never be embedded in `RATATOSKR__TELEMETRY__OTLP__ENDPOINT`.** Several OTLP
+vendors document `https://<token>@collector` or `?access_token=…`; `url::Url` is not a secret type
+and its `Debug` prints `username`, `password` and `query` as plain fields, so such a value would
+reach the effective-configuration line and `check-config`'s output in cleartext. Startup rule V10
+rejects it — put the credential in `telemetry.otlp.headers`, which cannot be printed.
+
+Startup order is strict: extract, validate, initialise telemetry, bind listeners, mark startup
+complete. Validation collects **every** semantic violation and reports them together on stderr,
+naming the dotted key, the environment variable and the rule — never the supplied value.
+
+| Exit code | Meaning |
+|---|---|
+| `0` | Clean start and clean shutdown |
+| `1` | Runtime startup failure: telemetry initialisation, or a listener that could not bind |
+| `78` | `EX_CONFIG` — the configuration is unreadable or invalid; nothing was bound |
+
+`78` is `EX_CONFIG` from `sysexits.h`. Kubernetes surfaces it in `lastState.terminated.exitCode`,
+which is what distinguishes "your configuration is wrong" from "the process crashed" in a
+restart-loop dashboard. `<binary> check-config` runs the same load and validation without binding
+anything and exits `0` or `78`, so a ConfigMap can be validated in CI or an init container.
+
+## Lifecycle and shutdown
+
+Liveness means *this process's runtime is scheduling tasks and the HTTP server can answer*. It
+consults nothing external, ever, and it answers 200 from the moment the admin listener binds until the
+process exits, **including throughout the drain**. Milestone 2 adds a PostgreSQL **readiness** check
+and nothing else: a liveness probe wired to a database converts one database blip into a rolling
+restart of the whole fleet.
+
+Readiness means *route new work to me*, and has two real checks at milestone 1: `startup` and `drain`.
+`checks` is a name-sorted array, so two consecutive probe bodies are byte-identical and `diff` is a
+usable tool at 03:00.
+
+On SIGTERM or SIGINT, in this order:
+
+1. open the `platform.shutdown` span and log at INFO;
+2. begin draining — **readiness returns 503 immediately and the listeners stay open**;
+   `platform_readiness` drops to 0;
+3. keep serving for `shutdown.drain_seconds`, the window in which the load balancer removes this
+   endpoint; skipping it is the direct cause of 502s on every deploy;
+4. stop accepting and let in-flight requests finish, bounded by `shutdown.grace_seconds`;
+5. if the grace window expires, log WARN with `in_flight_at_close` and continue anyway — a deploy is
+   never blocked by one stuck request;
+6. flush spans;
+7. exit `0`.
+
+A second signal skips straight to the flush. `/health/live` answers 200 throughout. What an operator
+should see: one INFO shutdown line, readiness 503 while requests still succeed, then the listener
+closing, with `drain_seconds` and `in_flight_at_close` on the `platform.shutdown` span.
+
+## Observability
+
+Three metrics, Prometheus pull on the admin listener. Metrics are not exported over OTLP: an OTLP
+metrics pipeline discards every recording when no collector is running, whereas
+`curl localhost:9464/metrics` shows the truth.
+
+| Metric | Type | Labels |
+|---|---|---|
+| `http_server_request_duration_seconds` | histogram | `role`, `method`, `route`, `status` |
+| `platform_readiness` | gauge, `0` or `1` | `role` |
+| `platform_build_info` | gauge, always `1` | `role`, `version`, `git_sha`, `rust_version` |
+
+The histogram's derived `_count` **is** the request count, so there is no separate counter and no
+second source of truth for one number. `route` is always the matched route template, never the request
+URI; an unmatched request is labelled `<unmatched>`. That one rule is the whole defence against a
+404-scanning cardinality bomb. Admin-plane requests are neither metered nor spanned, so a scheduler
+emits no `http_server_*` series at all — correct, it serves no requests — while still exporting
+`platform_build_info` and `platform_readiness`.
+
+Three spans:
+
+| Span | Fields |
+|---|---|
+| `platform.startup` | `role`, `version`, `git_sha`, `duration_ms` |
+| `http.server.request` | `role`, `http.request.method`, `http.route`, `http.response.status_code`, `correlation_id`, `trace_id`, `error.code` |
+| `platform.shutdown` | `role`, `drain_seconds`, `in_flight_at_close`, `graceful` |
+
+Never recorded, at any level: `url.full`, `url.query`, the raw URI, the raw method token, any
+request or response header at all, any body byte, any principal identifier. There is no header
+allowlist because no code path records a header; that is the stronger guarantee and the simpler one.
+
+Reserved span names, so later milestones do not invent competing ones: `db.query` (milestone 2),
+`platform.operation.transition` (milestone 3), `messaging.publish` and `messaging.process`
+(milestone 4, OpenTelemetry messaging semantic conventions).
+
+**Naming convention.** HTTP server metrics follow the Prometheus/OpenTelemetry `http_server_*`
+convention; every other Platform metric is `platform_<subsystem>_<measure>[_<unit>]`, and every
+numeric name carries one of the unit suffixes `contracts.toml [lint].required_numeric_suffixes`
+requires. Future metric names are deliberately not pre-registered: naming a signal whose shape does
+not exist yet is the same speculation as an empty crate.
+
+**Correlation.** Every request is given a correlation `EntityRef` minted server-side, returned in the
+`x-correlation-id` header on every response and present in every log line and every error body. There
+is no `X-Request-Id`: the correlation **is** the request ID until an operation exists at milestone 3.
+`AGENTS.md`'s "request ID; correlation ID" pair is satisfied by one value until then. See
+[ADR-0007](docs/adr/0007-correlation-identity-and-trace-context.md).
+
+**Rate limiting is deferred to milestone 5.** `docs/ARCHITECTURE.md` S14 and `docs/THREAT_MODEL.md`
+require per-actor limits, and a per-actor limit needs an authenticated principal, which arrives with
+the first authenticated route. The request body limit S14 also requires ships now.
+
+### `docs/ARCHITECTURE.md` S16 coverage at milestone 1
+
+The second column is the point. Emitting the absent signals as always-zero series would be worse than
+absence: a panel reading `outbox_lag: 0` and a `for: 5m` alert that never fires both assert that a
+component is healthy when it does not exist.
+
+| S16 requirement | Milestone 1 | Arrives |
+|---|---|---|
+| request count, latency, status, route template | **emitted** — `http_server_request_duration_seconds` and its derived `_count` | — |
+| dependency health and capability state | **partial** — `platform_readiness`; there is no dependency yet and the two checks that exist are reported honestly | milestone 2 (PostgreSQL), milestone 7 (capabilities) |
+| authentication and authorization outcomes | not emitted — no authentication exists | milestones 2 / 5 |
+| operation age and transition counts | not emitted — no operations | milestone 3 |
+| outbox and inbox lag | not emitted — no outbox | milestone 4 |
+| command publication failures | not emitted — no publisher | milestone 4 |
+| idempotency hits and conflicts | not emitted — no idempotency | milestone 5 |
+| SSE connection count and delivery lag | not emitted — no SSE | milestone 6 |
+| scheduler drift and duplicate suppression | not emitted — no schedules | milestone 9 |
 
 ## Expected workflow
 
@@ -14,4 +305,27 @@ The repository is in architecture bootstrap; Edge, Ingest, Scheduler, schemas, a
 - Add outbox/inbox and idempotency tests with every asynchronous path.
 - Generate the public API client from OpenAPI; never hand-maintain duplicate endpoint models.
 
-The first scaffold PR must document exact Rust, PostgreSQL, NATS, migration, test, OpenAPI, and local-run commands. Production credentials are never required for the default tests.
+## Open questions for the repository owner
+
+None of these blocks milestone 1. Each blocks a later milestone or records a contradiction between
+documents that milestone 1 must not resolve unilaterally. Q2 and Q4 are **hard blockers**: they cannot
+be worked around in the milestone that hits them.
+
+| # | Question | Blocks |
+|---|---|---|
+| Q1 | `README.md` listed `crates/{identity, operations, api-contracts, ingress, platform-infrastructure}`; `docs/ARCHITECTURE.md` S3 lists a different set sharing only `identity` and `operations`. Milestone 1 treats S3 as normative and deleted the README tree. If README's list was intended, S3 must change instead. | milestone 2, which creates the first crate whose name appears in one list and not the other |
+| Q2 | **Ingress schema spelling.** `README.md` and `AGENTS.md` say `platform_ingress.*`; `docs/ARCHITECTURE.md` S4.1 says `platform_ingest.*`. A schema name is a migration. | milestone 2, **hard** — the first migration fixes it forever |
+| Q3 | **Event family mismatch.** `README.md` names `platform.operation.accepted.v1`, `.completed.v1` and `.failed.v1`, but `ratatoskr-contracts` ships only `platform.operation.progressed.v1`, whose payload is a state-carried `OperationSnapshot` covering every transition. Either Platform emits one event type or contracts gains three. Contracts made the choice; README looks stale. | milestone 4 |
+| Q4 | **`correlation` is not in `contracts.toml [entity_kinds].known`.** `EntityKind` is open on the wire, so nothing breaks at milestones 1 through 3, but a Platform event fixture carrying `correlation:` fails `cargo contracts check`. The fix is a one-line contracts changeset. See [ADR-0007](docs/adr/0007-correlation-identity-and-trace-context.md). | milestone 4, **hard** |
+| Q5 | Contracts pins `serde_json = "=1.0.151"` and `schemars = "=1.2.2"` exactly. Those are graph-wide constraints: Platform cannot move past them while depending on this contracts commit, including for a security advisory. The remedy is a contracts bump, and it is worth knowing before an advisory rather than during one. | any milestone, on the day it happens |
+| Q6 | `docs/ARCHITECTURE.md` S18's "no public listener except health" is read here as "the scheduler binds exactly one listener and it serves only probes", enforced by a startup validation rule. If health was meant to sit on a public listener alongside the API, the readiness body must be narrowed further, because it would then be reachable from the internet. | milestone 1, if the reading is wrong — one validation rule and one router |
+| Q7 | The seven-command-families sentence is genuinely ambiguous. This document takes the documentation reading; the literal reading forces a database and a message bus into milestone 1, contradicting `docs/IMPLEMENTATION_PLAN.md` items 2 and 4. | milestone 1, if the literal reading was intended |
+| Q8 | `README.md`'s former Observability metric names (`http_request_duration`, `operation_duration`, `outbox_lag`, …) carry no units and mostly have no subject. They are treated as aspirational and were replaced by the three implemented names, with S16 as normative. If those names are a contract with a dashboard that already exists somewhere, that needs saying. | milestone 1 |
+| Q9 | `missing_docs`, `unwrap_used`, `expect_used` and `panic` are all denied, inherited from contracts. That is strict for a service: every `LazyLock` constant needs an `#[allow(…, reason = "…")]`. Kept, because a control plane is exactly where an `unwrap` is a 500 — but the `reason =` discipline must hold or the allows become noise. | ongoing |
+| Q10 | `ingest` and `scheduler` `main.rs` differ by one constant at milestone 1, and `AGENTS.md` forbids collapsing them. Flagged so a reviewer knows it is a deliberate cost, paid once, repaid at milestone 2 when edge and ingest gain a connection pool and scheduler gains a lease. If they have not diverged by milestone 7, that is a signal to collapse them — not to add an abstraction now. | ongoing |
+
+## Rules
+
+Production code may not `unwrap`, `expect` or `panic!`, and every public item is documented; test
+bodies may assert with `unwrap` and `expect`. `unsafe_code` is forbidden workspace-wide. Do not add a
+crate, a directory or a configuration field for a milestone that has not started.

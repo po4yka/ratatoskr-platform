@@ -2,28 +2,15 @@
 
 `ratatoskr-platform` provides the public control plane for Ratatoskr Next: identity, authentication, the Edge API, long-running operation tracking, generic ingestion entrypoints, and deterministic scheduling.
 
-> **Status:** architecture bootstrap. The binaries, database schema, APIs, and event handlers described below are planned and are not implemented yet.
+> **Status:** milestone 1 of `docs/IMPLEMENTATION_PLAN.md` is implemented. Three binaries (`ratatoskr-edge`, `ratatoskr-ingest`, `ratatoskr-scheduler`) build, load a typed configuration, install telemetry, expose liveness, readiness, metrics and version on an operator listener, and drain on SIGTERM. `ratatoskr-edge` also binds a public listener that currently serves no routes and returns a contract `ErrorEnvelope` on every non-2xx. The database schema, the public API, event handling, idempotency, SSE, capabilities and scheduling described below are planned and are not implemented.
 
 ## Role in Ratatoskr Next
 
 Ratatoskr services are intentionally isolated by bounded context. Platform is the stable public boundary through which web, mobile, browser-extension, export-agent, MCP, and other trusted clients interact with the system.
 
-The repository is expected to contain three deployable Rust binaries:
+The repository contains three deployable Rust binaries — `ratatoskr-edge`, `ratatoskr-ingest` and `ratatoskr-scheduler` — under `services/`.
 
-```text
-ratatoskr-platform/
-├── crates/
-│   ├── identity/
-│   ├── operations/
-│   ├── api-contracts/
-│   ├── ingress/
-│   └── platform-infrastructure/
-├── services/
-│   ├── edge/
-│   ├── ingest/
-│   └── scheduler/
-└── migrations/
-```
+The crate layout is documented once, in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) S3, which marks the crates that exist today. A second listing here would be a third layout in a third document, so this README no longer carries one. (The earlier listing here disagreed with S3; recorded as open question Q1 in `DEVELOPMENT.md`.)
 
 ### `ratatoskr-edge`
 
@@ -75,6 +62,8 @@ identity.*
 operations.*
 platform_ingress.*
 ```
+
+No schema exists yet; the first migration arrives with milestone 2. The ingress schema is spelled `platform_ingress.*` here and in `AGENTS.md` but `platform_ingest.*` in `docs/ARCHITECTURE.md` S4.1. That contradiction must be settled before the first migration, because a schema name is a migration; it is recorded as open question Q2 in `DEVELOPMENT.md`.
 
 Typical records include:
 
@@ -154,6 +143,8 @@ platform.identity.linked.v1
 platform.capture.accepted.v1
 ```
 
+Platform emits and consumes nothing today; eventing arrives with milestone 4. That list is also stale: `ratatoskr-contracts` ships only `platform.operation.progressed.v1`, whose payload is a state-carried `OperationSnapshot` covering every transition, so `accepted`, `completed` and `failed` have no contract behind them. Either Platform emits one event type or contracts gains three; recorded as open question Q3 in `DEVELOPMENT.md`.
+
 Commands use at-least-once delivery through NATS JetStream. Platform uses transactional outbox/inbox records, globally unique event IDs, and idempotent state transitions. Exactly-once execution is not assumed.
 
 ## Authentication model
@@ -211,22 +202,17 @@ A capability response may resemble:
 
 ## Observability
 
-The platform binaries will emit structured `tracing` logs, OpenTelemetry spans, and bounded-cardinality metrics. Core signals include:
+The binaries emit structured `tracing` logs, OpenTelemetry spans, and bounded-cardinality metrics. Three metrics exist today:
 
 ```text
-http_request_duration
-operation_duration
-operation_failures
-operation_queue_lag
-idempotency_replays
-outbox_lag
-consumer_retries
-authentication_failures
-active_sse_connections
-scheduler_publish_failures
+http_server_request_duration_seconds{role,method,route,status}
+platform_readiness{role}
+platform_build_info{role,version,git_sha,rust_version}
 ```
 
-Correlation IDs connect client requests, operations, commands, domain events, and downstream notifications.
+The signals `docs/ARCHITECTURE.md` S16 requires but that have no subject yet — operation age, outbox lag, idempotency conflicts, SSE delivery lag, scheduler drift, authentication outcomes — are not emitted at all, because an always-zero series asserts that a component is healthy when it does not exist. `DEVELOPMENT.md` carries the full S16 coverage table with the milestone that supplies each one, and the metric naming convention that keeps later milestones consistent.
+
+Correlation IDs connect client requests, operations, commands, domain events, and downstream notifications. Every request is given one server-side, returned in `x-correlation-id`; see [ADR-0007](docs/adr/0007-correlation-identity-and-trace-context.md).
 
 ## Non-goals
 
@@ -240,7 +226,9 @@ Correlation IDs connect client requests, operations, commands, domain events, an
 
 ## Initial milestones
 
-1. Establish the Axum service skeleton and typed configuration.
+The authoritative sequence is `docs/IMPLEMENTATION_PLAN.md`.
+
+1. Establish the Axum service skeleton and typed configuration. **(implemented)**
 2. Add identity, session, and operation schemas with SQLx migrations.
 3. Implement NATS outbox/inbox infrastructure.
 4. Publish the initial operation and capture APIs.
@@ -255,4 +243,6 @@ Correlation IDs connect client requests, operations, commands, domain events, an
 
 ## Project status
 
-This README documents the intended bounded context and initial vertical slices. It does not imply that the listed binaries, endpoints, or data models already exist.
+Milestone 1 is implemented: three binaries that configure themselves, report health, expose metrics, and stop cleanly, plus a public listener on Edge whose only behaviour is a correlated contract `ErrorEnvelope`. That is the entire implemented behaviour. Everything else in this README — schemas, endpoints, authentication, idempotency, events, SSE, capabilities and scheduling — documents the intended bounded context and does not exist in the checkout. `DEVELOPMENT.md` states what is present and what is absent, command family by command family.
+
+Three decisions are accepted and binding: [ADR-0002](docs/adr/0002-operation-state-machine-and-progress-semantics.md) (operation state machine, binds milestone 3), [ADR-0003](docs/adr/0003-service-identity-and-producer-name.md) (one wire producer identity for all three binaries; the NATS subject half is deferred to milestone 4), and [ADR-0007](docs/adr/0007-correlation-identity-and-trace-context.md) (correlation identity and trace context).

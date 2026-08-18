@@ -1,0 +1,101 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/core",
+    "crates/telemetry",
+    "crates/http",
+    "services/edge",
+    "services/ingest",
+    "services/scheduler",
+]
+
+[workspace.package]
+version      = "0.1.0"
+edition      = "2024"
+rust-version = "1.97"                       # equals the pinned toolchain; no MSRV promise we cannot check
+license      = "BSD-3-Clause"
+repository   = "https://github.com/po4yka/ratatoskr-platform"
+
+[workspace.dependencies]
+# ---- in-repo ----
+ratatoskr-platform-core      = { version = "0.1.0", path = "crates/core" }
+ratatoskr-platform-telemetry = { version = "0.1.0", path = "crates/telemetry" }
+ratatoskr-platform-http      = { version = "0.1.0", path = "crates/http" }
+
+# ---- ratatoskr-contracts ----------------------------------------------------------------------
+# The only sanctioned interim form (contracts/README.md, "Workspace integration"): a git dependency
+# pinned to a full commit SHA. A branch moves and a tag can be moved, so neither pins.
+# ONE rev for every contract crate, declared ONLY here. Two revs of the same git source are two
+# distinct packages, so `EntityRef` from one would not unify with `EntityRef` from the other and the
+# compiler error would be baffling.
+# Replaced by a version requirement when contracts milestone 10 publishes.
+ratatoskr-identifiers     = { git = "ssh://git@github.com/po4yka/ratatoskr-contracts.git", rev = "6b3ddd961a733af293a035931fed2ce3cc8599dd" }
+ratatoskr-error-contracts = { git = "ssh://git@github.com/po4yka/ratatoskr-contracts.git", rev = "6b3ddd961a733af293a035931fed2ce3cc8599dd" }
+ratatoskr-event-envelope  = { git = "ssh://git@github.com/po4yka/ratatoskr-contracts.git", rev = "6b3ddd961a733af293a035931fed2ce3cc8599dd" }
+# ratatoskr-operation-contracts: deliberately NOT a dependency at milestone 1. Nothing here
+# constructs or reads an operation. It arrives at milestone 3, at the same rev.
+
+# ---- async runtime and HTTP ----
+tokio      = { version = "1.53.1", features = ["rt-multi-thread", "macros", "signal", "net", "time", "sync"] }
+axum       = { version = "0.8.9", default-features = false, features = ["http1", "json", "matched-path", "tokio", "tracing"] }
+tower      = "0.5.3"
+tower-http = { version = "0.7.0", default-features = false, features = ["catch-panic", "limit", "timeout"] }
+http       = "1.5.0"
+
+# ---- configuration ----
+figment = { version = "0.10.19", features = ["env"] }
+secrecy = { version = "0.10.3", features = ["serde"] }
+url     = { version = "2.5.8", features = ["serde"] }
+
+# ---- telemetry ----
+tracing                     = "0.1.44"
+tracing-subscriber          = { version = "0.3.23", default-features = false, features = ["std", "registry", "env-filter", "fmt", "json", "ansi"] }
+tracing-opentelemetry       = "0.33.0"
+opentelemetry               = "0.32.0"
+opentelemetry_sdk           = { version = "0.32.1", features = ["rt-tokio", "trace"] }
+# The three `tls-*` features are load-bearing, not defensive. Without a TLS feature the exporter
+# REFUSES to build for an `https://` endpoint ("uses HTTPS but no TLS feature is enabled"), so the
+# process exits 1 — while validation rule V7 and `.env.example` both advertise `https`, and the one
+# milestone-1 secret is the collector `authorization` header that travels on this link.
+# `tls-ring` is the crypto provider; the two root sets are the trust anchors, and tonic merges them:
+# `tls-webpki-roots` works in an image with no CA bundle, `tls-roots` picks up a private CA an
+# operator installed in the image's trust store.
+opentelemetry-otlp          = { version = "0.32.0", default-features = false, features = ["grpc-tonic", "trace", "tls-ring", "tls-roots", "tls-webpki-roots"] }
+metrics                     = "0.24.6"
+metrics-exporter-prometheus = { version = "0.18.3", default-features = false }
+
+# ---- serialization and errors ----
+serde      = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+thiserror  = "2.0.20"
+
+# ---- dev only ----
+http-body-util = "0.1.5"
+hyper          = { version = "1.11.0", features = ["client", "http1"] }
+hyper-util     = { version = "0.1.20", features = ["client-legacy", "tokio", "http1"] }
+
+[workspace.lints.rust]
+unsafe_code                   = "forbid"
+missing_docs                  = "deny"
+missing_debug_implementations = "deny"
+unreachable_pub               = "deny"
+
+[workspace.lints.clippy]
+pedantic           = { level = "warn", priority = -1 }
+unwrap_used        = "deny"
+expect_used        = "deny"
+panic              = "deny"
+missing_errors_doc = "deny"
+missing_panics_doc = "deny"
+dbg_macro          = "deny"
+todo               = "deny"
+print_stdout       = "deny"     # startup failures go to stderr; a stray println bypasses the subscriber
+# contracts' `float_arithmetic = "deny"` is deliberately NOT adopted. Its rationale is that a wire
+# schema must not carry a float; Platform records f64 latency seconds into a histogram, so adopting
+# it would buy two `#[allow]`s that exist only to work around an inapplicable lint.
+
+# Release profile: `panic` is left at the default `unwind` ON PURPOSE. `panic = "abort"` silently
+# disables `CatchPanicLayer` (`catch_unwind` cannot run) and turns every handler panic into a
+# process abort with no ErrorEnvelope and no log line.
+[profile.release]
+debug = 1          # line tables only: a usable backtrace in the ERROR log, no full debuginfo
