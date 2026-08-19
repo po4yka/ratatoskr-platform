@@ -27,6 +27,16 @@
 #    target below is permanently down. The gateway address works as a substitute and is the thing
 #    that changes when the network is recreated, which is the failure this indirection avoids.
 #
+#    `host-gateway` resolves to the address of the DEFAULT bridge, 172.17.0.1, and not to the gateway
+#    of the network the container is on. That does not matter for reaching the host, and it does
+#    matter for the firewall rule: ufw matches on SOURCE, so the rule names the subnet the collector
+#    lives on (172.19/16) rather than the address it dials. Naming the destination there produces a
+#    rule that looks right and matches nothing.
+#
+# Verified on the machine at milestone 10: all three targets `up` in VictoriaMetrics, with
+# `platform_readiness` for each role and `platform_capability_available` for each capability landing
+# in the time series database.
+#
 # VictoriaMetrics is started without `-promscrape.configCheckInterval`, so a change here takes
 # effect on `docker kill -s HUP victoriametrics` and not before.
 #
