@@ -146,6 +146,11 @@ missing_panics_doc = "deny"
 dbg_macro          = "deny"
 todo               = "deny"
 print_stdout       = "deny"     # startup failures go to stderr; a stray println bypasses the subscriber
+# `panic`, `unwrap_used` and `expect_used` above close every EXPLICIT panic path and leave the most
+# common implicit one open. Both of these are `allow` by default and in `clippy::restriction`, so
+# `pedantic` does not enable them. Measured at zero violations in this workspace when adopted.
+indexing_slicing   = "deny"     # `v[i]` and `&s[a..b]` panicking out of bounds
+string_slice       = "deny"     # `&s[..n]` panicking because n is not a UTF-8 char boundary
 # contracts' `float_arithmetic = "deny"` is deliberately NOT adopted. Its rationale is that a wire
 # schema must not carry a float; Platform records f64 latency seconds into a histogram, so adopting
 # it would buy two `#[allow]`s that exist only to work around an inapplicable lint.

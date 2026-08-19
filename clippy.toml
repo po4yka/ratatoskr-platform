@@ -3,6 +3,11 @@ msrv = "1.97"
 # Test bodies may assert with unwrap/expect; production code may not (the workspace lints deny both).
 allow-unwrap-in-tests = true
 allow-expect-in-tests = true
+# Same rule, same reason, for the two slicing lints the workspace now denies. A test that indexes the
+# violation list it just built is asserting a shape it controls; a service that indexes a slice it was
+# handed returns a 500. Ten sites in crates/core/tests/config_validation.rs are covered by this one
+# line, which is the alternative to ten `#[allow]` attributes that would each need a reason.
+allow-indexing-slicing-in-tests = true
 
 disallowed-types = [
   { path = "std::time::SystemTime", reason = "use ratatoskr_identifiers::WireTimestamp" },

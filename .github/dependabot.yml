@@ -1,0 +1,19 @@
+# Only the github-actions ecosystem. `cargo` is deliberately absent: this repository commits its
+# Cargo.lock and runs every command with `--locked`, which makes a dependency bump a deliberate act
+# rather than a chore, and `cargo deny check` in the gate already reports an advisory the moment it is
+# published. A monthly pull request rewriting the lockfile would be reviewing our own noise.
+#
+# Action pins are the opposite case: they rot silently, and a pin whose `# vX.Y.Z` comment no longer
+# matches its SHA cannot be checked by reading the diff. Dependabot updates the SHA and the comment
+# together, which is exactly the class of mistake that broke this workflow's first run.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns: ["*"]          # one pull request, not one per action
+    commit-message:
+      prefix: chore
