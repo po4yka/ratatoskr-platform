@@ -185,9 +185,48 @@ credential; and the bus profile names the streams the code declares.
 The NATS permission set and the PostgreSQL grants were verified by running them, not by review — the
 evidence is summarised in decisions 3 and 4.
 
+## What installing it corrected
+
+The profile above was written from documents. Milestone 10 installed it, and four of its statements
+were wrong in ways that only a machine could report. They are corrected in `deploy/` and recorded
+here because each was a reasonable thing to have believed.
+
+- **PostgreSQL is a container on this host, not a service.** There is no `postgres` user, no
+  `postgresql.service`, and no host client of a matching major version. Every administrative command
+  enters `shared-postgres`; the units order themselves after `docker.service`; the dump job runs as
+  root and reaches the server through `docker exec`. NATS is a container for the same reason, added
+  as `deploy/nats/compose.yaml`: one shape for dependencies, another for our own processes, is
+  easier to operate than two of each.
+- **`Group=` sets the primary group and nothing else.** The units said `Group=ratatoskr`, the shared
+  group, while every credential file was `0640 root:ratatoskr-<role>` — so each process was in a
+  group that could not read its own database password or nkey seed, and edge failed at startup with
+  "the bus credential could not be read". Each unit now names its own group and lists the shared one
+  as `SupplementaryGroups=`.
+- **The host firewall drops the metrics path.** `ufw` is active with `INPUT policy DROP`, and a
+  container reaching a host port crosses `INPUT`. The scrape TIMES OUT rather than being refused,
+  which reads like a dead service. Decision 5 above said the unit's `IPAddressAllow=` is the
+  boundary, and that is still true — it is the tighter of two gates, not the only one, and
+  `deploy/README.md` now installs the wider one. The earlier end-to-end verification of this
+  arrangement missed it because it was performed with a Ratatoskr CONTAINER on the monitoring
+  network, where the traffic never crosses the firewall; the profile then chose systemd units and
+  nobody re-checked. A verification is evidence for the arrangement it was performed on.
+- **A least-privilege grant written from the handler misses what the handler calls.**
+  `ratatoskr_ingest` had `select, insert, update` on `operations.idempotency_records` and a comment
+  saying "delete appears nowhere". `platform_idempotency::reserve` opens by deleting the expired
+  reservation for the key. The webhook route answered 504 while the identical path on edge worked,
+  because edge owns the schema.
+
+The one code change that came out of it: startup rule V16 checked whether the bus credential file
+EXISTS. `is_file()` succeeds on a file the process cannot read, so `check-config` — which each unit
+runs as `ExecStartPre`, precisely to answer "will this start?" — reported the configuration valid and
+the process then died. It now opens the file.
+
 ## Follow-up
 
-- Backup and restore. `/mnt/nvme/backups/ratatoskr` is allocated and nothing writes to it.
 - Alert rules on `platform_readiness`, the outbox backlog and scheduler drift, now that Alertmanager
-  on that host reaches a person.
+  on that host reaches a person and every series exists.
+- `extra_hosts: host.docker.internal:host-gateway` on the metrics stack's own service, which is the
+  one change outside this repository that the scrape configuration needs.
 - A `ratatoskr.target`, so the deployment can be stopped as one thing.
+- An off-host backup destination. `deploy/backup/` dumps and restores; `/mnt/backup` is a second
+  volume on the same board.

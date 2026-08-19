@@ -40,14 +40,21 @@ grant usage on schema operations      to ratatoskr_scheduler;
 -- ---------------------------------------------------------------------------------------------
 
 -- Ingest: authenticate a source, reserve an idempotency key, create an operation, enqueue a
--- command. `delete` appears nowhere — nothing on this path removes a row, and a role that cannot
--- delete cannot be made to.
+-- command.
+--
+-- `delete` on the ledger, and ONLY there. `platform_idempotency::reserve` opens by removing the
+-- expired reservation for this key, so that the insert after it either succeeds cleanly or collides
+-- with a LIVE row — without that, the caller would have to reason about whether a conflict it was
+-- told about is still in force. This grant was missing until milestone 10, and the symptom was a
+-- webhook answering 504 with "the signal could not be reserved" while the identical code path on
+-- edge worked, because edge owns the schema. It was written by reading the handler instead of
+-- everything the handler calls.
 grant select                 on platform_ingest.webhook_sources to ratatoskr_ingest;
 -- Append only, and to one table. No `select`, so a compromised adapter cannot read the trail it is
 -- writing to; no `update` or `delete`, so it cannot rewrite one either. Every other table in
 -- `identity` stays unreachable, which the verification block at the bottom checks by name.
 grant insert                 on identity.audit_events           to ratatoskr_ingest;
-grant select, insert, update on operations.idempotency_records  to ratatoskr_ingest;
+grant select, insert, update, delete on operations.idempotency_records to ratatoskr_ingest;
 grant select, insert         on operations.operations           to ratatoskr_ingest;
 grant select, insert         on operations.outbox               to ratatoskr_ingest;
 
@@ -86,6 +93,10 @@ alter default privileges for role ratatoskr_edge in schema operations
 -- and the one thing it may do, `t`:
 --
 --   select has_table_privilege('ratatoskr_ingest', 'identity.audit_events', 'insert');
+--
+-- And the one the handler does not name but its callee does:
+--
+--   select has_table_privilege('ratatoskr_ingest', 'operations.idempotency_records', 'delete');
 --
 -- All four `t`:
 --

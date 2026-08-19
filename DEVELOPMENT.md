@@ -6,8 +6,9 @@
 
 ## Current stage
 
-Milestones 1 through 9 of `docs/IMPLEMENTATION_PLAN.md` exist and the commands marked **real** below
-are real.
+Every milestone of `docs/IMPLEMENTATION_PLAN.md` exists and the commands marked **real** below are
+real. Milestone 10 ran the first end-to-end slice on the deployment target itself; `deploy/README.md`
+is the install, and it now says what that machine actually is rather than what the profile assumed.
 
 Present: the Cargo workspace, its pinned toolchain and its committed `Cargo.lock`; the
 `ratatoskr-platform-core`, `ratatoskr-platform-telemetry` and `ratatoskr-platform-http` library
@@ -61,8 +62,7 @@ Present since milestone 4: the transactional outbox and the inbox in `operations
 grammar, a `JetStream` publisher, and the pump that moves claimed rows onto the bus. Both routes that
 accept work write their command into the outbox; the pump runs in `ratatoskr-edge` only.
 
-Absent: the workspace end-to-end slice on the deployment target, which is item 10. Three things are
-in NO item, and are listed here rather than left to be discovered — the device credential model,
+Absent: nothing that a milestone owns. Three things are in NO item, and are listed here rather than left to be discovered — the device credential model,
 which is the half of public authentication milestone 8 did not touch and has no ADR yet;
 stale-operation reconciliation, which `docs/ARCHITECTURE.md` S14 requires and ADR-0002 wrongly
 promised at milestone 9; and backup and restore, for which `deploy/README.md` allocates a path and

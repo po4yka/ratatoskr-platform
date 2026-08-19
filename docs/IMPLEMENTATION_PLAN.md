@@ -1,7 +1,9 @@
 # Platform implementation plan
 
-> **Status:** items 1 through 9 are implemented (see `DEVELOPMENT.md`). Item 10 is planned, and is
-> not scaffolded or stubbed in the checkout.
+> **Status:** every item is implemented. Item 10 ran on the deployment target on 2026-08-19: the
+> `linux/arm64` artifact was built, installed as three systemd units on the Raspberry Pi, and a
+> capture submitted through the public API became an operation, a durable outbox row and a command on
+> `JetStream` — alongside the same command from the webhook adapter and one from the scheduler.
 >
 > Item 5 is where the earlier ones meet: `ratatoskr-edge` opens a pool, applies the migrations,
 > authenticates a session, and writes the idempotency reservation, the operation and the outbox
@@ -36,6 +38,16 @@ Open questions that block a later item are recorded in `DEVELOPMENT.md`. Q2 (the
    explicit retention limits, the NATS credential, the three database roles inside the host's
    existing PostgreSQL cluster, the storage layout and the port map. *(implemented)*
 10. Build the `linux/arm64` artifact and run the first workspace end-to-end vertical slice **on the
-    deployment target**.
+    deployment target**. *(implemented)*
+
+The rewording of items 9 and 10 paid for itself in item 10, which is the only reason the note above
+is worth keeping. Running on the machine found four things reading could not: the host's PostgreSQL
+is a container and not a service, so half the profile's administrative commands named a user and a
+unit that do not exist; `systemd` sets a process's primary group and not its other memberships, so
+the units put every service in a group that could not read its own credentials; `ufw` drops the
+metrics path, which an earlier verification missed because it was performed with a container rather
+than a host process; and one database grant was written from reading a request handler instead of
+everything the handler calls. None of those is visible from a developer's machine, and item 10 as
+first written would have passed on one.
 
 Definition of Done: requirements, persistence constraints, auth, retries, tests, telemetry, OpenAPI drift, migrations, and workspace integration pass — and, from item 10 onward, the `linux/arm64` artifact builds and its boot tests pass on the deployment target. Deferred: broad automation, direct domain queries, and multi-tenant SaaS controls.

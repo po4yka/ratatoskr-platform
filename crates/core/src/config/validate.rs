@@ -322,12 +322,19 @@ fn bus_violations(config: &PlatformConfig) -> Vec<Violation> {
                 rule: "must be an absolute path; a relative one resolves against the unit's \
                        working directory",
             });
-        } else if !path.is_file() {
+        } else if std::fs::File::open(path).is_err() {
+            // OPENED, not merely present. `is_file()` was the first version and it passes on a file
+            // this process cannot read — which is exactly what happened on the deployment target at
+            // milestone 10: the seed was `0640 root:ratatoskr-edge`, the unit put the process in a
+            // different group, `check-config` reported the configuration valid, and the process then
+            // died at startup with "the bus credential could not be read". A rule that answers "is
+            // it there?" when the question is "can this process start?" is a rule that passes at the
+            // one moment it exists to fail.
             found.push(Violation {
                 key: "bus.nkey_seed_path",
                 env_var: "RATATOSKR__BUS__NKEY_SEED_PATH",
-                rule: "must name a readable file holding this role's NATS nkey seed \
-                       (deploy/nats/README.md)",
+                rule: "must name a file this process can READ, holding its NATS nkey seed; a \
+                       permission failure here is usually the unit's Group= (deploy/nats/README.md)",
             });
         }
     }

@@ -7,13 +7,21 @@
 # nicely and restores as one long transaction that cannot be resumed, which is the wrong trade for
 # the only copy of an identity store.
 #
-# It runs as `postgres` and takes no credential: a dump job that holds a password is a second place
-# the password lives.
+# It holds no credential. PostgreSQL runs as a container on this host, so the dump enters that
+# container and reaches the server over the unix socket inside it, as the cluster's own superuser —
+# a dump job that carried a password would be a second place the password lives.
 set -euo pipefail
 
 DATABASE="${RATATOSKR_DATABASE:-ratatoskr}"
 DESTINATION="${RATATOSKR_BACKUP_DIR:-/mnt/nvme/backups/ratatoskr}"
 KEEP="${RATATOSKR_BACKUP_KEEP:-14}"
+CONTAINER="${RATATOSKR_PG_CONTAINER:-shared-postgres}"
+
+# `docker exec` and not `pg_dump` directly: the client version must match the server, and the only
+# 17.7 client on this machine is inside that container. A host `pg_dump` from an older major refuses
+# outright, which is the good failure; a newer one produces an archive this server cannot restore,
+# which is not.
+pg() { docker exec -i "$CONTAINER" "$@"; }
 
 # NVMe, never the boot device: this writes hundreds of megabytes on a schedule, and the SD card that
 # wears out takes the root filesystem with it.
@@ -25,12 +33,12 @@ target="$DESTINATION/$DATABASE-$stamp.dump"
 # To a temporary name first, renamed on success. A dump interrupted by a reboot or a full disk would
 # otherwise sit in the directory looking exactly like a complete one, and the moment that matters is
 # the moment nobody has time to check.
-pg_dump --format=custom --compress=zstd --file="$target.partial" "$DATABASE"
+pg pg_dump --format=custom --compress=zstd --username=postgres "$DATABASE" > "$target.partial"
 mv "$target.partial" "$target"
 
 # The dump is verified by being read, not by existing. `--list` walks the whole archive's table of
 # contents, so a truncated or corrupt file fails here rather than during a restore.
-pg_restore --list "$target" > /dev/null
+pg pg_restore --list < "$target" > /dev/null
 
 # Keep the most recent N. `ls -t` and not `find -mtime`, so the COUNT is the policy: a machine that
 # was off for a week must not come back and delete every copy it has.

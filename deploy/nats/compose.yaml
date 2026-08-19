@@ -1,0 +1,56 @@
+# The NATS server, as a container.
+#
+#     sudo docker compose -f /etc/nats/compose.yaml up -d
+#
+# A container and not a systemd unit, and that is a correction milestone 10 made rather than a
+# preference. ADR-0013 chose systemd units for the three Ratatoskr BINARIES, because per-service Unix
+# users and cgroup limits are the isolation those need. NATS is a dependency, and every other
+# dependency on this host — PostgreSQL, the metrics stack, cloudflared — is a container. One shape
+# for dependencies and one for our own processes is easier to operate than two of each.
+#
+# The server configuration is `ratatoskr.conf`, mounted read-only. Everything about what may be
+# published, and by whom, is in that file and therefore in this repository.
+
+name: ratatoskr-nats
+
+services:
+  nats:
+    image: nats:2-alpine
+    container_name: ratatoskr-nats
+    restart: unless-stopped
+    command: ["-c", "/etc/nats/ratatoskr.conf"]
+
+    # `host: 0.0.0.0` inside the container's namespace, reachable only through the published
+    # loopback port. The same arrangement as the operator listeners: the bind address is not the
+    # boundary, the publication is.
+    ports:
+      - "127.0.0.1:4222:4222"
+      - "127.0.0.1:8222:8222"
+
+    # An absolute path, never a named volume: a named volume lands wherever `DockerRootDir` points,
+    # which a reflash resets to the boot device — and JetStream's small synchronous fsyncs are the
+    # worst case for SD-card wear.
+    volumes:
+      - /etc/nats/ratatoskr.conf:/etc/nats/ratatoskr.conf:ro
+      - /mnt/nvme/ratatoskr/nats:/mnt/nvme/ratatoskr/nats
+
+    # A dedicated host identity, so the store on NVMe is owned by something other than a real
+    # person's account. Substituted at install time — see `deploy/README.md`.
+    user: "${RATATOSKR_NATS_UID}:${RATATOSKR_NATS_GID}"
+
+    # Four shared cores. The store is capped at 8 GiB in `ratatoskr.conf`; this caps the process.
+    mem_limit: 512m
+    cpus: 1.0
+
+    healthcheck:
+      # `/healthz` reports JetStream readiness, not just that the port is open.
+      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:8222/healthz | grep -q ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"

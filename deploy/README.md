@@ -56,14 +56,20 @@ In this order. Steps 3 and 5 are separated by step 4 because a migration creates
 grant cannot name a schema that does not exist yet.
 
 ```bash
-# 1. Users and directories.
+# 1. Users and directories. Each service gets its OWN group as well as the shared one: the shared
+#    group is what makes /mnt/nvme/ratatoskr/logs writable by all three, and the per-role group is
+#    what makes /etc/ratatoskr/<role>.conf readable by ONE of them. With only a shared group, every
+#    service can read every other service's database password.
 sudo groupadd --system ratatoskr
 for role in edge ingest scheduler; do
-  sudo useradd --system --gid ratatoskr --no-create-home --shell /usr/sbin/nologin "ratatoskr-$role"
+  sudo useradd --system --user-group --no-create-home --shell /usr/sbin/nologin "ratatoskr-$role"
+  sudo usermod -aG ratatoskr "ratatoskr-$role"
 done
+sudo useradd --system --user-group --no-create-home --shell /usr/sbin/nologin ratatoskr-nats
 sudo install -d -m 0750 -o root -g ratatoskr /etc/ratatoskr
 sudo install -d -m 0770 -o root -g ratatoskr /mnt/nvme/ratatoskr/logs
-sudo install -d -m 0700 -o nats -g nats     /mnt/nvme/ratatoskr/nats
+sudo install -d -m 0700 -o ratatoskr-nats -g ratatoskr-nats /mnt/nvme/ratatoskr/nats
+sudo install -d -m 0700 /mnt/nvme/backups/ratatoskr
 
 # 2. The binaries. Built for linux/arm64 from this repository's Dockerfile and copied out of the
 #    image; milestone 10 is where that path is exercised on the target end to end.
@@ -77,14 +83,22 @@ docker rm "$id"
 sudo chown root:root /usr/local/bin/ratatoskr-*
 sudo chmod 0755 /usr/local/bin/ratatoskr-*
 
-# 3. The database and the roles, then the passwords.
-sudo -u postgres psql -f deploy/postgres/01-database-and-roles.sql
-sudo -u postgres psql -c "\password ratatoskr_edge"        # and ingest, and scheduler
+# 3. The database and the roles, then the passwords. PostgreSQL is a CONTAINER on this host
+#    (`shared-postgres`), so every psql below enters it; there is no `postgres` user on the host and
+#    no host client of a matching major version.
+docker exec -i shared-postgres psql -U postgres -d postgres < deploy/postgres/01-database-and-roles.sql
+# Set each password through stdin, never as an argument: argv is visible to every user in `ps`.
+printf "alter role ratatoskr_edge password '%s';\n" "$(openssl rand -base64 24 | tr -d '=+/')" \
+  | docker exec -i shared-postgres psql -U postgres -q -d postgres      # and ingest, and scheduler
 
-# 4. The bus credential, then the server.
-#    deploy/nats/README.md generates the pair; the public half goes into ratatoskr.conf.
-sudo install -m 0640 -o root -g ratatoskr-edge /dev/null /etc/ratatoskr/edge.nkey
-sudo cp deploy/nats/ratatoskr.conf /etc/nats/ratatoskr.conf
+# 4. The bus credential, then the server. deploy/nats/README.md generates the pair; the public half
+#    goes into ratatoskr.conf and the seed into a file only edge can read.
+sudo install -d -m 0755 /etc/nats
+sudo cp deploy/nats/ratatoskr.conf /etc/nats/ratatoskr.conf   # with the public nkey substituted
+sudo install -m 0644 deploy/nats/compose.yaml /etc/nats/compose.yaml
+printf 'RATATOSKR_NATS_UID=%s\nRATATOSKR_NATS_GID=%s\n' \
+  "$(id -u ratatoskr-nats)" "$(id -g ratatoskr-nats)" | sudo tee /etc/nats/.env > /dev/null
+sudo docker compose --env-file /etc/nats/.env -f /etc/nats/compose.yaml up -d
 
 # 5. The units and their environment files.
 for role in edge ingest scheduler; do
@@ -98,18 +112,26 @@ sudo systemctl daemon-reload
 
 # 6. Edge first, because it applies the migrations.
 sudo systemctl enable --now ratatoskr-edge
-sudo -u postgres psql -d ratatoskr -f deploy/postgres/02-grants.sql
+docker exec -i shared-postgres psql -U postgres -d ratatoskr < deploy/postgres/02-grants.sql
 sudo systemctl enable --now ratatoskr-ingest ratatoskr-scheduler
 
-# 7. Metrics, only once the services are actually running: a scrape target for a service that is not
-#    deployed is a permanently failing target.
+# 7. The firewall. This host runs ufw with `INPUT policy DROP`, so the operator listeners are
+#    reachable from the metrics stack only with an explicit rule — without it the scrape times out
+#    rather than being refused, which reads like a service that is down. Narrow: the monitoring
+#    bridge and those three ports, nothing else. Check the subnet first, it is per-installation:
+#    `docker network inspect monitoring_default --format '{{range .IPAM.Config}}{{.Subnet}}{{end}}'`
+sudo ufw allow proto tcp from 172.19.0.0/16 to any port 9464:9466 \
+  comment 'ratatoskr operator listeners, from the monitoring bridge'
+
+# 8. Metrics, only once the services are actually running: a scrape target for a service that is not
+#    deployed is a permanently failing target. See deploy/monitoring/promscrape.ratatoskr.yml for
+#    the one change this needs in the monitoring stack's own compose file.
 cat deploy/monitoring/promscrape.ratatoskr.yml >> /home/po4yka/monitoring/promscrape.yml
 docker kill -s HUP victoriametrics
 
-# 8. Backup. deploy/backup/README.md has the detail and the restore rehearsal; run the rehearsal
+# 9. Backup. deploy/backup/README.md has the detail and the restore rehearsal; run the rehearsal
 #    once now rather than on the day it is needed.
 sudo install -m 0755 deploy/backup/ratatoskr-dump.sh /usr/local/bin/ratatoskr-dump.sh
-sudo install -d -m 0700 -o postgres -g postgres /mnt/nvme/backups/ratatoskr
 sudo cp deploy/backup/ratatoskr-backup.{service,timer} /etc/systemd/system/
 sudo systemctl daemon-reload && sudo systemctl enable --now ratatoskr-backup.timer
 sudo systemctl start ratatoskr-backup.service
@@ -122,8 +144,9 @@ other statement is a `grant`, an `alter role`, or an install.
 
 ```bash
 # Configuration, without starting anything. This is what each unit runs as ExecStartPre, and it is
-# where a missing nkey seed or a relative path is caught (rules V13 and V16). Run through systemd so
-# the EnvironmentFile is parsed by the thing that will parse it in production, not by a shell.
+# where a missing or UNREADABLE nkey seed is caught (rules V13 and V16). Run it through systemd, as
+# the service user: a check run as root reads files the service cannot, which is how a permission
+# problem passes validation and fails at startup.
 sudo systemd-run --quiet --wait --pipe --collect \
   --uid=ratatoskr-edge --property=EnvironmentFile=/etc/ratatoskr/edge.conf \
   /usr/local/bin/ratatoskr-edge check-config
@@ -132,15 +155,21 @@ sudo systemd-run --quiet --wait --pipe --collect \
 curl -s http://127.0.0.1:9464/health/ready
 
 # The privilege boundary. Both must be `f`.
-sudo -u postgres psql -d ratatoskr -Atc \
-  "select has_schema_privilege('ratatoskr_ingest','identity','usage'),
+docker exec shared-postgres psql -U postgres -d ratatoskr -Atc \
+  "select has_table_privilege('ratatoskr_ingest','identity.sessions','select'),
           has_schema_privilege('ratatoskr_scheduler','identity','usage')"
 
 # The backlog. A pending count that only grows means the pump is not running, which on this host
 # means ratatoskr-edge is down — it is the only publisher.
-sudo -u postgres psql -d ratatoskr -Atc \
+docker exec shared-postgres psql -U postgres -d ratatoskr -Atc \
   "select count(*) filter (where published_at is null and dead_lettered_at is null),
           count(*) filter (where dead_lettered_at is not null) from operations.outbox"
+
+# The metrics path, from where the collector actually stands. A timeout here is the firewall; a
+# refusal is the service.
+docker exec victoriametrics wget -q -O- --timeout=4 \
+  "http://$(docker network inspect monitoring_default \
+     --format '{{range .IPAM.Config}}{{.Gateway}}{{end}}'):9464/health/ready"
 ```
 
 `journalctl -u ratatoskr-edge` shows systemd's lines and **not** the service's: the units write to
@@ -153,6 +182,7 @@ table: an operator inserts a row. Every schedule is created **disabled**, becaus
 publishing commands to a domain service that may not exist yet.
 
 ```sql
+-- docker exec -i shared-postgres psql -U postgres -d ratatoskr
 insert into operations.schedules
     (schedule_id, name, owner_user_id, command_type, operation_kind, payload,
      interval_seconds, next_due_at, catch_up, enabled, created_at, updated_at)

@@ -27,6 +27,12 @@ sudo chown root:ratatoskr-edge /etc/ratatoskr/edge.nkey
 sudo chmod 0640 /etc/ratatoskr/edge.nkey
 ```
 
+`ratatoskr-edge` there is the role's OWN group, which exists only if the users were created with
+`--user-group` (`deploy/README.md` step 1). It is also what the unit must name in `Group=`: systemd
+sets the primary group and does not add the user's other memberships, so a unit that says
+`Group=ratatoskr` produces a process that cannot read this file. That is not hypothetical — it is
+how milestone 10's first start failed, with "the bus credential could not be read".
+
 The seed never appears in the environment, in a URL or in a log line: the unit names its **path**,
 startup rule V16 refuses a relative path or a missing file, and `NatsPublisher::connect_with_nkey`
 reads it once and hands it straight to the client. Startup rule V13 refuses a

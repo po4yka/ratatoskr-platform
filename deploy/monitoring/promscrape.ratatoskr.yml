@@ -1,11 +1,31 @@
 # Append to /home/po4yka/monitoring/promscrape.yml.
 #
 # The collector is a container on `monitoring_default`; the three services are host processes under
-# systemd. `host.docker.internal` with `extra_hosts: host-gateway` is how a container reaches the
-# host, and it is a NAME rather than the bridge gateway address because that address is not stable
-# across a network recreation. The services bind their operator listener to 0.0.0.0 so it is
-# reachable from the bridge at all, and the exposure is bounded by `IPAddressAllow=` in each unit
-# rather than by the bind address.
+# systemd. `host.docker.internal` is how a container reaches the host, and it is a NAME rather than
+# the bridge gateway address because that address is not stable across a network recreation. The
+# services bind their operator listener to 0.0.0.0 so it is reachable from the bridge at all, and the
+# exposure is bounded by `IPAddressAllow=` in each unit rather than by the bind address.
+#
+# TWO THINGS MUST BE TRUE FIRST, and neither was, when this was first tried on the machine.
+#
+# 1. The host firewall must let the bridge in. This host runs ufw with `INPUT policy DROP`, and a
+#    container reaching a host port crosses INPUT — so without an explicit rule the scrape TIMES OUT
+#    rather than being refused, which reads like a service that is down. `deploy/README.md` step 7.
+#
+#    The earlier verification of this arrangement did not catch it, and the reason is worth keeping:
+#    it was done with a Ratatoskr CONTAINER joined to `monitoring_default`, where the traffic never
+#    crosses the host firewall at all. The profile then chose systemd units, and nobody re-checked.
+#
+# 2. `host.docker.internal` must resolve, which needs one line on the collector's own service in
+#    /home/po4yka/monitoring/docker-compose.yml. It is not a Docker default:
+#
+#        victoriametrics:
+#          extra_hosts:
+#            - "host.docker.internal:host-gateway"
+#
+#    Without it, `getent hosts host.docker.internal` inside the container returns nothing and every
+#    target below is permanently down. The gateway address works as a substitute and is the thing
+#    that changes when the network is recreated, which is the failure this indirection avoids.
 #
 # VictoriaMetrics is started without `-promscrape.configCheckInterval`, so a change here takes
 # effect on `docker kill -s HUP victoriametrics` and not before.

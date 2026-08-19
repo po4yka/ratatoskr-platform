@@ -1,7 +1,16 @@
 [Unit]
 Description=Ratatoskr Platform — periodic command publication
 Documentation=https://github.com/po4yka/ratatoskr-platform/blob/main/deploy/README.md
-After=network-online.target postgresql.service ratatoskr-edge.service
+# Both dependencies are CONTAINERS on this host, so the thing to be ordered after is the container
+# runtime and not a `postgresql.service` that does not exist here: PostgreSQL 17.7 runs as
+# `shared-postgres` and NATS as `ratatoskr-nats`, both published on loopback. Discovered at
+# milestone 10 by installing this on the machine; `ratatoskr-workspace/docs/DEPLOYMENT_TARGET.md`
+# had described the cluster without saying how it runs.
+#
+# Ordering only. Docker starting does not mean PostgreSQL is accepting connections, so the real
+# guarantee is the one below it: this process refuses to start without a database and retries
+# forever.
+After=network-online.target docker.service ratatoskr-edge.service
 Wants=network-online.target
 
 # `Wants=`, never `Requires=`. Ordering matters — only `ratatoskr-edge` applies the migrations, and
@@ -22,7 +31,13 @@ Type=exec
 # NEVER Type=notify: no Ratatoskr binary calls sd_notify, so notify would time out and kill a
 # healthy process, and WatchdogSec= would SIGABRT it on the first interval.
 User=ratatoskr-scheduler
-Group=ratatoskr
+# The role's OWN group, not the shared one, and this is the difference between the
+# credential files being readable by this service and by all three. `Group=` sets the
+# primary group and nothing else — systemd does not add the user's /etc/group
+# memberships — so the shared group has to be named separately or it is not there at all.
+# Learned at milestone 10 by watching this process fail to read its own nkey seed.
+Group=ratatoskr-scheduler
+SupplementaryGroups=ratatoskr
 EnvironmentFile=/etc/ratatoskr/scheduler.conf
 ExecStartPre=/usr/local/bin/ratatoskr-scheduler check-config
 ExecStart=/usr/local/bin/ratatoskr-scheduler

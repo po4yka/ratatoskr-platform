@@ -28,9 +28,9 @@ It accepts work, routes it to the owning bounded context, and reports progress. 
 
 ## Current phase
 
-Milestones 1 through 9 of `docs/IMPLEMENTATION_PLAN.md` are implemented. Do not assume Rust crates, binaries, migrations, API routes, NATS streams, or CI commands exist unless they are present in the checkout.
+Every milestone of `docs/IMPLEMENTATION_PLAN.md` is implemented, and the system has run on the deployment target. Do not assume Rust crates, binaries, migrations, API routes, NATS streams, or CI commands exist unless they are present in the checkout.
 
-What now exists: the three binaries; the libraries under `crates/`; the `identity`, `operations` and `platform_ingest` schemas in `migrations/`; the versioned public routes on `ratatoskr-edge` and the webhook adapter on `ratatoskr-ingest`; the transactional outbox, the inbox and the `JetStream` publisher and consumer; periodic command publication on `ratatoskr-scheduler`; the single-host deployment profile in `deploy/`; the generated `openapi/openapi.json`; and the CI gate in `.github/workflows/ci.yml`. Registered-device credentials, rate limiting, stale-operation reconciliation and backup remain absent, and the instruction above still applies to them in full. `DEVELOPMENT.md` states what is present and what is absent, command family by command family.
+What now exists: the three binaries; the libraries under `crates/`; the `identity`, `operations` and `platform_ingest` schemas in `migrations/`; the versioned public routes on `ratatoskr-edge` and the webhook adapter on `ratatoskr-ingest`; the transactional outbox, the inbox and the `JetStream` publisher and consumer; periodic command publication on `ratatoskr-scheduler`; the single-host deployment profile in `deploy/`, installed and running on the target; the generated `openapi/openapi.json`; and the CI gate in `.github/workflows/ci.yml`. Registered-device credentials, rate limiting, stale-operation reconciliation and backup remain absent, and the instruction above still applies to them in full. `DEVELOPMENT.md` states what is present and what is absent, command family by command family.
 
 The word is `ingest` wherever it is an identifier — schema, crate, library, binary, database role and path prefix — and "ingress" only in prose, where it names the activity (ADR-0009).
 

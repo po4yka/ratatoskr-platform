@@ -1,12 +1,18 @@
 [Unit]
 Description=Ratatoskr Platform — database dump
 Documentation=https://github.com/po4yka/ratatoskr-platform/blob/main/deploy/README.md
-After=postgresql.service
-Requires=postgresql.service
+# PostgreSQL is a container on this host (milestone 10), so the ordering is on the runtime and the
+# dump reaches the server through `docker exec`. `Requires=` is deliberately absent: a dump that
+# cannot reach the database should fail its own run, not refuse to be scheduled.
+After=docker.service
+Wants=docker.service
 
 [Service]
 Type=oneshot
-User=postgres
+# root, because the dump runs through `docker exec` and reaching the docker socket is a root
+# privilege on this host. The script itself holds no database credential: it enters the container as
+# the cluster's own superuser over a unix socket inside it.
+User=root
 ExecStart=/usr/local/bin/ratatoskr-dump.sh
 
 # A dump reads the whole database. Bounded so it competes with the services rather than starving
@@ -24,7 +30,7 @@ NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
-ReadWritePaths=/mnt/nvme/backups/ratatoskr
+ReadWritePaths=/mnt/nvme/backups/ratatoskr /run/docker.sock
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 LockPersonality=yes
 SystemCallArchitectures=native
