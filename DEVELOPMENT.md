@@ -144,9 +144,13 @@ RATATOSKR__ADMIN__BIND=127.0.0.1:9464 \
 RATATOSKR__TELEMETRY__LOG_FORMAT=pretty \
   cargo run --locked -p ratatoskr-edge
 
-# scheduler and ingest, on defaults alone, no environment at all
+# scheduler, on defaults alone, no environment at all
 cargo run --locked -p ratatoskr-scheduler
-cargo run --locked -p ratatoskr-ingest
+
+# ingest needs a database and an explicitly named public bind; it carries no default for one
+RATATOSKR__PUBLIC__BIND=127.0.0.1:8181 \
+RATATOSKR__DATABASE__URL=postgres://platform:platform@127.0.0.1:5432/platform \
+  cargo run --locked -p ratatoskr-ingest
 
 # validate a configuration without starting anything (exit 0 or 78)
 cargo run --locked -p ratatoskr-edge -- check-config

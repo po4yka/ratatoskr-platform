@@ -58,7 +58,12 @@ fn each_role_boots_on_its_documented_configuration_and_reports_ready() {
     // `ingest_refuses_to_start_against_an_unmigrated_database` asserts deliberately.
     boots(
         "ratatoskr-ingest",
-        &[("RATATOSKR__DATABASE__URL", &database_url())],
+        &[
+            // Named, not defaulted: ingest carries no compiled public port, because a default is a
+            // promise that the port is free and on the deployment target it is not.
+            ("RATATOSKR__PUBLIC__BIND", "127.0.0.1:8181"),
+            ("RATATOSKR__DATABASE__URL", &database_url()),
+        ],
         9465,
     );
 
@@ -260,17 +265,33 @@ fn strip_ansi(text: &str) -> String {
 /// `main`s leaves every other test green.
 #[test]
 fn check_config_exits_zero_on_a_valid_configuration_and_78_on_an_invalid_one() {
-    // All three, because the subcommand is wired into each `main` separately.
-    for binary in ["ratatoskr-edge", "ratatoskr-ingest", "ratatoskr-scheduler"] {
-        let valid = Command::new(built_binary(binary))
-            .arg("check-config")
-            .output()
-            .expect("check-config must run");
+    // Wired into each `main` separately, so each is exercised.
+    //
+    // Edge and scheduler validate on their defaults alone. Ingest deliberately does NOT: it carries
+    // no compiled public port, because a default is a promise that the port is free and on the
+    // deployment target that promise is false. Its `78` here is the same contract from the other
+    // side — the subcommand is the pre-flight, and an ingest that would not start must fail it.
+    for (binary, env, expected) in [
+        ("ratatoskr-edge", None, 0),
+        (
+            "ratatoskr-ingest",
+            Some(("RATATOSKR__PUBLIC__BIND", "127.0.0.1:8181")),
+            0,
+        ),
+        ("ratatoskr-scheduler", None, 0),
+        ("ratatoskr-ingest", None, 78),
+    ] {
+        let mut command = Command::new(built_binary(binary));
+        command.arg("check-config");
+        if let Some((key, value)) = env {
+            command.env(key, value);
+        }
+        let output = command.output().expect("check-config must run");
         assert_eq!(
-            valid.status.code(),
-            Some(0),
-            "{binary}: the defaults must validate: {}",
-            String::from_utf8_lossy(&valid.stderr)
+            output.status.code(),
+            Some(expected),
+            "{binary} with {env:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
         );
     }
 

@@ -19,7 +19,7 @@ use std::net::SocketAddr;
 
 use figment::Jail;
 use platform_core::RuntimeRole;
-use platform_core::config::{self, LogFormat, PlatformConfig};
+use platform_core::config::{self, ConfigError, LogFormat, PlatformConfig};
 
 /// The variables `.env.example` documents, and the probe value each one is given by C-6.
 const DOCUMENTED: [(&str, &str); 11] = [
@@ -48,29 +48,52 @@ fn env_example() -> String {
     std::fs::read_to_string(&path).expect(".env.example must exist at the repository root")
 }
 
-/// C-1. Every binary must start with no environment at all, which is what makes the local-run
-/// commands in `DEVELOPMENT.md` true.
+/// C-1. Every role's built-in defaults are complete for the operator surface, which is what makes
+/// the local-run commands in `DEVELOPMENT.md` true.
+///
+/// "Complete" is not "sufficient to start". `Ingest` carries no public bind on purpose — a default
+/// is a promise the port is free, and on the deployment target `8081` is held by another process —
+/// so it loads its defaults and is then refused by rule V1 until an operator names one. That is
+/// asserted here rather than left to the role that happens to notice.
 #[test]
 fn defaults_alone_produce_a_valid_config_for_every_role() {
     Jail::expect_with(|_| {
         for role in RuntimeRole::ALL {
-            let config = config::load(role)
-                .unwrap_or_else(|error| panic!("{role} defaults must load: {error}"));
+            let defaults = PlatformConfig::defaults(role);
 
             assert_eq!(
-                config.admin.bind.port(),
+                defaults.admin.bind.port(),
                 role.default_admin_port(),
                 "{role} must default to its own admin port"
             );
             assert!(
-                config.admin.bind.ip().is_loopback(),
+                defaults.admin.bind.ip().is_loopback(),
                 "{role} must default to a loopback admin listener"
             );
             assert_eq!(
-                config.public.is_some(),
-                role.may_have_public_listener(),
-                "the public table must be present exactly for the role that may serve publicly"
+                defaults.public.is_some(),
+                role.default_public_port().is_some(),
+                "the public table must be present exactly for the role that defaults to one"
             );
+
+            // Loading applies the rules on top of the defaults. Only the role with no public
+            // default is refused, and it is refused for that reason and no other.
+            match config::load(role) {
+                Ok(config) => assert_eq!(
+                    config.admin.bind, defaults.admin.bind,
+                    "{role} must load its own admin default"
+                ),
+                Err(ConfigError::Invalid(found)) => {
+                    assert_eq!(
+                        role,
+                        RuntimeRole::Ingest,
+                        "{role} must load on defaults alone"
+                    );
+                    assert_eq!(found.len(), 1, "{found:?}");
+                    assert_eq!(found[0].key, "public.bind");
+                }
+                Err(other) => panic!("{role}: expected a semantic failure, got {other}"),
+            }
         }
         Ok(())
     });

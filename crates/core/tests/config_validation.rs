@@ -107,21 +107,48 @@ fn ingest_requires_a_public_listener() {
     );
 }
 
-/// C-9b. The two roles that listen publicly must both start on one machine with no configuration,
-/// or a developer running the whole platform locally meets a bind failure that says nothing about
-/// roles.
+/// C-9b. Only `Edge` defaults to a public bind. `Ingest` may listen publicly and must, but its port
+/// is an allocation rather than a default.
+///
+/// A default is a promise that the port is free. On the deployment target that promise is false —
+/// `8081` is held by another process — so a compiled default buys a crash loop whose error names an
+/// address instead of an allocation, and whose reflexive repair is a wildcard bind that publishes
+/// the webhook surface to the whole network. The absent default is what makes rule V1 refuse the
+/// process until an operator names the bind.
 #[test]
-fn the_two_public_roles_default_to_different_ports() {
+fn only_edge_defaults_to_a_public_bind() {
     let edge = PlatformConfig::defaults(RuntimeRole::Edge);
     let ingest = PlatformConfig::defaults(RuntimeRole::Ingest);
 
-    let (Some(edge_public), Some(ingest_public)) = (edge.public, ingest.public) else {
-        panic!("both roles default to a public listener");
+    let Some(edge_public) = edge.public else {
+        panic!("edge defaults to a public listener");
     };
-    assert_ne!(edge_public.bind, ingest_public.bind);
+    assert!(
+        ingest.public.is_none(),
+        "ingest must not carry a compiled public default"
+    );
+    assert!(RuntimeRole::Ingest.may_have_public_listener());
+
+    // The admin ports still differ, so all three binaries run on one developer machine.
     assert_ne!(edge.admin.bind, ingest.admin.bind);
+    assert_ne!(edge_public.bind, edge.admin.bind);
     assert_ne!(edge_public.bind, ingest.admin.bind);
-    assert_ne!(ingest_public.bind, edge.admin.bind);
+}
+
+/// C-9c. Ingest on its own defaults refuses to start, and the refusal names the variable.
+#[test]
+fn ingest_on_its_own_defaults_is_refused() {
+    let defaults = Figment::from(Serialized::defaults(PlatformConfig::defaults(
+        RuntimeRole::Ingest,
+    )));
+
+    let error = config::load_from(RuntimeRole::Ingest, defaults)
+        .expect_err("ingest must not start without an explicit public bind");
+    let ConfigError::Invalid(found) = error else {
+        panic!("expected a semantic failure");
+    };
+    assert!(names(&found, "public.bind"));
+    assert_eq!(found[0].env_var, "RATATOSKR__PUBLIC__BIND");
 }
 
 /// C-10. `AGENTS.md` keeps the operator plane off the public surface; sharing one address would

@@ -67,17 +67,27 @@ impl RuntimeRole {
         }
     }
 
-    /// The default public listener port, for the roles that have one.
+    /// The default public listener port, for the role that has one.
     ///
-    /// Distinct for the same reason the admin ports are: two binaries that both listen publicly
-    /// must both start on one developer machine, and a shared default would make the second one
-    /// fail to bind with an error about an address rather than about a role.
+    /// `Edge` only, and `Ingest` deliberately NOT — even though it may and must listen publicly.
+    ///
+    /// A default is a promise that the port is free, and on the deployment target that promise is
+    /// false: `8081` is held by another process, so a compiled default would make `ratatoskr-ingest`
+    /// crash-loop with an error about an address rather than about an allocation, and the reflexive
+    /// repair is a wildcard bind that publishes the webhook surface to the whole network. A port on
+    /// a host with co-tenants is an allocation
+    /// (`ratatoskr-workspace/docs/DEPLOYMENT_TARGET.md`), not a default, and nine more services are
+    /// queued for that box.
+    ///
+    /// The consequence is intentional: with no default the `public` table is absent from Ingest's
+    /// defaults, so validation rule V1 refuses to start it until an operator names a bind. Edge
+    /// keeps its default because one role can own the obvious port and a developer running only the
+    /// client-facing API should not have to configure anything.
     #[must_use]
     pub const fn default_public_port(self) -> Option<u16> {
         match self {
             Self::Edge => Some(8080),
-            Self::Ingest => Some(8081),
-            Self::Scheduler => None,
+            Self::Ingest | Self::Scheduler => None,
         }
     }
 }
