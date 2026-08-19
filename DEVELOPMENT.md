@@ -257,6 +257,13 @@ there and says so in one sentence if it is not.
 docker exec -i ratatoskr-platform-postgres psql -U platform -d platform < migrations/0001_identity.sql
 ```
 
+**A committed migration is immutable, comments included.** `sqlx` checksums the file, so a corrected
+comment in an applied migration stops every database that already ran it, with a message that names
+no file. Correct it in the next migration's header instead. Adding a migration is safe: `build.rs`
+in `crates/persistence` tracks the directory, and test M-1 fails if the binary and the repository
+disagree about which migrations exist — without both, a new file is silently absent from the
+artifact and `migrate` reports success one migration short.
+
 `migrations/` is one flat directory rather than the two `docs/ARCHITECTURE.md` S3 draws, and the
 queries are checked at run time rather than by the `sqlx::query!` macros. Both choices, and the
 reasons, are ADR-0004.
@@ -366,29 +373,42 @@ Three instruments exist, and only three: `http_server_request_duration_seconds`,
 `platform_readiness` and `platform_build_info` (`platform_telemetry::metrics::ALL`, held to exactly
 that list by test T-4).
 
-**This table was a plan and has become a debt.** Milestone 1 wrote it with an "Arrives" column, and
-milestones 2 through 7 then shipped the SUBJECTS — operations, an outbox, idempotency, SSE, a
-capability document — without shipping the instruments that watch them. Every row below whose
-milestone has passed is a thing this repository does and cannot see itself do.
+**This table was a plan, became a debt, and is now closed.** Milestone 1 wrote it with an "Arrives"
+column, and milestones 2 through 7 then shipped the SUBJECTS — operations, an outbox, idempotency,
+SSE, a capability document — without shipping the instruments that watch them. Every row was a thing
+this repository did and could not see itself do. Each one now has a publication point, and
+`platform_telemetry::metrics::ALL` is the whole list, pinned by test T-4: a rename breaks that test
+before it breaks a dashboard.
 
-| S16 requirement | Emitted | Subject exists since |
+| S16 requirement | Emitted | Where it is published |
 |---|---|---|
-| request count, latency, status, route template | **yes** — `http_server_request_duration_seconds` and its derived `_count` | milestone 1 |
-| dependency health | **yes** — `platform_readiness`, one gauge covering the database probe | milestone 2 |
-| capability state | no | milestone 7 |
-| authentication and authorization outcomes | no | milestone 5 |
-| operation age and transition counts | no | milestone 3 |
-| outbox and inbox lag | no | milestone 4 |
-| command publication failures | no | milestone 4 |
-| idempotency hits and conflicts | no | milestone 5 |
-| SSE connection count and delivery lag | no | milestone 6 |
-| scheduler drift and duplicate suppression | **yes** — `platform_scheduler_drift_seconds` and `platform_scheduler_occurrences_total` | milestone 9 |
+| request count, latency, status, route template | `http_server_request_duration_seconds` and its derived `_count` | the one public-router middleware |
+| dependency health | `platform_readiness` | `RuntimeState`, on every state change |
+| capability state | `platform_capability_available{capability}` | the observer, from the same facts the route reports |
+| authentication and authorization outcomes | `platform_auth_decisions_total{action,outcome}` | `audit::record`, so the series and `identity.audit_events` cannot disagree |
+| operation age and transition counts | `platform_operation_transitions_total{outcome}`, `platform_operations{status}`, `platform_operations_oldest_unterminated_age_seconds` | `record_status` for the counter, the observer for the two gauges |
+| outbox and inbox lag | `platform_outbox_pending`, `platform_outbox_oldest_pending_age_seconds`, `platform_outbox_dead_lettered`, `platform_inbox_unprocessed` | the observer |
+| command publication failures | `platform_outbox_publications_total{outcome}` | `pump::run_once`, beside the place each outcome is decided |
+| idempotency hits and conflicts | `platform_idempotency_outcomes_total{outcome}` | `reserve`, the one statement that decides which of the three it is |
+| SSE connection count and delivery lag | `platform_sse_connections`, `platform_sse_delivery_lag_seconds` | a `Drop` guard on the stream, and the frame-building loop |
+| scheduler drift and duplicate suppression | `platform_scheduler_drift_seconds{schedule}`, `platform_scheduler_occurrences_total{schedule,outcome}` | the schedule pass |
 
-Closing this is its own piece of work rather than a tail end of the milestone that happened to notice
-it: each row needs a publication point that is truthful about WHEN the value is known, a bounded
-label set, and a test that pins the name — a rename silently breaks every dashboard and every alert.
-Adding a gauge to tick a row, published from wherever was convenient, would produce exactly the
-misleading series the paragraph above refuses.
+Two rules held throughout, and they are the reason this was its own piece of work rather than a tail
+end of some milestone that happened to notice the table.
+
+**Where a value is published says when it is TRUE.** An event's metric is emitted where the event
+happens. A property of a SET — a queue depth, an operation age, whether a capability is available —
+is not knowable from any single write, so it is sampled on a timer by `ratatoskr-edge`'s observer
+every fifteen seconds, which is the scrape interval. Publishing a set property from a write path
+would put a full scan on a request to keep a gauge fresh between scrapes; publishing it from the
+handler that happens to report it — `GET /v2/capabilities` — would produce a gauge that reports the
+state of the last question rather than the state of the deployment.
+
+**Every label comes from a closed set, and mostly by type.** `capability` is `Capability::ALL`;
+`status` is the seven the CHECK constraint allows; the four `outcome` labels are enum variants. The
+one that could have been a string is `AuditEvent::action`, which is now `&'static str` — a label
+built from anything a request carries is a cardinality bomb, and the type is what makes that
+impossible rather than a rule somebody has to remember.
 
 ## Expected workflow
 

@@ -455,8 +455,8 @@ async fn an_audit_record_requires_a_namespaced_correlation_id() {
             audit_event_id: uuid::Uuid::now_v7(),
             actor_user_id: Some(user.user_id),
             actor_session_id: None,
-            action: "session.create".to_owned(),
-            target_kind: "session".to_owned(),
+            action: "session.create",
+            target_kind: "session",
             target_id: None,
             outcome: AuditOutcome::Allowed,
             correlation_id: correlation.to_owned(),
@@ -479,8 +479,8 @@ async fn an_audit_record_requires_a_namespaced_correlation_id() {
             audit_event_id: uuid::Uuid::now_v7(),
             actor_user_id: None,
             actor_session_id: None,
-            action: "session.create".to_owned(),
-            target_kind: "session".to_owned(),
+            action: "session.create",
+            target_kind: "session",
             target_id: None,
             outcome: AuditOutcome::Denied,
             correlation_id: "not-namespaced".to_owned(),
@@ -492,6 +492,57 @@ async fn an_audit_record_requires_a_namespaced_correlation_id() {
         malformed.is_err(),
         "an audit record must carry the same correlation form the client saw"
     );
+
+    harness.cleanup().await.expect("cleanup");
+}
+
+/// I-9. The audit trail is collected on a window, and the window is the longest of the four.
+///
+/// `DATA_MODEL.md` gives the security audit its own retention class and nothing enforced one until
+/// milestone 9's follow-up, so this table grew for the life of a deployment. Its window is a policy
+/// rather than a mechanism — everything else is deleted once it can no longer affect correctness,
+/// and this is deleted when somebody decides how long an incident may go unnoticed — which is why
+/// the default is a year and why it is configurable.
+#[tokio::test]
+async fn the_audit_trail_is_collected_on_a_window() {
+    let harness = TestDatabase::create().await.expect("a test database");
+    let pool = harness.pool();
+
+    let user = platform_identity::user::create_user(pool, now())
+        .await
+        .expect("a user");
+    let long_ago = now() - jiff::SignedDuration::from_hours(24 * 400);
+
+    for occurred_at in [long_ago, now()] {
+        platform_identity::audit::record(
+            pool,
+            &AuditEvent {
+                audit_event_id: uuid::Uuid::now_v7(),
+                actor_user_id: Some(user.user_id),
+                actor_session_id: None,
+                action: "session.create",
+                target_kind: "session",
+                target_id: None,
+                outcome: AuditOutcome::Allowed,
+                correlation_id: "correlation:01a0153f-63e5-7010-a4c9-1fe6c43bcc39".to_owned(),
+            },
+            occurred_at,
+        )
+        .await
+        .expect("recording");
+    }
+
+    let before = now() - jiff::SignedDuration::from_hours(24 * 365);
+    let removed = platform_identity::audit::collect_before(pool, before, 1000)
+        .await
+        .expect("collecting");
+    assert_eq!(removed, 1, "the record outside the window, and only it");
+
+    let left: i64 = sqlx::query_scalar("select count(*) from identity.audit_events")
+        .fetch_one(pool)
+        .await
+        .expect("counting");
+    assert_eq!(left, 1);
 
     harness.cleanup().await.expect("cleanup");
 }

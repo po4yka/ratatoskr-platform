@@ -28,6 +28,8 @@ tokio.workspace      = true
 serde.workspace      = true
 serde_json.workspace = true
 tracing.workspace    = true
+uuid.workspace     = true
+jiff.workspace     = true
 metrics.workspace    = true
 # `Span::set_parent` (§6.3 step 4, continuing an inbound W3C `traceparent`) is an extension trait of
 # this crate, so the one middleware cannot adopt a parent context without it. The specification's

@@ -25,6 +25,7 @@
 mod admin;
 pub mod fault;
 mod lifecycle;
+pub mod limit;
 pub mod observe;
 mod shutdown;
 
@@ -43,6 +44,7 @@ use tracing::field::Empty;
 pub use crate::admin::admin_router;
 pub use crate::fault::{AuthoredFailure, reject};
 pub use crate::lifecycle::{Check, CheckName, CheckReason, CheckState, HttpState, RuntimeState};
+pub use crate::limit::{ActorLimiter, Concurrency};
 pub use crate::observe::{RequestContext, public_router};
 pub use crate::shutdown::{Served, ShutdownOutcome, drain_and_close, serve};
 

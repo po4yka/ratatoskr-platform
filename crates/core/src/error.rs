@@ -188,12 +188,24 @@ pub enum FailureKind {
     /// in flight. `ARCHITECTURE.md` S8.1 rejects the first outright; the second would start the
     /// duplicate work the key exists to prevent.
     IdempotencyConflict,
+    /// This actor has spent its allowance. `ARCHITECTURE.md` S14: "Edge applies request, body,
+    /// concurrency, and per-actor limits."
+    ///
+    /// Distinct from [`Self::Overloaded`] on purpose, and the difference is what a client should do:
+    /// this one says the SERVICE is fine and the CALLER is asking too often, so backing off helps;
+    /// the other says the service is saturated by everybody, so backing off helps only if everybody
+    /// does it.
+    RateLimited,
+    /// More requests are in flight than this process will hold. Shed immediately rather than queued,
+    /// because a queue on a host with four shared cores converts a load spike into a timeout for
+    /// every request instead of a refusal for some.
+    Overloaded,
 }
 
 impl FailureKind {
     /// Every kind, in status order. The array length is the documented count, so adding a variant
     /// without updating it does not compile.
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 11] = [
         Self::RouteNotFound,
         Self::MethodNotAllowed,
         Self::PayloadTooLarge,
@@ -203,6 +215,8 @@ impl FailureKind {
         Self::InvalidRequest,
         Self::MissingIdempotencyKey,
         Self::IdempotencyConflict,
+        Self::RateLimited,
+        Self::Overloaded,
     ];
 
     /// The kinds a response can arrive as with no handler involved: axum's own routing and
@@ -236,6 +250,8 @@ impl FailureKind {
             Self::InvalidRequest => &INVALID_REQUEST,
             Self::MissingIdempotencyKey => &MISSING_IDEMPOTENCY_KEY,
             Self::IdempotencyConflict => &IDEMPOTENCY_CONFLICT,
+            Self::RateLimited => &RATE_LIMITED,
+            Self::Overloaded => &OVERLOADED,
         }
     }
 }
@@ -279,6 +295,27 @@ fn entry(status: StatusCode, code: &str, message: &str, retryable: bool) -> Publ
         retryable,
     }
 }
+
+/// `platform.limit.rate_exceeded` — 429. Retryable: the allowance refills on its own.
+static RATE_LIMITED: LazyLock<PublicFault> = LazyLock::new(|| {
+    entry(
+        StatusCode::TOO_MANY_REQUESTS,
+        "platform.limit.rate_exceeded",
+        "Too many requests. Slow down and try again.",
+        true,
+    )
+});
+
+/// `platform.limit.overloaded` — 503. Retryable, and the retry is likely to work: shedding is how
+/// the process stays inside its concurrency bound, so the condition clears as soon as work drains.
+static OVERLOADED: LazyLock<PublicFault> = LazyLock::new(|| {
+    entry(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "platform.limit.overloaded",
+        "The service is busy. Try again shortly.",
+        true,
+    )
+});
 
 /// `platform.auth.unauthenticated` — 401.
 static UNAUTHENTICATED: LazyLock<PublicFault> = LazyLock::new(|| {

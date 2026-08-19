@@ -29,8 +29,9 @@ use figment::Figment;
 use figment::providers::{Env, Serialized};
 
 pub use crate::config::model::{
-    AdminConfig, BusConfig, DatabaseConfig, IdentityConfig, LogFormat, OtlpConfig, PlatformConfig,
-    PublicConfig, ShutdownConfig, TelemetryConfig,
+    AdminConfig, BusConfig, DEFAULT_ACTOR_REQUESTS_PER_MINUTE, DatabaseConfig,
+    EVENT_RETENTION_DAYS, IdentityConfig, LogFormat, OtlpConfig, PlatformConfig, PublicConfig,
+    RetentionConfig, ShutdownConfig, TelemetryConfig,
 };
 pub use crate::config::validate::{SHUTDOWN_CEILING_SECONDS, Violation};
 use crate::role::RuntimeRole;
@@ -118,7 +119,12 @@ impl PlatformConfig {
                 bind: SocketAddr::new(loopback, port),
                 request_timeout_seconds: model::default_request_timeout_seconds(),
                 max_body_bytes: model::default_max_body_bytes(),
+                max_concurrent_requests: model::default_max_concurrent_requests(),
+                actor_requests_per_minute: model::default_actor_requests_per_minute(),
             }),
+            // Windows that are safe on the smallest deployment: long enough that nothing is lost
+            // to a weekend outage, short enough that no mechanical table grows without end.
+            retention: RetentionConfig::default(),
             shutdown: ShutdownConfig {
                 drain_seconds: model::default_drain_seconds(),
                 grace_seconds: model::default_grace_seconds(),

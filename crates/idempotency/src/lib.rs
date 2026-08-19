@@ -113,6 +113,16 @@ impl Reservation {
 
 /// Reserve a key inside the caller's transaction.
 ///
+/// Counts what it decided under `platform_idempotency_outcomes_total` — `ARCHITECTURE.md` S16 item
+/// 8 — which is why this wraps [`decide`] instead of counting at each of its four returns: there is
+/// one mapping from a reservation to an outcome, it already exists as [`Reservation::outcome`], and
+/// a second copy of it beside a `return` is where the two would drift.
+///
+/// A rising `refuse` is the one to look at. A `replay` is a client retrying correctly and is the
+/// header working as intended; a `refuse` is the same key with a different body, or an earlier
+/// attempt that never finished — a client bug or a stuck request, and the two are worth telling
+/// apart from success.
+///
 /// # Errors
 ///
 /// [`PersistenceError::Query`] if a statement fails.
@@ -122,6 +132,47 @@ impl Reservation {
               would be destructured at the only call site and hide which parts form the scope"
 )]
 pub async fn reserve(
+    transaction: &mut sqlx::PgTransaction<'_>,
+    owner_user_id: Uuid,
+    route: &str,
+    operation_kind: &str,
+    key: Digest,
+    fingerprint: Digest,
+    now: jiff::Timestamp,
+    ttl: jiff::SignedDuration,
+) -> Result<Reservation, PersistenceError> {
+    let reservation = decide(
+        transaction,
+        owner_user_id,
+        route,
+        operation_kind,
+        key,
+        fingerprint,
+        now,
+        ttl,
+    )
+    .await?;
+
+    let outcome = match reservation.outcome() {
+        Outcome::Proceed(_) => "proceed",
+        Outcome::Replay(_) => "replay",
+        Outcome::Refuse => "refuse",
+    };
+    metrics::counter!(
+        platform_telemetry::metrics::PLATFORM_IDEMPOTENCY_OUTCOMES_TOTAL,
+        "outcome" => outcome,
+    )
+    .increment(1);
+
+    Ok(reservation)
+}
+
+/// The reservation itself, without the counting.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the same argument list as `reserve`, for the same reason"
+)]
+async fn decide(
     transaction: &mut sqlx::PgTransaction<'_>,
     owner_user_id: Uuid,
     route: &str,

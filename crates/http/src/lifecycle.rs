@@ -12,6 +12,13 @@ const DATABASE_UP: u8 = 1;
 /// The last probe did not answer.
 const DATABASE_DOWN: u8 = 2;
 
+/// No bus is configured for this role. Two of the three have none by design (ADR-0013).
+const BUS_ABSENT: u8 = 0;
+/// The client holds a connection.
+const BUS_UP: u8 = 1;
+/// The client is disconnected or reconnecting.
+const BUS_DOWN: u8 = 2;
+
 /// The facts readiness is computed from.
 ///
 /// Shared by the admin router, which reads it, and the shutdown sequence, which writes it.
@@ -26,6 +33,11 @@ pub struct RuntimeState {
     /// The database: 0 not configured, 1 answering, 2 not answering. Three states rather than a
     /// `bool`, because "no database" and "a database that is down" must not report the same thing.
     database: AtomicU8,
+    /// The bus, with the same three states and for the same reason. Only `ratatoskr-edge` ever
+    /// leaves this at anything but `BUS_ABSENT`: it is the only role that opens a NATS connection
+    /// (ADR-0013), so a bus check on the other two would report the health of something they do not
+    /// use.
+    bus: AtomicU8,
 }
 
 impl RuntimeState {
@@ -37,6 +49,7 @@ impl RuntimeState {
             startup_complete: AtomicBool::new(false),
             draining: AtomicBool::new(false),
             database: AtomicU8::new(DATABASE_ABSENT),
+            bus: AtomicU8::new(BUS_ABSENT),
         };
         state.publish_readiness();
         state
@@ -70,6 +83,27 @@ impl RuntimeState {
         self.publish_readiness();
     }
 
+    /// Record what the latest bus probe found.
+    ///
+    /// The probe is `async-nats`'s own connection state, which is free to read and performs no I/O:
+    /// the client reconnects on its own and tracks where it is. A probe that published a message to
+    /// find out would add load to the broker in exactly the situation where the broker is already
+    /// the problem.
+    pub fn set_bus_reachable(&self, reachable: bool) {
+        self.bus
+            .store(if reachable { BUS_UP } else { BUS_DOWN }, Ordering::Release);
+        self.publish_readiness();
+    }
+
+    /// What the last bus probe found, or `None` when this role has no bus configured.
+    #[must_use]
+    pub fn bus_reachable(&self) -> Option<bool> {
+        match self.bus.load(Ordering::Acquire) {
+            BUS_ABSENT => None,
+            state => Some(state == BUS_UP),
+        }
+    }
+
     /// What the last database probe found, or `None` when this role has no database configured.
     ///
     /// Read by `GET /v2/capabilities` (ADR-0008) so the "healthy" half of a capability is the same
@@ -93,10 +127,12 @@ impl RuntimeState {
     ///
     /// A `Vec`, never a map, so two consecutive probe bodies are byte-identical and `diff` is a
     /// usable tool at 03:00. There is deliberately no registry and no trait: a trait with one
-    /// implementation is the abstraction this project rejects. Milestone 2 adds one element.
+    /// implementation is the abstraction this project rejects.
     ///
-    /// ponytail: two atomics, not a probe registry. Introduce a registry when there are two probes
-    /// that do I/O, not before.
+    /// "Sorted by name" became true when the bus check arrived. The sort is by [`CheckName`]'s
+    /// `Ord`, which is declaration order, and the declaration order was `Drain, Startup, Database`
+    /// — so the doc had described alphabetical order while the code produced the order somebody
+    /// happened to add the variants in. The variants are now alphabetical and the two agree.
     #[must_use]
     pub fn checks(&self) -> Vec<Check> {
         let draining = self.draining.load(Ordering::Acquire);
@@ -120,6 +156,18 @@ impl RuntimeState {
                 let up = state == DATABASE_UP;
                 checks.push(Check {
                     name: CheckName::Database,
+                    state: CheckState::from_pass(up),
+                    reason: (!up).then_some(CheckReason::DependencyUnavailable),
+                });
+            }
+        }
+
+        match self.bus.load(Ordering::Acquire) {
+            BUS_ABSENT => {}
+            state => {
+                let up = state == BUS_UP;
+                checks.push(Check {
+                    name: CheckName::Bus,
                     state: CheckState::from_pass(up),
                     reason: (!up).then_some(CheckReason::DependencyUnavailable),
                 });
@@ -156,19 +204,22 @@ pub struct Check {
 }
 
 /// A logical token from a closed set. Never a hostname, port, DSN, NATS subject, latency or driver
-/// message (`ARCHITECTURE.md` S15, S12). Milestone 2 adds `Postgres`; milestone 4 adds `Bus`.
+/// message (`ARCHITECTURE.md` S15, S12).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum CheckName {
-    /// No shutdown signal has arrived.
-    Drain,
-    /// Configuration, telemetry and every configured listener are up.
-    Startup,
+    /// The `NATS` client holds a connection. Present only for the role that opens one, which is
+    /// `ratatoskr-edge` alone (ADR-0013).
+    Bus,
     /// The database answers. Present only when one is configured: a role with no database reports no
     /// database check rather than a passing one, because a passing check for something that does not
     /// exist is the readiness equivalent of an always-zero metric.
     Database,
+    /// No shutdown signal has arrived.
+    Drain,
+    /// Configuration, telemetry and every configured listener are up.
+    Startup,
 }
 
 /// Whether one check passes.

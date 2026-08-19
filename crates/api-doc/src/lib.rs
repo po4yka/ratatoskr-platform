@@ -308,7 +308,13 @@ Two listeners serve the paths below and they are not the same address: `/v2/capt
 absent from this document, so no `servers` block is emitted.\n\n\
 Every non-2xx response carries a contract `ErrorEnvelope`, built at exactly one place in the \
 implementation. Its `code` is a closed vocabulary; its `message` is safe to display; it never \
-carries a provider diagnostic.";
+carries a provider diagnostic.\n\n\
+Any route may answer `503 platform.limit.overloaded`. It is not listed per route because it is not \
+a property of any route: the listener bounds how many requests it holds at once and sheds the rest \
+immediately rather than queueing them, so the answer arrives before routing has happened. It is \
+retryable, and the condition clears as work drains. `429 platform.limit.rate_exceeded` IS listed \
+per route, because it belongs to the caller rather than to the service and only routes that \
+identify a caller can produce it.";
 
 /// Fail on the two mistakes that produce a document which looks right and generates a broken
 /// client.

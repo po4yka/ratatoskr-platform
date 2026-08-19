@@ -105,6 +105,14 @@ sudo systemctl enable --now ratatoskr-ingest ratatoskr-scheduler
 #    deployed is a permanently failing target.
 cat deploy/monitoring/promscrape.ratatoskr.yml >> /home/po4yka/monitoring/promscrape.yml
 docker kill -s HUP victoriametrics
+
+# 8. Backup. deploy/backup/README.md has the detail and the restore rehearsal; run the rehearsal
+#    once now rather than on the day it is needed.
+sudo install -m 0755 deploy/backup/ratatoskr-dump.sh /usr/local/bin/ratatoskr-dump.sh
+sudo install -d -m 0700 -o postgres -g postgres /mnt/nvme/backups/ratatoskr
+sudo cp deploy/backup/ratatoskr-backup.{service,timer} /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now ratatoskr-backup.timer
+sudo systemctl start ratatoskr-backup.service
 ```
 
 Every step is re-runnable. `create database` reports that the database exists and is skipped; every
@@ -171,14 +179,31 @@ Watch it with `platform_scheduler_drift_seconds{schedule}` and
 something is republishing an occurrence that already happened; a `skipped` count that keeps rising
 means the process is not keeping up with its own schedules.
 
+## What the services now report
+
+Every row of `ARCHITECTURE.md` S16 has a publication point, and
+`platform_telemetry::metrics::ALL` is the whole list. The ones worth a rule first:
+
+| Series | What a non-zero value means |
+|---|---|
+| `platform_outbox_dead_lettered` | work a client was told had been accepted and that nobody delivered. Never expected above zero |
+| `platform_outbox_oldest_pending_age_seconds` | the publisher is not draining. With edge down, everything the other two roles accept lands here |
+| `platform_inbox_unprocessed` | a handler is failing after claiming a message |
+| `platform_operations_oldest_unterminated_age_seconds` | an operation nobody finished. There is no reconciler yet, so this is the only way to see one |
+| `platform_scheduler_occurrences_total{outcome="skipped"}` | the scheduler is not keeping up with its own schedules |
+| `platform_capability_available` | a capability the deployment is advertising as unavailable |
+
 ## What is still missing
 
 Named here rather than left to be discovered:
 
-- **Backup and restore.** `/mnt/nvme/backups/ratatoskr` is allocated and nothing writes to it. There
-  is no dump timer, no restore rehearsal, and `/mnt/backup/borg` is a second volume on the same
-  machine — it survives a disk failure and does not survive losing the board.
-- **Alert rules.** Alertmanager on this host now reaches a person, but no rule watches
-  `platform_readiness`, the outbox backlog, or scheduler drift.
+- **An off-host copy.** `deploy/backup/` dumps daily to NVMe and the host's borg job copies that to
+  `/mnt/backup` — a second volume on the same machine. It survives a disk failure and does not
+  survive losing the board. The honest recovery point today is one day for a disk, and everything
+  for the machine.
+- **Alert rules.** Alertmanager on this host reaches a person, and no rule watches any of the series
+  above. The metrics exist; the rules do not.
 - **A `ratatoskr.target`.** The three units are enabled individually; there is no single unit to
   stop the deployment with.
+- **Operation history retention.** The sweep deliberately does not touch `operations.operations`:
+  how long a user's history is kept is a product decision, and no milestone owns it.

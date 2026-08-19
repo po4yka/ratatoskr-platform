@@ -414,6 +414,37 @@ async fn reschedule(
     Ok(())
 }
 
+/// Delete occurrence records older than `before`, at most `limit` of them.
+///
+/// An occurrence is what refuses a second publication of the same due time, so this window is also
+/// how far back an operator may move a schedule's `next_due_at` before a rewind republishes rather
+/// than being suppressed. Nothing else depends on it: `next_due_at` only ever moves forward, so a
+/// due time older than the window is unreachable by the publisher itself.
+///
+/// # Errors
+///
+/// [`SchedulingError::Persistence`] if the statement fails.
+pub async fn collect_occurrences_before(
+    pool: &PgPool,
+    before: Timestamp,
+    limit: i64,
+) -> Result<u64, SchedulingError> {
+    let done = sqlx::query(
+        "delete from operations.schedule_occurrences
+          where occurrence_id in (
+              select occurrence_id from operations.schedule_occurrences
+               where published_at < $1
+               limit $2
+          )",
+    )
+    .bind(to_offset(before))
+    .bind(limit)
+    .execute(pool)
+    .await
+    .map_err(PersistenceError::Query)?;
+    Ok(done.rows_affected())
+}
+
 /// Whether the migrations that own these tables have been applied.
 ///
 /// `ratatoskr-scheduler` does not migrate: `ARCHITECTURE.md` S18 gives it its own least-privilege

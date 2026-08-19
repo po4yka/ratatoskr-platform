@@ -16,9 +16,14 @@
 -- `ratatoskr_edge` owns all three schemas because it created them, so it needs nothing here. The
 -- other two get `usage` on what they use and nothing on the rest, which is the whole point:
 --
---   * `ratatoskr_ingest` cannot read `identity` at all. The process with the largest
---     unauthenticated attack surface in the system cannot reach a session credential hash, an OAuth
---     relay, or a user's provider identity.
+--   * `ratatoskr_ingest` cannot READ `identity`. It may append to exactly one table there —
+--     `audit_events` — and hold no other privilege on the schema, so the process with the largest
+--     unauthenticated attack surface in the system still cannot reach a session credential hash, an
+--     OAuth relay, or a user's provider identity, and cannot read back what it wrote. That narrowing
+--     is deliberate: `usage` on a schema grants the right to NAME an object in it and nothing else,
+--     and `insert` without `select` is an append-only right. The reason it exists at all is that a
+--     webhook credential presented at another source's URL is an attributable security decision, and
+--     an audit trail that omits the one process most exposed to the internet is not an audit trail.
 --   * `ratatoskr_scheduler` cannot read `identity` or `platform_ingest`. It publishes commands from
 --     rows an operator wrote, and has no reason to see either.
 --
@@ -27,6 +32,7 @@
 
 grant usage on schema platform_ingest to ratatoskr_ingest;
 grant usage on schema operations      to ratatoskr_ingest;
+grant usage on schema identity        to ratatoskr_ingest;
 grant usage on schema operations      to ratatoskr_scheduler;
 
 -- ---------------------------------------------------------------------------------------------
@@ -37,6 +43,10 @@ grant usage on schema operations      to ratatoskr_scheduler;
 -- command. `delete` appears nowhere — nothing on this path removes a row, and a role that cannot
 -- delete cannot be made to.
 grant select                 on platform_ingest.webhook_sources to ratatoskr_ingest;
+-- Append only, and to one table. No `select`, so a compromised adapter cannot read the trail it is
+-- writing to; no `update` or `delete`, so it cannot rewrite one either. Every other table in
+-- `identity` stays unreachable, which the verification block at the bottom checks by name.
+grant insert                 on identity.audit_events           to ratatoskr_ingest;
 grant select, insert, update on operations.idempotency_records  to ratatoskr_ingest;
 grant select, insert         on operations.operations           to ratatoskr_ingest;
 grant select, insert         on operations.outbox               to ratatoskr_ingest;
@@ -64,10 +74,18 @@ alter default privileges for role ratatoskr_edge in schema operations
 -- verification
 -- ---------------------------------------------------------------------------------------------
 --
--- Both `f`:
+-- The scheduler has no reach into `identity` at all, and ingest can neither read the audit trail it
+-- appends to nor touch anything else there. All five `f`:
 --
---   select has_schema_privilege('ratatoskr_ingest',    'identity', 'usage'),
---          has_schema_privilege('ratatoskr_scheduler', 'identity', 'usage');
+--   select has_schema_privilege('ratatoskr_scheduler', 'identity', 'usage'),
+--          has_table_privilege('ratatoskr_ingest', 'identity.audit_events', 'select'),
+--          has_table_privilege('ratatoskr_ingest', 'identity.sessions',     'select'),
+--          has_table_privilege('ratatoskr_ingest', 'identity.identities',   'select'),
+--          has_table_privilege('ratatoskr_ingest', 'identity.oauth_relays', 'select');
+--
+-- and the one thing it may do, `t`:
+--
+--   select has_table_privilege('ratatoskr_ingest', 'identity.audit_events', 'insert');
 --
 -- All four `t`:
 --

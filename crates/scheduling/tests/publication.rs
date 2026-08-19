@@ -380,3 +380,48 @@ async fn two_schedules_due_at_once_are_both_published() {
 
     database.cleanup().await.expect("cleanup");
 }
+
+/// S-9. Retention removes old occurrence records and leaves recent ones.
+///
+/// The window is also how far back an operator may rewind `next_due_at` before a rewind republishes
+/// instead of being suppressed, which is why it is ninety days by default and not ninety minutes.
+/// Nothing else depends on it: `next_due_at` only ever moves forward under its own power.
+#[tokio::test]
+async fn retention_removes_occurrences_outside_the_window() {
+    let database = TestDatabase::create().await.expect("a test database");
+    let pool = database.pool();
+
+    let due = at(1_700_000_000);
+    let mut fixture = Fixture::new(due);
+    fixture.catch_up = CatchUp::CatchUp;
+    fixture.insert(pool).await;
+
+    // Three occurrences, published a minute apart at a due time far in the past.
+    let now = due + SignedDuration::from_secs(180);
+    for _ in 0..3 {
+        run_once(pool, 32, now).await.expect("the pass must run");
+    }
+    assert_eq!(occurrence_count(pool, fixture.schedule_id).await, 3);
+
+    // A window that ends before all of them, then one that ends after.
+    let removed = platform_scheduling::collect_occurrences_before(
+        pool,
+        due - SignedDuration::from_hours(1),
+        1000,
+    )
+    .await
+    .expect("collecting");
+    assert_eq!(removed, 0, "nothing published after the cut-off may go");
+
+    let removed = platform_scheduling::collect_occurrences_before(
+        pool,
+        now + SignedDuration::from_secs(1),
+        1000,
+    )
+    .await
+    .expect("collecting");
+    assert_eq!(removed, 3);
+    assert_eq!(occurrence_count(pool, fixture.schedule_id).await, 0);
+
+    database.cleanup().await.expect("cleanup");
+}

@@ -52,6 +52,18 @@ and a wrong `on conflict` clause, none of which the macros verify.
   `operations` is exercised by a test that talks to it.
 - `migrations/` is flat. A reader finds the owning schema in the file name and in the `create schema`
   statement at the top of each file.
+- **A committed migration is immutable, comments included.** `sqlx` records a checksum of the FILE
+  and refuses to migrate a database whose record disagrees, so a one-word change to a comment in an
+  applied migration stops every deployment that already ran it — with the message "the database
+  schema could not be brought up to date" and nothing about which file. Written down at milestone 9
+  because it was learned there: a comment in `0007` was corrected to describe a retention sweep that
+  had just been added, and every already-migrated database refused to start. A superseded comment is
+  corrected in the NEXT migration's header, not in place.
+- **Adding a file to `migrations/` must invalidate the build.** `sqlx::migrate!` emits its change
+  tracking per FILE, so a file that does not exist yet is tracked by nothing and an already-built
+  artifact keeps the set it was compiled with — `Database::migrate` then reports success having
+  applied one migration fewer than the repository contains. `crates/persistence/build.rs` tracks the
+  directory, and test M-1 compares the embedded versions with the files on disk.
 - The advisory lock `sqlx` takes during `run` still makes overlapping applications safe.
   **Amended at milestone 9.** This line originally read "still makes a rolling deployment safe".
   There is no rolling deployment: the target is one host with one process per role (ADR-0010).

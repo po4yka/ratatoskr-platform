@@ -35,6 +35,28 @@ unused-allowed-license = "allow"
 # graph was already on 0.103.14, and removing the duplicate is what closed the four advisories.
 multiple-versions = "warn"
 
+# Replacement allocators are denied because of the page size, not because of the allocators.
+#
+# The deployment target runs the 16 KiB-page kernel (`kernel_2712.img`), and these three size their
+# internal structures from a page size decided at BUILD time.
+# `tikv-jemallocator` needs `--with-lg-page=14` passed to the vendored jemalloc; without it the
+# binary aborts at startup on this host with a message about the page size and nothing else.
+# `mimalloc` and `snmalloc-rs` have the same shape of assumption.
+#
+# None of them is in the graph today, which is why this is cheap to write now: it costs one denial
+# nobody trips, and it turns "add jemalloc, it is faster" — a reasonable-sounding suggestion for a
+# service under load — into a failed `cargo deny check` in the gate rather than a crash-loop on the
+# one machine this runs on. `ratatoskr-workspace/docs/DEPLOYMENT_TARGET.md` records the page size.
+#
+# The system allocator is glibc's, which reads the page size at run time. That is the whole reason
+# the current binaries start on this host at all.
+deny = [
+    { name = "tikv-jemallocator" },
+    { name = "jemallocator" },
+    { name = "mimalloc" },
+    { name = "snmalloc-rs" },
+]
+
 [sources]
 unknown-registry = "deny"
 unknown-git      = "deny"

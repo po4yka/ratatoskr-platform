@@ -1,4 +1,4 @@
-//! The startup validation rules V1–V16 and the operator-facing failure report.
+//! The startup validation rules V1–V18 and the operator-facing failure report.
 //!
 //! Order at startup is strictly: extract, validate, initialise telemetry, bind listeners. Telemetry
 //! is initialised *after* validation so that an invalid `log_filter` fails as a configuration
@@ -44,7 +44,7 @@ pub const SHUTDOWN_CEILING_SECONDS: u64 = 120;
 /// The key and variable of the public listener address, named by V1 and V2.
 const PUBLIC_BIND: (&str, &str) = ("public.bind", "RATATOSKR__PUBLIC__BIND");
 
-/// Applies V1–V16 and returns every violation found, in rule order.
+/// Applies V1–V18 and returns every violation found, in rule order.
 pub(crate) fn validate(role: RuntimeRole, config: &PlatformConfig) -> Vec<Violation> {
     let mut found = Vec::new();
 
@@ -130,7 +130,58 @@ pub(crate) fn validate(role: RuntimeRole, config: &PlatformConfig) -> Vec<Violat
     found.extend(database_violations(config));
     found.extend(bus_violations(config));
     found.extend(identity_violations(config));
+    found.extend(retention_violations(config));
+    found.extend(limit_violations(config));
 
+    found
+}
+
+/// V18 — the limit rules.
+///
+/// Both bounds are refused at zero rather than treated as "unlimited". A limit of zero reads as
+/// "off" to whoever typed it and behaves as "refuse everything" in the code, and there is no
+/// spelling of that misunderstanding this repository wants to serve.
+fn limit_violations(config: &PlatformConfig) -> Vec<Violation> {
+    let mut found = Vec::new();
+    let Some(public) = config.public.as_ref() else {
+        return found;
+    };
+    if !(1..=4096).contains(&public.max_concurrent_requests) {
+        found.push(Violation {
+            key: "public.max_concurrent_requests",
+            env_var: "RATATOSKR__PUBLIC__MAX_CONCURRENT_REQUESTS",
+            rule: "must be 1..=4096; zero refuses every request rather than disabling the limit",
+        });
+    }
+    if !(1..=100_000).contains(&public.actor_requests_per_minute) {
+        found.push(Violation {
+            key: "public.actor_requests_per_minute",
+            env_var: "RATATOSKR__PUBLIC__ACTOR_REQUESTS_PER_MINUTE",
+            rule: "must be 1..=100000; zero refuses every request rather than disabling the limit",
+        });
+    }
+    found
+}
+
+/// V17 — the retention rules.
+///
+/// One rule, and it is a coupling between two subsystems that would otherwise never meet: the inbox
+/// is what stops a redelivered event being applied twice after `JetStream`'s own duplicate window
+/// has passed, so a window that expires BEFORE the stream does deletes the record while the message
+/// it refuses is still redeliverable. The failure is silent and it is a double-applied event.
+///
+/// The other three windows have no such coupling and no rule: a shorter audit window is a policy
+/// choice somebody is entitled to make, and the floor of zero is enforced by the type.
+fn retention_violations(config: &PlatformConfig) -> Vec<Violation> {
+    let mut found = Vec::new();
+    if config.retention.inbox_days < crate::config::model::EVENT_RETENTION_DAYS {
+        found.push(Violation {
+            key: "retention.inbox_days",
+            env_var: "RATATOSKR__RETENTION__INBOX_DAYS",
+            rule: "must be at least as long as the event stream keeps a message, or the inbox \
+                   forgets a message the bus can still redeliver",
+        });
+    }
     found
 }
 

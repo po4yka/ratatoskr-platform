@@ -54,6 +54,8 @@ async fn public(state: &Arc<HttpState>, handler_seconds: u64) -> (Served, Uri) {
         bind: address,
         request_timeout_seconds: 300,
         max_body_bytes: 1024,
+        max_concurrent_requests: 64,
+        actor_requests_per_minute: 120,
     };
     let routes = Router::new().route(
         "/slow",

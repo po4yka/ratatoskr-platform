@@ -1,0 +1,22 @@
+[Unit]
+Description=Ratatoskr Platform — database dump, daily
+Documentation=https://github.com/po4yka/ratatoskr-platform/blob/main/deploy/README.md
+
+[Timer]
+# 02:30 local, and the time is the whole point. The host's borg job copies /mnt/nvme to
+# /mnt/backup at 03:00, so a dump written AFTER that is not copied off the NVMe until the following
+# night — the effective RPO is then two days rather than one, which is what
+# `ratatoskr-workspace/docs/DEPLOYMENT_TARGET.md` means when it says the ordering was wrong.
+#
+# VERIFY the borg schedule on the host before trusting this number: `systemctl list-timers` shows it,
+# and if it has moved, this must move with it. Thirty minutes is enough for a database of this size
+# and is not enough forever.
+OnCalendar=*-*-* 02:30:00
+# A host that was off at 02:30 takes its dump when it comes back, rather than skipping a day.
+Persistent=true
+# Up to five minutes of jitter, so the dump and whatever else runs at 02:30 do not start together on
+# four cores.
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

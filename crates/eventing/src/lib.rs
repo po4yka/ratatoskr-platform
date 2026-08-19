@@ -23,6 +23,7 @@ use platform_persistence::PersistenceError;
 pub mod command;
 pub mod consumer;
 pub mod inbox;
+pub mod observe;
 pub mod outbox;
 pub mod publisher;
 pub mod pump;

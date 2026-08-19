@@ -25,8 +25,13 @@ use platform_eventing::{MessageClass, Outbox, Subject};
 use platform_idempotency::{Digest, Outcome};
 use uuid::Uuid;
 
+use platform_identity::audit::{self, AuditEvent, AuditOutcome};
+
 use crate::IngestState;
 use crate::source::{SourceError, WebhookSource};
+
+/// The audited action name for this route. A constant, because it is also a metric label.
+const ACTION: &str = "ingest.webhook.receive";
 
 /// The route, as stored in the idempotency ledger.
 ///
@@ -99,7 +104,35 @@ pub async fn receive(
     // two to agree stops one source's credential being replayed at another source's URL, which
     // would otherwise file its signals under the wrong owner.
     if source.source_id != source_id {
+        // The one denial on this route with an actor behind it, and therefore the one worth a row.
+        // A credential that authenticates but is presented at another source's URL is either a
+        // misconfigured sender or a replay, and the owner of the credential is the person who needs
+        // to know. An UNKNOWN credential is not audited: there is nobody to attribute it to, and a
+        // row per anonymous attempt is write amplification an attacker controls.
+        let event = decision(
+            &source,
+            "webhook_source",
+            source_id,
+            AuditOutcome::Denied,
+            &correlation_of(context.as_ref()),
+        );
+        if let Err(error) =
+            audit::record(state.database.pool(), &event, jiff::Timestamp::now()).await
+        {
+            tracing::error!(%error, "a refused signal could not be audited");
+        }
         return platform_http::reject(FailureKind::Unauthenticated);
+    }
+
+    if !state
+        .actor_limit
+        .admit(source.source_id, jiff::Timestamp::now())
+    {
+        // Charged to the source, not to its owner: two sources of one user are two independent
+        // senders, and a provider that starts retrying in a loop must not silence the other one.
+        // No audit row — a rate-limited request is a volume fact, and
+        // `http_server_request_duration_seconds{status="429"}` is where a volume fact belongs.
+        return platform_http::reject(FailureKind::RateLimited);
     }
 
     let (key, signal) = match parse(&headers, &body) {
@@ -107,14 +140,96 @@ pub async fn receive(
         Err(kind) => return platform_http::reject(kind),
     };
 
-    // The correlation the middleware already minted for this request (ADR-0007). `Option` because
-    // a unit test may call the handler without the middleware; in production it is always present.
-    let correlation = context.map_or_else(
-        || platform_telemetry::correlation::mint_correlation().to_string(),
-        |axum::Extension(context)| context.correlation_id.to_string(),
-    );
+    let correlation = correlation_of(context.as_ref());
 
     accept(&state, &source, &key, &signal, &body, &correlation).await
+}
+
+/// What the idempotency ledger said about one delivery.
+enum Reserved {
+    /// A first delivery. Do the work, under this ledger row.
+    Fresh(Uuid),
+    /// Answer with this and do nothing else — a redelivery to replay, a conflicting body to refuse,
+    /// or a dependency that did not answer.
+    Answer(Response),
+}
+
+/// Ask the ledger whether this delivery is new.
+///
+/// Split from [`accept`] along the boundary that means something: this decides whether the work
+/// happens, and everything after it does the work. `ARCHITECTURE.md` S9 step 2 is receipt
+/// deduplication, and this is the whole of it.
+async fn reserve(
+    state: &IngestState,
+    transaction: &mut sqlx::PgTransaction<'_>,
+    source: &WebhookSource,
+    qualified: &str,
+    body: &[u8],
+    now: jiff::Timestamp,
+) -> Reserved {
+    let reservation = platform_idempotency::reserve(
+        transaction,
+        source.owner_user_id,
+        ROUTE,
+        source.target.operation_kind(),
+        Digest::of_key(qualified),
+        Digest::of_body(body),
+        now,
+        state.idempotency_ttl,
+    )
+    .await;
+
+    match reservation {
+        Ok(reservation) => match reservation.outcome() {
+            Outcome::Proceed(record_id) => Reserved::Fresh(record_id),
+            // The provider redelivered. It gets the operation the first delivery created, which is
+            // what stops an at-least-once webhook becoming a duplicate capture.
+            Outcome::Replay(operation_id) => Reserved::Answer(accepted(operation_id)),
+            Outcome::Refuse => {
+                Reserved::Answer(platform_http::reject(FailureKind::IdempotencyConflict))
+            }
+        },
+        Err(error) => {
+            tracing::error!(%error, "the signal could not be reserved");
+            Reserved::Answer(platform_http::reject(FailureKind::RequestTimeout))
+        }
+    }
+}
+
+/// One audited decision about a signal from `source`.
+///
+/// `actor_session_id` is always absent: a source presents a credential, not a session, and there is
+/// no row in `identity.sessions` to point at. The actor is the source's OWNER, because that is the
+/// person whose operations these signals create and the person a refusal concerns.
+fn decision(
+    source: &WebhookSource,
+    target_kind: &'static str,
+    target_id: Uuid,
+    outcome: AuditOutcome,
+    correlation: &str,
+) -> AuditEvent {
+    AuditEvent {
+        audit_event_id: Uuid::now_v7(),
+        actor_user_id: Some(source.owner_user_id),
+        actor_session_id: None,
+        action: ACTION,
+        target_kind,
+        target_id: Some(target_id),
+        outcome,
+        correlation_id: correlation.to_owned(),
+    }
+}
+
+/// The correlation the middleware already minted for this request (ADR-0007).
+///
+/// `Option` because a unit test may call the handler without the middleware; in production it is
+/// always present. Borrowed rather than consumed, because the refusal path above needs it too and
+/// a refusal that could not be correlated with the request it refused is half a record.
+fn correlation_of(context: Option<&axum::Extension<platform_http::RequestContext>>) -> String {
+    context.map_or_else(
+        || platform_telemetry::correlation::mint_correlation().to_string(),
+        |axum::Extension(context)| context.correlation_id.to_string(),
+    )
 }
 
 /// Reserve, create, enqueue, complete — in one transaction, so a crash at any point leaves all four
@@ -146,30 +261,9 @@ async fn accept(
         return platform_http::reject(FailureKind::RequestTimeout);
     };
 
-    let reservation = platform_idempotency::reserve(
-        &mut transaction,
-        source.owner_user_id,
-        ROUTE,
-        target.operation_kind(),
-        Digest::of_key(&qualified),
-        Digest::of_body(body),
-        now,
-        state.idempotency_ttl,
-    )
-    .await;
-
-    let record_id = match reservation {
-        Ok(reservation) => match reservation.outcome() {
-            Outcome::Proceed(record_id) => record_id,
-            // The provider redelivered. It gets the operation the first delivery created, which is
-            // what stops an at-least-once webhook becoming a duplicate capture.
-            Outcome::Replay(operation_id) => return accepted(operation_id),
-            Outcome::Refuse => return platform_http::reject(FailureKind::IdempotencyConflict),
-        },
-        Err(error) => {
-            tracing::error!(%error, "the signal could not be reserved");
-            return platform_http::reject(FailureKind::RequestTimeout);
-        }
+    let record_id = match reserve(state, &mut transaction, source, &qualified, body, now).await {
+        Reserved::Fresh(record_id) => record_id,
+        Reserved::Answer(response) => return response,
     };
 
     let operation = match platform_operations::accept(
@@ -223,6 +317,19 @@ async fn accept(
     .await
     {
         tracing::error!(%error, "the ledger record could not be completed");
+        return platform_http::reject(FailureKind::RequestTimeout);
+    }
+
+    // In the transaction, so the record and the accepted signal commit together.
+    let event = decision(
+        source,
+        "operation",
+        operation.operation_id,
+        AuditOutcome::Allowed,
+        correlation,
+    );
+    if let Err(error) = audit::record(&mut *transaction, &event, now).await {
+        tracing::error!(%error, "the signal could not be audited");
         return platform_http::reject(FailureKind::RequestTimeout);
     }
 
@@ -345,6 +452,12 @@ provider's own service.",
             status: 401,
             description: "No credential, an unknown or disabled one, or one that belongs to a \
                           different source than the path names.",
+            payload: Some(Payload::Json("ErrorEnvelope")),
+        },
+        ResponseDoc {
+            status: 429,
+            description: "This caller has spent its request allowance. Retryable: the allowance \
+                          refills continuously, so waiting is the fix.",
             payload: Some(Payload::Json("ErrorEnvelope")),
         },
         ResponseDoc {

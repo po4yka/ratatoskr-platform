@@ -86,6 +86,12 @@ route cannot be used to discover which identifiers are real.",
             payload: Some(Payload::Json("ErrorEnvelope")),
         },
         ResponseDoc {
+            status: 429,
+            description: "This caller has spent its request allowance. Retryable: the allowance \
+                          refills continuously, so waiting is the fix.",
+            payload: Some(Payload::Json("ErrorEnvelope")),
+        },
+        ResponseDoc {
             status: 404,
             description: "No such operation, or it belongs to somebody else.",
             payload: Some(Payload::Json("ErrorEnvelope")),

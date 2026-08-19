@@ -3,9 +3,21 @@
 //! One pass, not a daemon. The caller decides the cadence, which keeps this testable without a
 //! clock and lets a service bind it to whatever scheduler it already has.
 
+use platform_telemetry::metrics::PLATFORM_OUTBOX_PUBLICATIONS_TOTAL;
 use sqlx::PgPool;
 
 use crate::{EventingError, Outbox, Publisher};
+
+/// Count one publication outcome.
+///
+/// Emitted here rather than by the caller so a pass cannot report one thing in its log line and
+/// count another: there is one place each of the three outcomes is decided, and this is called from
+/// it. `ARCHITECTURE.md` S16 item 5 asks for publication failures; `published` is here too because
+/// a failure count with no success count beside it cannot distinguish a broker that is gone from a
+/// queue that is empty.
+fn count(outcome: &'static str) {
+    metrics::counter!(PLATFORM_OUTBOX_PUBLICATIONS_TOTAL, "outcome" => outcome).increment(1);
+}
 
 /// What one pass did. Every field is a signal `AGENTS.md` asks for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -55,8 +67,10 @@ where
                 // failure path and reaches the dead-letter queue on its own schedule rather than
                 // being retried as if the broker were at fault.
                 report.failed += 1;
+                count("failed");
                 if Outbox::mark_failed(pool, message.outbox_id, &error.to_string(), now).await? {
                     report.dead_lettered += 1;
+                    count("dead_lettered");
                 }
                 continue;
             }
@@ -69,11 +83,14 @@ where
             Ok(()) => {
                 Outbox::mark_published(pool, message.outbox_id, now).await?;
                 report.published += 1;
+                count("published");
             }
             Err(error) => {
                 report.failed += 1;
+                count("failed");
                 if Outbox::mark_failed(pool, message.outbox_id, &error.to_string(), now).await? {
                     report.dead_lettered += 1;
+                    count("dead_lettered");
                 }
             }
         }

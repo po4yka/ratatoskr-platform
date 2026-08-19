@@ -37,11 +37,30 @@ fn now() -> jiff::Timestamp {
     jiff::Timestamp::now()
 }
 
+fn app_with(harness: &TestDatabase, per_minute: u32) -> Router {
+    let config = PublicConfig {
+        bind: "127.0.0.1:0".parse().expect("a socket address"),
+        request_timeout_seconds: 15,
+        max_body_bytes: 1_048_576,
+        max_concurrent_requests: 64,
+        actor_requests_per_minute: per_minute,
+    };
+    let mut state = IngestState::new(harness.database.clone());
+    state.actor_limit = Arc::new(platform_http::ActorLimiter::new(per_minute));
+    platform_http::observe::public_router(
+        Arc::new(HttpState::new(RuntimeRole::Ingest)),
+        &config,
+        platform_ingest::routes(state),
+    )
+}
+
 fn app(harness: &TestDatabase) -> Router {
     let config = PublicConfig {
         bind: "127.0.0.1:0".parse().expect("a socket address"),
         request_timeout_seconds: 15,
         max_body_bytes: 1_048_576,
+        max_concurrent_requests: 64,
+        actor_requests_per_minute: 120,
     };
     platform_http::observe::public_router(
         Arc::new(HttpState::new(RuntimeRole::Ingest)),
@@ -442,4 +461,140 @@ async fn every_documented_path_is_served() {
             "{method} {path}"
         );
     }
+}
+
+/// I-9. The audit trail, on the process with the largest unauthenticated attack surface.
+///
+/// Three claims, and the third is the one worth stating: an accepted signal is recorded, a
+/// credential presented at ANOTHER source's URL is recorded as a denial — that is attributable, and
+/// the owner of the credential is who needs to know — and an unknown credential is recorded nowhere.
+/// The last is deliberate rather than an omission: an anonymous attempt has no actor to attribute,
+/// and a row per attempt is write amplification an unauthenticated caller controls.
+#[tokio::test]
+async fn an_accepted_signal_and_an_attributable_refusal_are_audited() {
+    let harness = TestDatabase::create().await.expect("a test database");
+    let app = app(&harness);
+    let (owner, source) = seed(harness.pool(), "audited-token").await;
+    let (_, other) = seed(harness.pool(), "another-token").await;
+
+    let (status, _) = send(
+        &app,
+        push(
+            source,
+            Some("audited-token"),
+            Some("delivery-1"),
+            r#"{"url":"https://example.test/a"}"#,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+
+    // The same credential, at the other source's URL.
+    let (status, _) = send(
+        &app,
+        push(
+            other,
+            Some("audited-token"),
+            Some("delivery-2"),
+            r#"{"url":"https://example.test/b"}"#,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    // A credential nobody holds.
+    let (status, _) = send(
+        &app,
+        push(
+            source,
+            Some("not-a-credential"),
+            Some("delivery-3"),
+            r#"{"url":"https://example.test/c"}"#,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    let rows: Vec<(String, String, Uuid)> = sqlx::query_as(
+        "select action, outcome, actor_user_id from identity.audit_events order by occurred_at",
+    )
+    .fetch_all(harness.pool())
+    .await
+    .expect("the audit trail must read");
+
+    assert_eq!(
+        rows.iter()
+            .map(|(action, outcome, _)| (action.as_str(), outcome.as_str()))
+            .collect::<Vec<_>>(),
+        vec![
+            ("ingest.webhook.receive", "allowed"),
+            ("ingest.webhook.receive", "denied"),
+        ],
+        "an accepted signal and the attributable refusal, and nothing for the anonymous attempt",
+    );
+    for (_, _, actor) in &rows {
+        assert_eq!(
+            *actor, owner,
+            "every row is attributed to the credential's owner"
+        );
+    }
+
+    harness.cleanup().await.expect("cleanup");
+}
+
+/// I-10. The allowance is per SOURCE, not per owner.
+///
+/// Two sources of one user are two independent senders. A provider that starts retrying in a loop
+/// spends its own allowance and must not silence the other one — which a limiter keyed by owner
+/// would let it do, and which is the more likely failure here than an attack: a webhook sender with
+/// a bad retry policy is ordinary.
+#[tokio::test]
+async fn one_source_spending_its_allowance_does_not_silence_another() {
+    let harness = TestDatabase::create().await.expect("a test database");
+    let app = app_with(&harness, 1);
+    let (_, noisy) = seed(harness.pool(), "noisy-token").await;
+    let (_, quiet) = seed(harness.pool(), "quiet-token").await;
+
+    let (status, _) = send(
+        &app,
+        push(
+            noisy,
+            Some("noisy-token"),
+            Some("a"),
+            r#"{"url":"https://example.test/a"}"#,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+
+    let (status, body) = send(
+        &app,
+        push(
+            noisy,
+            Some("noisy-token"),
+            Some("b"),
+            r#"{"url":"https://example.test/b"}"#,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(body["code"], "platform.limit.rate_exceeded");
+
+    let (status, _) = send(
+        &app,
+        push(
+            quiet,
+            Some("quiet-token"),
+            Some("c"),
+            r#"{"url":"https://example.test/c"}"#,
+        ),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::ACCEPTED,
+        "the other source has its own allowance"
+    );
+
+    harness.cleanup().await.expect("cleanup");
 }

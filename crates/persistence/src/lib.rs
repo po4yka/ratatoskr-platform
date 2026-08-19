@@ -35,6 +35,19 @@ use sqlx::postgres::{PgPool, PgPoolOptions};
 /// schema than the one it was built against. The path is relative to this crate's manifest.
 static MIGRATOR: Migrator = sqlx::migrate!("../../migrations");
 
+/// The migration versions this binary carries, ascending.
+///
+/// Exposed for one reason: so a test can compare them with the files on disk. `sqlx::migrate!`
+/// tracks the files it FINDS, so a newly added migration invalidates nothing and an already-built
+/// artifact keeps the set it was compiled with. `build.rs` closes that by tracking the directory;
+/// this is how the closure itself is checked, because a build script that silently stops working
+/// produces exactly the failure it was written to prevent — a process that migrates successfully to
+/// the wrong schema.
+#[must_use]
+pub fn embedded_migrations() -> Vec<i64> {
+    MIGRATOR.iter().map(|migration| migration.version).collect()
+}
+
 /// A failure in the pool, a migration, or a query.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]

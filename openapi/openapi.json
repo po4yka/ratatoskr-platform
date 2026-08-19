@@ -619,7 +619,7 @@
     }
   },
   "info": {
-    "description": "Generated from the route tables of `ratatoskr-platform`; never hand-edited (ADR-0006). The major version is in the path and a new major is a new prefix served alongside the old one, never a change in place. It starts at 2 because Ratatoskr Next is the second system to serve this surface.\n\nTwo listeners serve the paths below and they are not the same address: `/v2/captures`, `/v2/operations/*` and `/v2/capabilities` are served by `ratatoskr-edge`, and `/v2/ingest/*` by `ratatoskr-ingest`. Which host each is published on is deployment topology and is deliberately absent from this document, so no `servers` block is emitted.\n\nEvery non-2xx response carries a contract `ErrorEnvelope`, built at exactly one place in the implementation. Its `code` is a closed vocabulary; its `message` is safe to display; it never carries a provider diagnostic.",
+    "description": "Generated from the route tables of `ratatoskr-platform`; never hand-edited (ADR-0006). The major version is in the path and a new major is a new prefix served alongside the old one, never a change in place. It starts at 2 because Ratatoskr Next is the second system to serve this surface.\n\nTwo listeners serve the paths below and they are not the same address: `/v2/captures`, `/v2/operations/*` and `/v2/capabilities` are served by `ratatoskr-edge`, and `/v2/ingest/*` by `ratatoskr-ingest`. Which host each is published on is deployment topology and is deliberately absent from this document, so no `servers` block is emitted.\n\nEvery non-2xx response carries a contract `ErrorEnvelope`, built at exactly one place in the implementation. Its `code` is a closed vocabulary; its `message` is safe to display; it never carries a provider diagnostic.\n\nAny route may answer `503 platform.limit.overloaded`. It is not listed per route because it is not a property of any route: the listener bounds how many requests it holds at once and sheds the rest immediately rather than queueing them, so the answer arrives before routing has happened. It is retryable, and the condition clears as work drains. `429 platform.limit.rate_exceeded` IS listed per route, because it belongs to the caller rather than to the service and only routes that identify a caller can produce it.",
     "license": {
       "name": "BSD-3-Clause"
     },
@@ -654,6 +654,16 @@
               }
             },
             "description": "No credential, or one that does not authenticate here."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "This caller has spent its request allowance. Retryable: the allowance refills continuously, so waiting is the fix."
           }
         },
         "security": [
@@ -732,6 +742,16 @@
               }
             },
             "description": "The key is in use for a different body, or an earlier attempt with it has not finished."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "This caller has spent its request allowance. Retryable: the allowance refills continuously, so waiting is the fix."
           },
           "504": {
             "content": {
@@ -831,6 +851,16 @@
             },
             "description": "The identifier is in use for a different body, or an earlier delivery of it has not finished."
           },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "This caller has spent its request allowance. Retryable: the allowance refills continuously, so waiting is the fix."
+          },
           "504": {
             "content": {
               "application/json": {
@@ -899,6 +929,16 @@
               }
             },
             "description": "No claimable relay of that identity for this caller."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "This caller has spent its request allowance. Retryable: the allowance refills continuously, so waiting is the fix."
           },
           "504": {
             "content": {
@@ -1043,6 +1083,16 @@
             },
             "description": "No such operation, or it belongs to somebody else."
           },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "This caller has spent its request allowance. Retryable: the allowance refills continuously, so waiting is the fix."
+          },
           "504": {
             "content": {
               "application/json": {
@@ -1121,6 +1171,16 @@
               }
             },
             "description": "No such operation, or it belongs to somebody else."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "This caller has spent its request allowance. Retryable: the allowance refills continuously, so waiting is the fix."
           }
         },
         "security": [

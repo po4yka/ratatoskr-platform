@@ -269,6 +269,7 @@ pub async fn record_status(
         .ok_or(OperationError::NotFound)?;
 
     let outcome = transition::apply(current.status, incoming);
+    count_transition(outcome);
     let advance_to = match outcome {
         Transition::Advance(status) => status,
         Transition::Duplicate | Transition::Stale => return Ok((outcome, current)),
@@ -318,6 +319,98 @@ pub async fn record_status(
         .await?
         .ok_or(OperationError::NotFound)?;
     Ok((outcome, updated))
+}
+
+/// Count one transition, by what it meant.
+///
+/// `transition.rs` has described `Duplicate` as "a no-op plus a counter" and `Stale` as "ignored
+/// plus a counter" since milestone 3, and there was no counter. This is it, and it is here rather
+/// than in the caller because `record_status` is the only place `transition::apply` is consulted
+/// about a real operation.
+///
+/// `conflict` is the value to alarm on. A duplicate and a late older status are ordinary traffic
+/// under at-least-once delivery; two producers reporting different terminal outcomes for one
+/// operation is a defect that ADR-0002 refuses to absorb silently.
+fn count_transition(outcome: Transition) {
+    let label = match outcome {
+        Transition::Advance(_) => "advance",
+        Transition::Duplicate => "duplicate",
+        Transition::Stale => "stale",
+        Transition::Conflict => "conflict",
+    };
+    metrics::counter!(
+        platform_telemetry::metrics::PLATFORM_OPERATION_TRANSITIONS_TOTAL,
+        "outcome" => label,
+    )
+    .increment(1);
+}
+
+/// Sample the operation table and publish its gauges.
+///
+/// `ARCHITECTURE.md` S16 item 3 asks for operation AGE as well as transition counts, and an age is
+/// not knowable from any single write: it is a property of the set. So it is sampled on the
+/// observer's timer, in one statement that scans only the unterminated rows.
+///
+/// The age is what a stale-operation reconciler would act on. That reconciler does not exist —
+/// S14 requires it and no milestone owns it — which makes this the only way to see the condition it
+/// would repair.
+///
+/// # Errors
+///
+/// [`OperationError::Persistence`] if the aggregate fails.
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "row counts and an age in seconds, exported as f64 gauges"
+)]
+pub async fn sample(pool: &sqlx::PgPool, now: jiff::Timestamp) -> Result<(), OperationError> {
+    let rows = sqlx::query(
+        "select status, count(*)::bigint as total,
+                coalesce(max(extract(epoch from $1 - accepted_at)), 0)::bigint as oldest
+           from operations.operations
+          group by status",
+    )
+    .bind(to_offset(now))
+    .fetch_all(pool)
+    .await
+    .map_err(PersistenceError::Query)?;
+
+    // Every status is published, including the ones with no rows, so a series does not disappear
+    // from a dashboard the moment the condition it watches clears.
+    let mut totals: std::collections::BTreeMap<&'static str, i64> = transition::ALL
+        .iter()
+        .map(|status| (status_str(*status), 0))
+        .collect();
+    let mut oldest_unterminated = 0_i64;
+
+    for row in rows {
+        let status: String = row.try_get("status").map_err(PersistenceError::Query)?;
+        let total: i64 = row.try_get("total").map_err(PersistenceError::Query)?;
+        let oldest: i64 = row.try_get("oldest").map_err(PersistenceError::Query)?;
+        let Some(known) = status_from_str(&status) else {
+            // A status outside the closed set means the CHECK constraint was dropped. It is not
+            // published, because an unbounded label is how a metric backend is taken down.
+            tracing::warn!(%status, "an operation carries a status outside the known set");
+            continue;
+        };
+        totals.insert(status_str(known), total);
+        if !transition::is_terminal(known) {
+            oldest_unterminated = oldest_unterminated.max(oldest);
+        }
+    }
+
+    for (status, total) in totals {
+        metrics::gauge!(
+            platform_telemetry::metrics::PLATFORM_OPERATIONS,
+            "status" => status,
+        )
+        .set(total as f64);
+    }
+    metrics::gauge!(
+        platform_telemetry::metrics::PLATFORM_OPERATIONS_OLDEST_UNTERMINATED_AGE_SECONDS
+    )
+    .set(oldest_unterminated as f64);
+
+    Ok(())
 }
 
 /// Attach a typed result reference.

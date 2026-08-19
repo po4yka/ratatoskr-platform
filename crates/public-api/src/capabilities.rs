@@ -57,6 +57,29 @@ pub struct MinimumClientVersions {
     pub mobile: &'static str,
 }
 
+/// Publish `platform_capability_available{capability}` from the same facts the route reports.
+///
+/// Called on a timer by the process that owns the state, not from the handler. A capability is a
+/// pure function of the deployment (ADR-0008), so its value is knowable whether or not a client
+/// asks — and a gauge that only moves when somebody asks reports the state of the last question
+/// rather than the state of the deployment. That distinction is the whole reason
+/// `DEVELOPMENT.md`'s S16 table calls a metric published from wherever was convenient "exactly the
+/// misleading series" it refuses.
+///
+/// Every capability is published on every tick, including the unavailable ones, so a series does
+/// not vanish from a dashboard at the moment the thing it watches breaks.
+pub fn sample(state: &ApiState) {
+    let deployment = state.deployment();
+    for capability in Capability::ALL {
+        let available = capability.requires().is_met(&deployment);
+        metrics::gauge!(
+            platform_telemetry::metrics::PLATFORM_CAPABILITY_AVAILABLE,
+            "capability" => capability.as_str(),
+        )
+        .set(f64::from(u8::from(available)));
+    }
+}
+
 /// `GET /v2/capabilities`.
 ///
 /// Authenticated, like every other `/v2` route, for the three reasons ADR-0008 records: the
@@ -122,6 +145,12 @@ client does not implement, and a familiar name that is absent as a feature to hi
         ResponseDoc {
             status: 401,
             description: "No credential, or one that does not authenticate here.",
+            payload: Some(Payload::Json("ErrorEnvelope")),
+        },
+        ResponseDoc {
+            status: 429,
+            description: "This caller has spent its request allowance. Retryable: the allowance \
+                          refills continuously, so waiting is the fix.",
             payload: Some(Payload::Json("ErrorEnvelope")),
         },
     ],

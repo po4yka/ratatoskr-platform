@@ -23,15 +23,19 @@ use platform_core::config::{self, ConfigError, LogFormat, PlatformConfig};
 
 /// The variables `.env.example` documents, and the probe value each one is given by C-6.
 ///
-/// Milestone 9 grew this from eleven to eighteen. `.env.example` claims to document EVERY
+/// Milestone 9 grew this from eleven to twenty-four — eighteen when the database, bus and identity
+/// keys were finally documented, four more with the retention windows, and two with the request
+/// limits `ARCHITECTURE.md` S14 has required since milestone 1. `.env.example` claims to document EVERY
 /// configuration variable, and milestones 5 to 8 added the database, the bus and the identity keys
 /// without touching it — so the claim had been false for four milestones, and this list is what
 /// makes it checkable again.
-const DOCUMENTED: [(&str, &str); 18] = [
+const DOCUMENTED: [(&str, &str); 24] = [
     ("RATATOSKR__ADMIN__BIND", "127.0.0.1:19464"),
     ("RATATOSKR__PUBLIC__BIND", "127.0.0.1:18080"),
     ("RATATOSKR__PUBLIC__REQUEST_TIMEOUT_SECONDS", "17"),
     ("RATATOSKR__PUBLIC__MAX_BODY_BYTES", "2048"),
+    ("RATATOSKR__PUBLIC__MAX_CONCURRENT_REQUESTS", "23"),
+    ("RATATOSKR__PUBLIC__ACTOR_REQUESTS_PER_MINUTE", "29"),
     (
         "RATATOSKR__DATABASE__URL",
         "postgres://probe:probe@127.0.0.1:15432/probe",
@@ -53,6 +57,10 @@ const DOCUMENTED: [(&str, &str); 18] = [
         "RATATOSKR__IDENTITY__OAUTH_COMPLETION_URL",
         "https://ratatoskr.example/oauth/done",
     ),
+    ("RATATOSKR__RETENTION__INBOX_DAYS", "31"),
+    ("RATATOSKR__RETENTION__OUTBOX_DAYS", "32"),
+    ("RATATOSKR__RETENTION__AUDIT_DAYS", "33"),
+    ("RATATOSKR__RETENTION__SCHEDULE_OCCURRENCE_DAYS", "34"),
     ("RATATOSKR__SHUTDOWN__DRAIN_SECONDS", "7"),
     ("RATATOSKR__SHUTDOWN__GRACE_SECONDS", "11"),
     ("RATATOSKR__TELEMETRY__LOG_FORMAT", "pretty"),
@@ -258,6 +266,8 @@ fn every_variable_in_env_example_overrides_its_field() {
         assert_eq!(public.bind.port(), 18080);
         assert_eq!(public.request_timeout_seconds, 17);
         assert_eq!(public.max_body_bytes, 2048);
+        assert_eq!(public.max_concurrent_requests, 23);
+        assert_eq!(public.actor_requests_per_minute, 29);
         assert_eq!(database.max_connections, 3);
         assert_eq!(database.acquire_timeout_seconds, 4);
         assert_eq!(bus.url.as_str(), "nats://127.0.0.1:14222");
@@ -274,6 +284,10 @@ fn every_variable_in_env_example_overrides_its_field() {
                 .as_deref(),
             Some("https://ratatoskr.example/oauth/done"),
         );
+        assert_eq!(config.retention.inbox_days, 31);
+        assert_eq!(config.retention.outbox_days, 32);
+        assert_eq!(config.retention.audit_days, 33);
+        assert_eq!(config.retention.schedule_occurrence_days, 34);
         assert_eq!(config.shutdown.drain_seconds, 7);
         assert_eq!(config.shutdown.grace_seconds, 11);
         assert_eq!(config.telemetry.log_format, LogFormat::Pretty);

@@ -61,6 +61,8 @@ fn router() -> Router {
         bind: "127.0.0.1:0".parse().unwrap(),
         request_timeout_seconds: 5,
         max_body_bytes: 1024,
+        max_concurrent_requests: 64,
+        actor_requests_per_minute: 120,
     };
     let routes = Router::new().route("/probe/{id}", get(|| async { "ok" }));
     public_router(Arc::new(HttpState::new(RuntimeRole::Edge)), &config, routes)

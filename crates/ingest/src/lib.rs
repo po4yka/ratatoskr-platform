@@ -40,6 +40,12 @@ pub struct IngestState {
     pub database: Database,
     /// How long a source's event identifier is honoured as a deduplication key.
     pub idempotency_ttl: jiff::SignedDuration,
+    /// The per-source allowance `ARCHITECTURE.md` S14 requires.
+    ///
+    /// Keyed by SOURCE and not by owner: two sources of one user are two independent senders, and a
+    /// misbehaving one must not spend the allowance of the other. It is applied after the credential
+    /// resolves, because before that there is no actor to charge.
+    pub actor_limit: std::sync::Arc<platform_http::ActorLimiter>,
 }
 
 impl IngestState {
@@ -50,6 +56,9 @@ impl IngestState {
     #[must_use]
     pub fn new(database: Database) -> Self {
         Self {
+            actor_limit: std::sync::Arc::new(platform_http::ActorLimiter::new(
+                platform_core::config::DEFAULT_ACTOR_REQUESTS_PER_MINUTE,
+            )),
             database,
             idempotency_ttl: jiff::SignedDuration::from_hours(24),
         }

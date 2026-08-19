@@ -119,6 +119,48 @@ impl Inbox {
         Ok(())
     }
 
+    /// Delete processed records older than `before`, at most `limit` of them.
+    ///
+    /// Only PROCESSED rows. An unprocessed one is a message that was claimed and never finished,
+    /// which is a defect to look at rather than a row to reclaim — and `platform_inbox_unprocessed`
+    /// is the gauge that shows it. Deleting it would erase the evidence and let the message be
+    /// applied again on the next redelivery.
+    ///
+    /// Bounded, because an unbounded `delete` on a table nobody has pruned for a year takes a lock
+    /// proportional to the neglect. The caller runs again on its next tick; a backlog drains over
+    /// hours instead of stalling the publisher for one long statement.
+    ///
+    /// The window this is called with may not be shorter than the event stream's own retention —
+    /// startup rule V17 — because a record deleted while its message is still redeliverable is a
+    /// deduplication guarantee that has quietly stopped holding.
+    ///
+    /// # Errors
+    ///
+    /// [`EventingError::Persistence`] if the statement fails.
+    pub async fn collect_processed<'e, E>(
+        executor: E,
+        before: jiff::Timestamp,
+        limit: i64,
+    ) -> Result<u64, EventingError>
+    where
+        E: PgExecutor<'e>,
+    {
+        let done = sqlx::query(
+            "delete from operations.inbox
+              where message_id in (
+                  select message_id from operations.inbox
+                   where processed_at is not null and processed_at < $1
+                   limit $2
+              )",
+        )
+        .bind(to_offset(before))
+        .bind(limit)
+        .execute(executor)
+        .await
+        .map_err(PersistenceError::Query)?;
+        Ok(done.rows_affected())
+    }
+
     /// How many messages were received but never finished.
     ///
     /// A non-zero steady state means handlers are crashing after claiming, which is the failure the

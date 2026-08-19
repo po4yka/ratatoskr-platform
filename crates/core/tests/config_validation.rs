@@ -585,3 +585,38 @@ fn check_config_exits_78_on_invalid_and_0_on_valid() {
         Ok(())
     });
 }
+
+/// C-16. V17: an inbox window shorter than the event stream's own retention is refused.
+///
+/// The two numbers belong to different subsystems and there is no type that connects them, so the
+/// failure it prevents is entirely silent: the inbox forgets a message while the bus can still
+/// redeliver it, the deduplication record that would refuse the redelivery is gone, and the event is
+/// applied twice on the one path built to make that impossible.
+#[test]
+fn an_inbox_window_shorter_than_the_event_stream_is_refused() {
+    Jail::expect_with(|jail| {
+        jail.set_env(
+            "RATATOSKR__RETENTION__INBOX_DAYS",
+            platform_core::config::EVENT_RETENTION_DAYS - 1,
+        );
+        assert!(
+            names(&violations(RuntimeRole::Edge), "retention.inbox_days"),
+            "a window shorter than the stream's retention must be refused",
+        );
+        Ok(())
+    });
+
+    Jail::expect_with(|jail| {
+        jail.set_env(
+            "RATATOSKR__RETENTION__INBOX_DAYS",
+            platform_core::config::EVENT_RETENTION_DAYS,
+        );
+        let loaded = config::load(RuntimeRole::Edge)
+            .expect("equal to the stream's retention is the floor, not below it");
+        assert_eq!(
+            loaded.retention.inbox_days,
+            platform_core::config::EVENT_RETENTION_DAYS,
+        );
+        Ok(())
+    });
+}

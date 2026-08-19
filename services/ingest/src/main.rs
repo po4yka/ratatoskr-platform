@@ -61,8 +61,17 @@ impl platform_http::PublicRoutes for IngestRoutes {
             );
         }
 
+        let mut state = IngestState::new(database.clone());
+        // Per SOURCE. Rule V1 has already refused a configuration without a public table, so the
+        // `if let` is exhaustive in practice and the default below is unreachable in a deployment.
+        if let Some(public) = config.public.as_ref() {
+            state.actor_limit = std::sync::Arc::new(platform_http::ActorLimiter::new(
+                public.actor_requests_per_minute,
+            ));
+        }
+
         Ok(Serving {
-            routes: platform_ingest::routes(IngestState::new(database.clone())),
+            routes: platform_ingest::routes(state),
             database: Some(database),
             tasks: Vec::new(),
         })

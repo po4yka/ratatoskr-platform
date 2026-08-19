@@ -86,7 +86,20 @@ fn the_metric_name_set_is_exactly_the_documented_set() {
             "platform_readiness",
             "platform_build_info",
             "platform_scheduler_drift_seconds",
-            "platform_scheduler_occurrences_total"
+            "platform_scheduler_occurrences_total",
+            "platform_capability_available",
+            "platform_auth_decisions_total",
+            "platform_operation_transitions_total",
+            "platform_operations",
+            "platform_operations_oldest_unterminated_age_seconds",
+            "platform_outbox_pending",
+            "platform_outbox_dead_lettered",
+            "platform_outbox_oldest_pending_age_seconds",
+            "platform_inbox_unprocessed",
+            "platform_outbox_publications_total",
+            "platform_idempotency_outcomes_total",
+            "platform_sse_connections",
+            "platform_sse_delivery_lag_seconds"
         ],
     );
 

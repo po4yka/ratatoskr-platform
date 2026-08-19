@@ -48,11 +48,13 @@ fn app(state: ApiState) -> Router {
         bind: "127.0.0.1:0".parse().expect("a socket address"),
         request_timeout_seconds: 15,
         max_body_bytes: 1_048_576,
+        max_concurrent_requests: 64,
+        actor_requests_per_minute: 120,
     };
     platform_http::observe::public_router(
         Arc::new(HttpState::new(RuntimeRole::Edge)),
         &config,
-        platform_public_api::routes(state),
+        platform_public_api::routes(std::sync::Arc::new(state)),
     )
 }
 
@@ -371,4 +373,92 @@ async fn a_malformed_path_parameter_is_a_client_error() {
         body["correlation_id"].is_string(),
         "an unauthored failure still carries the correlation the client saw"
     );
+}
+
+/// C-11. A submitted capture is in the audit trail, attributed to the session that submitted it,
+/// and an anonymous attempt is not.
+///
+/// `identity.audit_events` and `audit::record` have existed since milestone 2. Milestone 8 gave them
+/// their first writers on the authentication routes; this is the route that has been accepting work
+/// since milestone 5 with no record of who asked for what. The unauthenticated half is asserted
+/// because it is a decision rather than an oversight: a 401 with no credential has no actor to
+/// attribute, and writing a row for one would let an unauthenticated caller grow the table.
+#[tokio::test]
+async fn an_accepted_capture_is_audited_and_an_anonymous_attempt_is_not() {
+    let harness = TestDatabase::create().await.expect("a test database");
+    let pool = harness.pool();
+    let user = seed(pool, CREDENTIAL, AUDIENCE).await;
+    let app = app(state(&harness));
+
+    let (status, body) = send(&app, submit(Some(CREDENTIAL), Some("audited-1"), CAPTURE)).await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let operation_id: Uuid = body["operation_id"]
+        .as_str()
+        .and_then(|value| value.parse().ok())
+        .expect("an operation id");
+
+    let (status, _) = send(&app, submit(None, Some("audited-2"), CAPTURE)).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    let rows: Vec<(String, String, Uuid, Option<Uuid>)> = sqlx::query_as(
+        "select action, outcome, actor_user_id, target_id from identity.audit_events",
+    )
+    .fetch_all(pool)
+    .await
+    .expect("the audit trail must read");
+
+    assert_eq!(
+        rows.len(),
+        1,
+        "one accepted capture, and nothing for the 401"
+    );
+    let (action, outcome, actor, target) = &rows[0];
+    assert_eq!(action, "content.capture.submit");
+    assert_eq!(outcome, "allowed");
+    assert_eq!(*actor, user);
+    assert_eq!(
+        *target,
+        Some(operation_id),
+        "the target is the operation it created"
+    );
+
+    harness.cleanup().await.expect("cleanup");
+}
+
+/// C-12. The per-actor allowance is spent and the next request is refused with 429.
+///
+/// It is asserted on this route because the check is not on this route: it is in the `Principal`
+/// extractor, which every authenticated route runs. Proving it here proves it for all of them, and
+/// for the next one added.
+#[tokio::test]
+async fn an_actor_that_spends_its_allowance_is_refused() {
+    let harness = TestDatabase::create().await.expect("a test database");
+    seed(harness.pool(), CREDENTIAL, AUDIENCE).await;
+
+    let mut state = state(&harness);
+    state.actor_limit = Arc::new(platform_http::ActorLimiter::new(2));
+    let app = app(state);
+
+    for attempt in 1..=2 {
+        let (status, _) = send(
+            &app,
+            submit(
+                Some(CREDENTIAL),
+                Some(&format!("limited-{attempt}")),
+                CAPTURE,
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::ACCEPTED, "attempt {attempt}");
+    }
+
+    let (status, body) = send(&app, submit(Some(CREDENTIAL), Some("limited-3"), CAPTURE)).await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(body["code"], "platform.limit.rate_exceeded");
+    assert_eq!(
+        body["retryable"], true,
+        "the allowance refills on its own, so the same request succeeds later",
+    );
+
+    harness.cleanup().await.expect("cleanup");
 }

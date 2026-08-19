@@ -227,3 +227,19 @@ async fn an_existing_stream_with_other_limits_is_reported_not_silently_accepted(
         .await
         .expect("cleaning up");
 }
+
+/// S-6. The stream's retention and the configuration constant it is built from are the same value.
+///
+/// They have to be: startup rule V17 refuses an inbox window below
+/// `platform_core::config::EVENT_RETENTION_DAYS`, and the guarantee that buys is only real if the
+/// stream really does keep messages for that long. The constant lives in `platform_core` — the crate
+/// both sides can depend on — and this asserts the derivation still holds after a change to either.
+#[test]
+fn the_stream_keeps_messages_for_exactly_the_documented_window() {
+    let spec = StreamSpec::event_stream();
+    assert_eq!(
+        spec.max_age,
+        std::time::Duration::from_secs(platform_core::config::EVENT_RETENTION_DAYS * 24 * 3600),
+    );
+    assert_eq!(StreamSpec::command_stream().max_age, spec.max_age);
+}

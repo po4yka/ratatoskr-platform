@@ -20,6 +20,7 @@ ratatoskr-platform-eventing.workspace    = true
 ratatoskr-platform-idempotency.workspace = true
 ratatoskr-platform-http.workspace        = true
 ratatoskr-platform-telemetry.workspace   = true
+metrics.workspace    = true
 ratatoskr-platform-api-doc.workspace     = true
 ratatoskr-identifiers.workspace          = true
 ratatoskr-error-contracts.workspace      = true

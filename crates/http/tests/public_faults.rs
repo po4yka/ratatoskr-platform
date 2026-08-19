@@ -65,6 +65,8 @@ fn router() -> Router {
         bind: "127.0.0.1:0".parse().unwrap(),
         request_timeout_seconds: 1,
         max_body_bytes: 1024,
+        max_concurrent_requests: 64,
+        actor_requests_per_minute: 120,
     };
     let routes = Router::new()
         .route("/ok", get(|| async { "ok" }))
@@ -384,4 +386,82 @@ async fn every_response_carries_x_correlation_id_including_2xx() {
         let (_, headers, _) = send(request).await;
         assert!(headers.contains_key(CORRELATION_HEADER), "{name}");
     }
+}
+
+/// T-8. A request beyond the concurrency bound is SHED, immediately, with an `ErrorEnvelope`.
+///
+/// Two claims, and the second is why this is hand-written rather than `tower`'s. First, the excess
+/// request is refused rather than queued: `tower::limit` makes it wait, which on four shared cores
+/// turns a load spike into a timeout for every caller instead of a refusal for some. Second, the
+/// refusal goes through `fault::render` like every other one — `crates/http/src/lib.rs` states that
+/// every non-2xx from the public listener carries an envelope, and a limiter outside the router
+/// would have been the one place that sentence stopped being true.
+#[tokio::test]
+async fn a_request_beyond_the_concurrency_bound_is_shed_with_an_envelope() {
+    install_telemetry();
+    let config = PublicConfig {
+        bind: "127.0.0.1:0".parse().unwrap(),
+        request_timeout_seconds: 5,
+        max_body_bytes: 1024,
+        max_concurrent_requests: 1,
+        actor_requests_per_minute: 120,
+    };
+    let held = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::clone(&held);
+    let routes = Router::new().route(
+        "/held",
+        get(move || {
+            let held = Arc::clone(&held);
+            async move {
+                held.notified().await;
+                "done"
+            }
+        }),
+    );
+    let app = public_router(Arc::new(HttpState::new(RuntimeRole::Edge)), &config, routes);
+
+    // One request occupies the only slot and stays there until released.
+    let occupied = app.clone();
+    let first = tokio::spawn(async move {
+        occupied
+            .oneshot(Request::builder().uri("/held").body(Body::empty()).unwrap())
+            .await
+            .unwrap()
+    });
+    // Give the first request time to reach the handler and take the slot.
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let response = app
+        .clone()
+        .oneshot(Request::builder().uri("/held").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert!(
+        response.headers().contains_key("x-correlation-id"),
+        "a shed request is still a request this process answered, and it is correlatable",
+    );
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let envelope: serde_json::Value = serde_json::from_slice(&body).expect("an ErrorEnvelope");
+    assert_eq!(envelope["code"], "platform.limit.overloaded");
+    assert_eq!(envelope["retryable"], true);
+
+    release.notify_waiters();
+    let served = first.await.unwrap();
+    assert_eq!(
+        served.status(),
+        StatusCode::OK,
+        "the request that held the slot is unaffected",
+    );
+
+    // And the slot is free again once it finished.
+    let after = app
+        .oneshot(Request::builder().uri("/ok2").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(
+        after.status(),
+        StatusCode::NOT_FOUND,
+        "a 404 and not a 503: the guard released when the held request ended",
+    );
 }

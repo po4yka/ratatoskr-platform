@@ -59,6 +59,13 @@ pub struct ApiState {
     /// Where a browser goes after a provider callback has been relayed. Configured, never taken
     /// from the callback (ADR-0012).
     pub oauth_completion_url: Option<url::Url>,
+    /// The per-actor allowance `ARCHITECTURE.md` S14 requires, applied in the [`Principal`]
+    /// extractor — so every authenticated route is covered by one check rather than by a line
+    /// somebody has to remember to add to the next handler.
+    ///
+    /// In memory, and that is correct rather than a compromise: exactly one edge process runs
+    /// (ADR-0010), so this map is the whole system's view of an actor and not one replica's guess.
+    pub actor_limit: Arc<platform_http::ActorLimiter>,
 }
 
 impl ApiState {
@@ -74,6 +81,9 @@ impl ApiState {
         bus_configured: bool,
     ) -> Self {
         Self {
+            actor_limit: Arc::new(platform_http::ActorLimiter::new(
+                platform_core::config::DEFAULT_ACTOR_REQUESTS_PER_MINUTE,
+            )),
             database,
             audience: audience.into(),
             idempotency_ttl: jiff::SignedDuration::from_hours(24),
@@ -158,8 +168,7 @@ fn table() -> Vec<Endpoint> {
 }
 
 /// The public routes.
-pub fn routes(state: ApiState) -> Router {
-    let state = Arc::new(state);
+pub fn routes(state: Arc<ApiState>) -> Router {
     table()
         .into_iter()
         .fold(Router::new(), |router, endpoint| {

@@ -331,3 +331,136 @@ async fn the_lag_signal_reports_the_age_of_the_oldest_pending_message() {
 
     harness.cleanup().await.expect("cleanup");
 }
+
+/// O-13. A command larger than the bus will carry is refused where the caller can be told, not
+/// accepted durably and then retried forever.
+///
+/// The failure this prevents is not "one row does not send". `pump::run_once` claims a batch and
+/// works through it in order, so an oversized row occupies a claim slot on every pass while its
+/// `last_error` reads exactly like a broker outage. Twelve attempts later it is dead-lettered, and
+/// everything behind it has been delayed by a message that could not have succeeded on any attempt.
+#[tokio::test]
+async fn a_payload_larger_than_the_bus_will_carry_is_refused_at_the_write() {
+    let harness = TestDatabase::create().await.expect("a test database");
+    let pool = harness.pool();
+
+    // Comfortably over the 768 KiB bound and comfortably under a megabyte, so this asserts the
+    // constraint rather than any behaviour of the driver.
+    let oversized = serde_json::json!({ "blob": "x".repeat(800 * 1024) });
+    let refused = Outbox::enqueue(pool, Uuid::now_v7(), &command(), &oversized, None, now()).await;
+    assert!(
+        refused.is_err(),
+        "a payload above the NATS max_payload must not reach the outbox",
+    );
+
+    // The bound is on the payload, not on the table: an ordinary command is unaffected.
+    Outbox::enqueue(pool, Uuid::now_v7(), &command(), &payload(), None, now())
+        .await
+        .expect("an ordinary command still enqueues");
+
+    harness.cleanup().await.expect("cleanup");
+}
+
+/// O-14. Retention removes delivered messages and keeps the two kinds that are still evidence.
+///
+/// `DATA_MODEL.md` has claimed a retention policy since milestone 2 and nothing implemented one, so
+/// both tables grew for the life of a deployment. What matters here is not that rows go — it is
+/// WHICH rows stay: a pending row is undelivered work, and a dead-lettered row is work a client was
+/// told had been accepted and that nobody delivered. Collecting either would make
+/// `platform_outbox_dead_lettered` a gauge that falls on its own.
+#[tokio::test]
+async fn retention_removes_delivered_messages_and_keeps_the_evidence() {
+    let harness = TestDatabase::create().await.expect("a test database");
+    let pool = harness.pool();
+    let long_ago = now() - jiff::SignedDuration::from_hours(24 * 90);
+
+    // One published long ago, one published just now, one pending, one dead-lettered.
+    for (message, published) in [("old", true), ("fresh", true), ("pending", false)] {
+        let id = Uuid::now_v7();
+        Outbox::enqueue(pool, id, &command(), &payload(), None, long_ago)
+            .await
+            .expect("enqueuing");
+        if published {
+            let at = if message == "old" { long_ago } else { now() };
+            let outbox_id: Uuid =
+                sqlx::query_scalar("select outbox_id from operations.outbox where message_id = $1")
+                    .bind(id)
+                    .fetch_one(pool)
+                    .await
+                    .expect("the row");
+            Outbox::mark_published(pool, outbox_id, at)
+                .await
+                .expect("marking published");
+        }
+    }
+    let doomed = Uuid::now_v7();
+    Outbox::enqueue(pool, doomed, &command(), &payload(), None, long_ago)
+        .await
+        .expect("enqueuing");
+    let outbox_id: Uuid =
+        sqlx::query_scalar("select outbox_id from operations.outbox where message_id = $1")
+            .bind(doomed)
+            .fetch_one(pool)
+            .await
+            .expect("the row");
+    for _ in 0..12 {
+        Outbox::mark_failed(pool, outbox_id, "no broker", long_ago)
+            .await
+            .expect("failing");
+    }
+
+    let before = now() - jiff::SignedDuration::from_hours(24 * 30);
+    let removed = Outbox::collect_published(pool, before, 1000)
+        .await
+        .expect("collecting");
+    assert_eq!(removed, 1, "only the message published outside the window");
+
+    let stats = Outbox::stats(pool, now()).await.expect("stats");
+    assert_eq!(
+        stats.pending, 1,
+        "an undelivered message is not retention's business"
+    );
+    assert_eq!(
+        stats.dead_lettered, 1,
+        "a dead-lettered message is evidence and is kept until a person resolves it",
+    );
+
+    harness.cleanup().await.expect("cleanup");
+}
+
+/// O-15. The inbox keeps an unprocessed record however old it is.
+///
+/// An unprocessed row is a message that was claimed and never finished. Deleting it erases the
+/// evidence AND lets the message be applied again on the next redelivery, which is the exact failure
+/// the inbox exists to prevent.
+#[tokio::test]
+async fn retention_never_removes_an_unfinished_inbox_record() {
+    let harness = TestDatabase::create().await.expect("a test database");
+    let pool = harness.pool();
+    let long_ago = now() - jiff::SignedDuration::from_hours(24 * 90);
+
+    let finished = Uuid::now_v7();
+    let claimed = Uuid::now_v7();
+    for message_id in [finished, claimed] {
+        let reception = Inbox::begin(pool, message_id, &command(), "ratatoskr-edge", long_ago)
+            .await
+            .expect("beginning");
+        assert_eq!(reception, Reception::First);
+    }
+    Inbox::finish(pool, finished, Outcome::Applied, long_ago)
+        .await
+        .expect("finishing");
+
+    let before = now() - jiff::SignedDuration::from_hours(24 * 30);
+    let removed = Inbox::collect_processed(pool, before, 1000)
+        .await
+        .expect("collecting");
+    assert_eq!(removed, 1);
+    assert_eq!(
+        Inbox::unprocessed(pool).await.expect("counting"),
+        1,
+        "the claimed-and-never-finished record survives any window",
+    );
+
+    harness.cleanup().await.expect("cleanup");
+}

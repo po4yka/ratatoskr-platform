@@ -61,9 +61,19 @@ pub struct RequestContext {
 /// invariant this router exists to establish need a handler to fail in.
 pub fn public_router(state: Arc<HttpState>, config: &PublicConfig, routes: Router) -> Router {
     let limit = usize::try_from(config.max_body_bytes).unwrap_or(usize::MAX);
+    let concurrency = Arc::new(crate::limit::Concurrency::new(
+        config.max_concurrent_requests,
+    ));
     routes
         .fallback(|| async { StatusCode::NOT_FOUND })
         .layer(RequestBodyLimitLayer::new(limit))
+        // Inside the observing middleware, so a shed request is rendered as an `ErrorEnvelope` with
+        // a correlation identifier like every other refusal, and is counted in
+        // `http_server_request_duration_seconds{status="503"}` like every other response.
+        .layer(axum::middleware::from_fn_with_state(
+            concurrency,
+            crate::limit::shed,
+        ))
         .layer(TimeoutLayer::with_status_code(
             StatusCode::GATEWAY_TIMEOUT,
             Duration::from_secs(config.request_timeout_seconds),

@@ -91,9 +91,18 @@ CHECK. Both are weaker than a per-role subject allowlist would have been, and th
 
 `ratatoskr_edge` owns the three schemas and is the only role with `create` on the database, because
 it is the only process that migrates. `ratatoskr_ingest` reaches `platform_ingest` and `operations`;
-`ratatoskr_scheduler` reaches `operations` only. **Neither can read `identity` at all** — verified,
-not asserted — which means the process with the largest unauthenticated attack surface in the system
+`ratatoskr_scheduler` reaches `operations` only. **Neither can READ `identity`** — verified, not
+asserted — which means the process with the largest unauthenticated attack surface in the system
 cannot reach a session credential hash, an OAuth relay or a user's provider identity.
+
+**Amended when the audit writer reached this route.** `ratatoskr_ingest` now holds `usage` on the
+`identity` schema and `insert` on exactly one table in it, `audit_events`. `usage` grants the right
+to NAME an object and nothing more, and `insert` without `select` is an append-only right, so the
+claim above is unchanged and was re-verified table by table: it can append a record and cannot read
+back what it wrote, let alone anything else. The narrowing was preferred to the alternatives — a
+second audit table in `operations`, or a webhook adapter absent from the audit trail — because a
+credential presented at another source's URL is an attributable security decision, and the trail
+that omits the most exposed process is the one an incident needs.
 
 There are two SQL files because a migration creates the schemas: `grant usage on schema identity`
 cannot be written before `identity` exists. So: `01-database-and-roles.sql`, then the first edge

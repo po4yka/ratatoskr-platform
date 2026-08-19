@@ -106,7 +106,12 @@ pub const EDGE_PROJECTION_CONSUMER: &str = "platform_edge_projection";
 /// Long enough that a broker outage over a weekend does not lose an event, short enough that the
 /// store is not an archive. Nothing reads a week-old command: the outbox would have dead-lettered it
 /// long before.
-const DEFAULT_MAX_AGE: Duration = Duration::from_hours(24 * 7);
+///
+/// Derived from `platform_core::config::EVENT_RETENTION_DAYS` rather than written here, because the
+/// inbox retention window must not be shorter than it — startup rule V17 — and a second copy of the
+/// number is how the two would come to disagree. A test asserts they are still the same value.
+const DEFAULT_MAX_AGE: Duration =
+    Duration::from_hours(24 * platform_core::config::EVENT_RETENTION_DAYS);
 
 impl StreamSpec {
     /// A command stream, which refuses a publish rather than dropping work.

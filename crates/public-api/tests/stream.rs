@@ -44,11 +44,13 @@ fn app(state: ApiState) -> Router {
         bind: "127.0.0.1:0".parse().expect("a socket address"),
         request_timeout_seconds: 15,
         max_body_bytes: 1_048_576,
+        max_concurrent_requests: 64,
+        actor_requests_per_minute: 120,
     };
     platform_http::observe::public_router(
         Arc::new(HttpState::new(RuntimeRole::Edge)),
         &config,
-        platform_public_api::routes(state),
+        platform_public_api::routes(std::sync::Arc::new(state)),
     )
 }
 

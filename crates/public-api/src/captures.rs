@@ -16,6 +16,8 @@ use platform_eventing::{MessageClass, Outbox, Subject};
 use platform_idempotency::{Digest, Outcome};
 use uuid::Uuid;
 
+use platform_identity::audit::{self, AuditEvent, AuditOutcome};
+
 use crate::{ApiState, Principal};
 
 /// The route, as stored in the idempotency ledger.
@@ -178,6 +180,15 @@ async fn accept(
         return platform_http::reject(FailureKind::RequestTimeout);
     }
 
+    // Inside the transaction, so the record and the thing it records commit together. An audited
+    // action with no record, or a record for an action that rolled back, are both worse than
+    // neither.
+    let event = submission(&principal, operation.operation_id, correlation);
+    if let Err(error) = audit::record(&mut *transaction, &event, now).await {
+        tracing::error!(%error, "the capture could not be audited");
+        return platform_http::reject(FailureKind::RequestTimeout);
+    }
+
     if let Err(error) = transaction.commit().await {
         // Nothing happened: no reservation, no operation, no command. The client may retry with the
         // same key and get a clean first attempt.
@@ -186,6 +197,26 @@ async fn accept(
     }
 
     accepted(operation.operation_id)
+}
+
+/// The audit record of one accepted capture.
+///
+/// Only the ALLOWED case exists, and that is a decision rather than an omission. A capture has no
+/// authorization step beyond authentication, so there is no denial to record; a request that fails
+/// authentication never reaches [`accept`], and an anonymous 401 has no actor to attribute — it is
+/// counted by `http_server_request_duration_seconds{status}` and deliberately not written to a
+/// table an unauthenticated caller could grow one row at a time.
+fn submission(principal: &Principal, operation_id: Uuid, correlation: &str) -> AuditEvent {
+    AuditEvent {
+        audit_event_id: Uuid::now_v7(),
+        actor_user_id: Some(principal.user_id),
+        actor_session_id: Some(principal.session_id),
+        action: "content.capture.submit",
+        target_kind: "operation",
+        target_id: Some(operation_id),
+        outcome: AuditOutcome::Allowed,
+        correlation_id: correlation.to_owned(),
+    }
 }
 
 /// Read the idempotency key and the body, or say which client error this is.
@@ -267,6 +298,12 @@ bounding what it returns belong to the service that opens the connection, not to
         ResponseDoc {
             status: 401,
             description: "No credential, or one that does not authenticate here.",
+            payload: Some(Payload::Json("ErrorEnvelope")),
+        },
+        ResponseDoc {
+            status: 429,
+            description: "This caller has spent its request allowance. Retryable: the allowance \
+                          refills continuously, so waiting is the fix.",
             payload: Some(Payload::Json("ErrorEnvelope")),
         },
         ResponseDoc {

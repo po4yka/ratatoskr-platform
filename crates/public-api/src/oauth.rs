@@ -147,8 +147,8 @@ pub async fn callback(
         audit_event_id: Uuid::now_v7(),
         actor_user_id: None,
         actor_session_id: None,
-        action: "oauth.callback".to_owned(),
-        target_kind: "oauth_relay".to_owned(),
+        action: "oauth.callback",
+        target_kind: "oauth_relay",
         target_id: Some(relay_id),
         outcome: AuditOutcome::Allowed,
         correlation_id: correlation.clone(),
@@ -272,8 +272,8 @@ async fn audit_claim(
         audit_event_id: Uuid::now_v7(),
         actor_user_id: Some(principal.user_id),
         actor_session_id: Some(principal.session_id),
-        action: "oauth.relay_claim".to_owned(),
-        target_kind: "oauth_relay".to_owned(),
+        action: "oauth.relay_claim",
+        target_kind: "oauth_relay",
         target_id: Some(relay_id),
         outcome,
         correlation_id: correlation.to_owned(),
@@ -404,6 +404,12 @@ answer for all five, because which relays exist and what each needs is not a cal
         ResponseDoc {
             status: 401,
             description: "No credential, or one that does not authenticate here.",
+            payload: Some(Payload::Json("ErrorEnvelope")),
+        },
+        ResponseDoc {
+            status: 429,
+            description: "This caller has spent its request allowance. Retryable: the allowance \
+                          refills continuously, so waiting is the fix.",
             payload: Some(Payload::Json("ErrorEnvelope")),
         },
         ResponseDoc {

@@ -45,9 +45,15 @@ pub struct AuditEvent {
     /// The session that acted, when there was one.
     pub actor_session_id: Option<Uuid>,
     /// A dotted action name, e.g. `session.create`.
-    pub action: String,
-    /// What kind of thing was acted on.
-    pub target_kind: String,
+    ///
+    /// `&'static str` and not `String`, because this value is also a metric label
+    /// (`platform_auth_decisions_total`). A label built from anything a request carries is a
+    /// cardinality bomb, and the type is what makes that impossible rather than a rule somebody has
+    /// to remember — the same device `platform_core::config::Violation` uses to keep supplied values
+    /// out of a failure report.
+    pub action: &'static str,
+    /// What kind of thing was acted on. `&'static str` for the same reason as `action`.
+    pub target_kind: &'static str,
     /// Which one, when it has a UUID identity.
     pub target_id: Option<Uuid>,
     /// The decision.
@@ -56,11 +62,20 @@ pub struct AuditEvent {
     pub correlation_id: String,
 }
 
-/// Append an audit record.
+/// Append an audit record, and count the decision.
 ///
 /// Takes an executor rather than a pool so it can join the caller's transaction: an audited action
 /// and its record must commit together, or a denied action can be committed with no trace of the
 /// denial.
+///
+/// The counter — `platform_auth_decisions_total`, `ARCHITECTURE.md` S16 item 2 — is incremented
+/// here and nowhere else, so the series and the table cannot disagree about what was decided.
+/// It carries the action and the outcome and no identifier of any kind: S16 asks for these outcomes
+/// "without sensitive identifiers", and a user id in a label is a disclosure as well as unbounded
+/// cardinality.
+///
+/// It is incremented AFTER the insert succeeds. A record that failed to commit is not a decision
+/// anybody can audit, and counting it would put a number on a dashboard with nothing behind it.
 ///
 /// # Errors
 ///
@@ -84,8 +99,8 @@ where
     .bind(to_offset(occurred_at))
     .bind(event.actor_user_id)
     .bind(event.actor_session_id)
-    .bind(&event.action)
-    .bind(&event.target_kind)
+    .bind(event.action)
+    .bind(event.target_kind)
     .bind(event.target_id)
     .bind(event.outcome.as_str())
     .bind(&event.correlation_id)
@@ -93,7 +108,50 @@ where
     .await
     .map_err(PersistenceError::Query)?;
 
+    metrics::counter!(
+        platform_telemetry::metrics::PLATFORM_AUTH_DECISIONS_TOTAL,
+        "action" => event.action,
+        "outcome" => event.outcome.as_str(),
+    )
+    .increment(1);
+
     Ok(())
+}
+
+/// Delete audit records older than `before`, at most `limit` of them.
+///
+/// The longest window of the four by an order of magnitude, and the one whose length is a policy
+/// rather than a mechanism: everything else here is deleted once it can no longer affect
+/// correctness, and this is deleted when somebody decides how long an incident may go unnoticed.
+///
+/// Bounded per call, so a table nobody has pruned drains over hours rather than taking one long
+/// lock.
+///
+/// # Errors
+///
+/// [`PersistenceError::Query`] if the statement fails.
+pub async fn collect_before<'e, E>(
+    executor: E,
+    before: jiff::Timestamp,
+    limit: i64,
+) -> Result<u64, PersistenceError>
+where
+    E: PgExecutor<'e>,
+{
+    let done = sqlx::query(
+        "delete from identity.audit_events
+          where audit_event_id in (
+              select audit_event_id from identity.audit_events
+               where occurred_at < $1
+               limit $2
+          )",
+    )
+    .bind(to_offset(before))
+    .bind(limit)
+    .execute(executor)
+    .await
+    .map_err(PersistenceError::Query)?;
+    Ok(done.rows_affected())
 }
 
 /// Count the audit records carrying one correlation identifier.

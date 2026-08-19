@@ -79,6 +79,12 @@ fn failure_kind_codes_are_unique() {
 /// E-4. The status and retryability table is pinned, so changing it must be a deliberate edit
 /// (`ARCHITECTURE.md` S5.5: retryability is explicit, never inferred).
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "a data table with one row per failure kind and a comment on the rows whose status or \
+              retryability is a decision rather than an obvious mapping; splitting it would put half \
+              the contract in one function and half in another"
+)]
 fn the_status_and_retryability_table_is_pinned() {
     let expected = [
         (
@@ -149,6 +155,24 @@ fn the_status_and_retryability_table_is_pinned() {
             "platform.request.idempotency_conflict",
             false,
             "That idempotency key is in use for a different request.",
+        ),
+        (
+            // Retryable, and the wait is the point: the allowance refills on its own, so the same
+            // request succeeds later with no operator action.
+            FailureKind::RateLimited,
+            StatusCode::TOO_MANY_REQUESTS,
+            "platform.limit.rate_exceeded",
+            true,
+            "Too many requests. Slow down and try again.",
+        ),
+        (
+            // Retryable for a different reason: nothing about THIS caller is wrong, the process is
+            // simply at its concurrency bound, and shedding is how it stays inside one.
+            FailureKind::Overloaded,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "platform.limit.overloaded",
+            true,
+            "The service is busy. Try again shortly.",
         ),
     ];
     assert_eq!(

@@ -71,6 +71,27 @@ pub async fn events(
         .into_response()
 }
 
+/// Holds `platform_sse_connections` up for as long as one stream exists.
+///
+/// A guard rather than an increment and a decrement at the two ends of the generator, because the
+/// generator has three ends: the terminal status, a read failure, and the client going away. Only
+/// the first two are code paths anything could be written on — a client that vanishes drops the
+/// stream from outside, and `Drop` is the one thing that runs on all three.
+struct Connected;
+
+impl Connected {
+    fn open() -> Self {
+        metrics::gauge!(platform_telemetry::metrics::PLATFORM_SSE_CONNECTIONS).increment(1.0);
+        Self
+    }
+}
+
+impl Drop for Connected {
+    fn drop(&mut self) {
+        metrics::gauge!(platform_telemetry::metrics::PLATFORM_SSE_CONNECTIONS).decrement(1.0);
+    }
+}
+
 /// The entries after `cursor`, then whatever arrives, then the end.
 fn progress_stream(
     state: Arc<ApiState>,
@@ -78,6 +99,8 @@ fn progress_stream(
     cursor: Option<Uuid>,
 ) -> impl Stream<Item = Result<Event, Infallible>> + Send {
     async_stream::stream! {
+        // Bound to the generator, so it is released whichever way the stream ends.
+        let _connected = Connected::open();
         let mut cursor = cursor;
         loop {
             let entries = platform_operations::progress_since(
@@ -103,6 +126,20 @@ fn progress_stream(
             for entry in entries {
                 cursor = Some(entry.progress_id);
                 terminal = transition::is_terminal(entry.status);
+                // How long the client waited for a fact that was already recorded. Its floor is
+                // POLL_INTERVAL, which is what makes this the number that says whether that
+                // interval is too long. Measured at the moment the frame is built rather than at
+                // the moment the read returned, so a slow serialization is inside it.
+                #[expect(
+                    clippy::cast_precision_loss,
+                    reason = "an age in seconds, exported as an f64 gauge"
+                )]
+                let lag = jiff::Timestamp::now()
+                    .duration_since(entry.observed_at.as_jiff())
+                    .as_secs()
+                    .max(0) as f64;
+                metrics::gauge!(platform_telemetry::metrics::PLATFORM_SSE_DELIVERY_LAG_SECONDS)
+                    .set(lag);
                 let data = serde_json::to_string(&entry).unwrap_or_default();
                 yield Ok(Event::default()
                     .id(entry.progress_id.to_string())
@@ -165,6 +202,12 @@ connection reaches the event bus, and nothing appears here that was not durably 
         ResponseDoc {
             status: 401,
             description: "No credential, or one that does not authenticate here.",
+            payload: Some(Payload::Json("ErrorEnvelope")),
+        },
+        ResponseDoc {
+            status: 429,
+            description: "This caller has spent its request allowance. Retryable: the allowance \
+                          refills continuously, so waiting is the fix.",
             payload: Some(Payload::Json("ErrorEnvelope")),
         },
         ResponseDoc {

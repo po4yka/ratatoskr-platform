@@ -49,6 +49,10 @@ pub struct PlatformConfig {
     #[serde(default)]
     pub identity: IdentityConfig,
 
+    /// How long each mechanical table is kept. Always present; every member has a default.
+    #[serde(default)]
+    pub retention: RetentionConfig,
+
     /// The two phases of a graceful stop.
     pub shutdown: ShutdownConfig,
 
@@ -93,7 +97,43 @@ pub struct PublicConfig {
     /// `THREAT_MODEL.md`, "Ingress/upload abuse". Same serde-default requirement as above.
     #[serde(default = "default_max_body_bytes")]
     pub max_body_bytes: u64,
+
+    /// `RATATOSKR__PUBLIC__MAX_CONCURRENT_REQUESTS`. `1..=4096`, default 64.
+    ///
+    /// The S14 concurrency limit. Sixty-four against a database pool of ten and four shared cores:
+    /// well above what the pool can serve at once, so it bounds the pile-up rather than the
+    /// throughput, and well below the point where the queue inside the process becomes the outage.
+    ///
+    /// Excess requests are REFUSED, not queued. A queue on this host converts a load spike into a
+    /// timeout for every caller instead of a refusal for some.
+    #[serde(default = "default_max_concurrent_requests")]
+    pub max_concurrent_requests: u32,
+
+    /// `RATATOSKR__PUBLIC__ACTOR_REQUESTS_PER_MINUTE`. `1..=100_000`, default 120.
+    ///
+    /// The S14 per-actor limit, applied after the caller is identified — by user for the session
+    /// routes, by source for the webhook adapter. It cannot be applied earlier: behind a tunnel that
+    /// adds its own headers there is no client identity a process may trust before authentication
+    /// (`ARCHITECTURE.md` S15), so a per-address limit here would be a limit on the tunnel.
+    #[serde(default = "default_actor_requests_per_minute")]
+    pub actor_requests_per_minute: u32,
 }
+
+pub(super) const fn default_max_concurrent_requests() -> u32 {
+    64
+}
+
+pub(super) const fn default_actor_requests_per_minute() -> u32 {
+    DEFAULT_ACTOR_REQUESTS_PER_MINUTE
+}
+
+/// The default of [`PublicConfig::actor_requests_per_minute`], as a value the crates that BUILD a
+/// limiter can name.
+///
+/// Public because `ApiState::new` and `IngestState::new` construct a limiter before any
+/// configuration has reached them — they are also built by tests — and a second literal `120` in
+/// those constructors is how the default and the documented default come to differ.
+pub const DEFAULT_ACTOR_REQUESTS_PER_MINUTE: u32 = 120;
 
 /// The `PostgreSQL` connection Platform owns. `identity` and `operations` only; ARCHITECTURE S4.2 and
 /// S19 invariant 6 forbid this pool ever reaching a domain service's schema.
@@ -156,6 +196,78 @@ pub struct BusConfig {
     /// deployment should.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub nkey_seed_path: Option<std::path::PathBuf>,
+}
+
+/// How long the event stream keeps a message, in days.
+///
+/// It lives here, in the crate every other one depends on, because two subsystems must agree about
+/// it and neither can depend on the other. `platform_eventing` builds the `JetStream` `max_age` from
+/// it, and startup rule V17 refuses an inbox retention window shorter than it — a window that
+/// expires before the stream does deletes the deduplication record while the message that record
+/// refuses is still redeliverable, which turns at-least-once into at-least-twice on the one path
+/// built to prevent that.
+pub const EVENT_RETENTION_DAYS: u64 = 7;
+
+/// How long each mechanical table is kept.
+///
+/// "Mechanical" is the boundary and it is deliberate: everything here is a record the SYSTEM writes
+/// for its own correctness — a deduplication marker, a published message, a security decision, an
+/// occurrence — and deleting one changes nothing a user can see. `operations.operations` is
+/// deliberately absent. Operation history is a user-visible record, so how long it is kept is a
+/// product decision with a person on the other end of it, and no milestone owns that decision yet.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RetentionConfig {
+    /// `RATATOSKR__RETENTION__INBOX_DAYS`. Default 30, and never below
+    /// [`EVENT_RETENTION_DAYS`] (rule V17).
+    #[serde(default = "default_inbox_days")]
+    pub inbox_days: u64,
+
+    /// `RATATOSKR__RETENTION__OUTBOX_DAYS`. Default 30. Published rows only: a dead-lettered row is
+    /// evidence of work that was accepted and never delivered, and it is kept until somebody
+    /// resolves it.
+    #[serde(default = "default_outbox_days")]
+    pub outbox_days: u64,
+
+    /// `RATATOSKR__RETENTION__AUDIT_DAYS`. Default 365. Longest by an order of magnitude, because
+    /// this is the one class here that exists to be read after an incident rather than during one.
+    #[serde(default = "default_audit_days")]
+    pub audit_days: u64,
+
+    /// `RATATOSKR__RETENTION__SCHEDULE_OCCURRENCE_DAYS`. Default 90.
+    ///
+    /// An occurrence record is what refuses a second publication of the same due time, so this is
+    /// also how far back an operator may move `next_due_at` before a rewind republishes rather than
+    /// being suppressed. Ninety days of a one-minute schedule is 130 000 rows.
+    #[serde(default = "default_schedule_occurrence_days")]
+    pub schedule_occurrence_days: u64,
+}
+
+impl Default for RetentionConfig {
+    fn default() -> Self {
+        Self {
+            inbox_days: default_inbox_days(),
+            outbox_days: default_outbox_days(),
+            audit_days: default_audit_days(),
+            schedule_occurrence_days: default_schedule_occurrence_days(),
+        }
+    }
+}
+
+const fn default_inbox_days() -> u64 {
+    30
+}
+
+const fn default_outbox_days() -> u64 {
+    30
+}
+
+const fn default_audit_days() -> u64 {
+    365
+}
+
+const fn default_schedule_occurrence_days() -> u64 {
+    90
 }
 
 /// What Platform needs in order to believe another service about who somebody is.

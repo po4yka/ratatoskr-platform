@@ -64,6 +64,19 @@ impl FromRequestParts<Arc<ApiState>> for Principal {
             return Err(refuse());
         };
 
+        // After authentication, because until then there is no actor to charge. Behind a tunnel
+        // that adds its own headers there is no client identity a process may trust
+        // (`ARCHITECTURE.md` S15), so a limit applied earlier would be a limit on the tunnel.
+        //
+        // Here rather than in each handler: this extractor runs on every authenticated route, so one
+        // check covers the surface and the next route added is covered by construction.
+        if !state
+            .actor_limit
+            .admit(session.user_id, jiff::Timestamp::now())
+        {
+            return Err(platform_http::reject(FailureKind::RateLimited));
+        }
+
         Ok(Self {
             user_id: session.user_id,
             session_id: session.session_id,

@@ -131,7 +131,18 @@ fn spawn_publisher(pool: PgPool) -> tokio::task::JoinHandle<()> {
     })
 }
 
-#[tokio::main]
+/// A single-threaded runtime.
+///
+/// The multi-threaded one starts a worker per core and keeps a blocking pool that grows to 512
+/// threads. This process has one background loop that sleeps for a second at a time, four operator
+/// routes nobody polls hard, and a connection pool of ten; there is nothing here for a second
+/// worker to do. On four cores shared with `PostgreSQL`, NATS and a metrics stack, a runtime sized
+/// from `num_cpus` is the default `AGENTS.md` calls a bug on this host.
+///
+/// The rule this buys into: nothing in this binary may block the thread. Every I/O it performs is
+/// `sqlx` over Tokio, and the one synchronous file read in the workspace —
+/// `NatsPublisher::connect_with_nkey` — is in a binary this one does not share code with.
+#[tokio::main(flavor = "current_thread")]
 async fn main() -> ExitCode {
     if std::env::args().nth(1).as_deref() == Some("check-config") {
         return platform_http::check_config(ROLE);

@@ -260,6 +260,42 @@ impl Outbox {
         })
     }
 
+    /// Delete published rows older than `before`, at most `limit` of them.
+    ///
+    /// Published only. A dead-lettered row is evidence of work a client was told had been accepted
+    /// and that nobody delivered, so it is kept until a person resolves it — a retention window that
+    /// quietly disposed of those would make `platform_outbox_dead_lettered` a gauge that falls on
+    /// its own.
+    ///
+    /// Bounded for the same reason [`crate::Inbox::collect_processed`] is.
+    ///
+    /// # Errors
+    ///
+    /// [`EventingError::Persistence`] if the statement fails.
+    pub async fn collect_published<'e, E>(
+        executor: E,
+        before: jiff::Timestamp,
+        limit: i64,
+    ) -> Result<u64, EventingError>
+    where
+        E: PgExecutor<'e>,
+    {
+        let done = sqlx::query(
+            "delete from operations.outbox
+              where outbox_id in (
+                  select outbox_id from operations.outbox
+                   where published_at is not null and published_at < $1
+                   limit $2
+              )",
+        )
+        .bind(to_offset(before))
+        .bind(limit)
+        .execute(executor)
+        .await
+        .map_err(PersistenceError::Query)?;
+        Ok(done.rows_affected())
+    }
+
     /// When a claimed message's lease expires, for a publisher deciding whether to keep going.
     ///
     /// # Errors

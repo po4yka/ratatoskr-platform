@@ -18,3 +18,7 @@ Scheduler state contains definitions and dispatch checkpoints only, and it lives
 - Migrations ship with verification, backfill, compatibility, and rollback/forward-fix plans.
 
 Retention separates security audit, session expiry, operation history, uploaded staging blobs, and idempotency windows.
+
+`ratatoskr-edge` sweeps hourly, in batches, and the split it enforces is mechanical against user-visible. The idempotency ledger and expired OAuth relays go when their own `expires_at` says so, because that expiry is a fact the writer recorded rather than a policy. Processed inbox records, published outbox rows, audit events and schedule occurrences go on configured windows (`RATATOSKR__RETENTION__*`), and three exclusions inside those windows are deliberate: an UNPROCESSED inbox record is a message claimed and never finished, so deleting it would erase the evidence and let the message be applied again; a DEAD-LETTERED outbox row is work a client was told had been accepted and that nobody delivered, so it is kept until a person resolves it; and the inbox window may never be shorter than the event stream's own retention, which startup rule V17 enforces.
+
+**`operations.operations` is swept by nothing.** Operation history is what a user reads, so how long it is kept is a product decision with somebody on the other end of it, and no milestone owns that decision yet. It is named here rather than left to be discovered.

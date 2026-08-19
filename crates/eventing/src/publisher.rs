@@ -43,14 +43,38 @@ pub trait Publisher: Send + Sync {
 /// A `JetStream` publisher.
 #[derive(Debug, Clone)]
 pub struct NatsPublisher {
+    client: async_nats::Client,
     context: jetstream::Context,
 }
 
 impl NatsPublisher {
-    /// Wrap a `JetStream` context.
+    /// Wrap a connected client.
+    ///
+    /// The client is kept beside the context it produced, because `jetstream::Context` does not
+    /// expose the connection it uses and [`Self::is_connected`] is the readiness input for the bus.
     #[must_use]
-    pub const fn new(context: jetstream::Context) -> Self {
-        Self { context }
+    pub fn new(client: async_nats::Client) -> Self {
+        Self {
+            context: jetstream::new(client.clone()),
+            client,
+        }
+    }
+
+    /// Whether the client currently holds a connection to a server.
+    ///
+    /// Reads the client's own state and performs no I/O: `async-nats` reconnects on its own and
+    /// tracks where it is, so asking is free and asking often is free. A probe that published a
+    /// message to find out would put load on the broker in exactly the situation where the broker
+    /// is already the problem.
+    ///
+    /// `Pending` — reconnecting — reports `false`. The question readiness asks is whether this
+    /// process can reach the bus now, and "it is trying" is not a yes.
+    #[must_use]
+    pub fn is_connected(&self) -> bool {
+        matches!(
+            self.client.connection_state(),
+            async_nats::connection::State::Connected
+        )
     }
 
     /// Connect to a NATS server anonymously and take its `JetStream` context.
@@ -65,7 +89,7 @@ impl NatsPublisher {
         let client = async_nats::connect(url)
             .await
             .map_err(|error| PublishError::NotAcknowledged(Box::new(error)))?;
-        Ok(Self::new(jetstream::new(client)))
+        Ok(Self::new(client))
     }
 
     /// Connect as the identity whose nkey seed is in `seed_path`.
@@ -92,7 +116,7 @@ impl NatsPublisher {
             .connect(url)
             .await
             .map_err(|error| PublishError::NotAcknowledged(Box::new(error)))?;
-        Ok(Self::new(jetstream::new(client)))
+        Ok(Self::new(client))
     }
 
     /// The `JetStream` context, for stream and consumer management.
