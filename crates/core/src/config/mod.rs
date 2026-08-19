@@ -38,9 +38,6 @@ use crate::role::RuntimeRole;
 /// The environment prefix, and the nesting separator inside it.
 const ENV_PREFIX: &str = "RATATOSKR__";
 
-/// The default public listener address of the edge role.
-const DEFAULT_PUBLIC_PORT: u16 = 8080;
-
 /// Reads the process environment and produces a validated configuration for `role`.
 ///
 /// Sources, lowest precedence first: built-in defaults for `role`, then `RATATOSKR__` environment
@@ -112,10 +109,10 @@ impl PlatformConfig {
             // Absent by default. A broker URL is deployment topology, and a default would be wrong
             // everywhere except one laptop.
             bus: None,
-            // Role-aware: the table is present for the one role that may serve public traffic and
-            // absent from the others, so rule V1 is satisfied by the defaults alone.
-            public: role.may_have_public_listener().then(|| PublicConfig {
-                bind: SocketAddr::new(loopback, DEFAULT_PUBLIC_PORT),
+            // Role-aware: the table is present for the roles that may serve public traffic and
+            // absent from the one that may not, so rule V1 is satisfied by the defaults alone.
+            public: role.default_public_port().map(|port| PublicConfig {
+                bind: SocketAddr::new(loopback, port),
                 request_timeout_seconds: model::default_request_timeout_seconds(),
                 max_body_bytes: model::default_max_body_bytes(),
             }),

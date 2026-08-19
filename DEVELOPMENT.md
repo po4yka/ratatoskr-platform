@@ -1,12 +1,13 @@
 # Developing Ratatoskr Platform
 
-> Status: Implemented for milestones 1 through 6; milestones 7 through 10 are Proposed.  
+> Status: Implemented for milestones 1 through 7; milestones 8 through 10 are Proposed.  
 > Owner: `ratatoskr-platform`  
-> Last reviewed: 2026-08-18
+> Last reviewed: 2026-08-19
 
 ## Current stage
 
-Milestone 1 of `docs/IMPLEMENTATION_PLAN.md` exists and the commands marked **real** below are real.
+Milestones 1 through 7 of `docs/IMPLEMENTATION_PLAN.md` exist and the commands marked **real** below
+are real.
 
 Present: the Cargo workspace, its pinned toolchain and its committed `Cargo.lock`; the
 `ratatoskr-platform-core`, `ratatoskr-platform-telemetry` and `ratatoskr-platform-http` library
@@ -18,14 +19,19 @@ version on an operator listener; SIGTERM draining; and the CI gate in `.github/w
 Present since milestone 2 and 3: the `identity` and `operations` schemas in `migrations/`, a local
 PostgreSQL in `compose.yaml`, the `ratatoskr-platform-persistence` pool and embedded migrator, and the
 `ratatoskr-platform-identity` and `ratatoskr-platform-operations` crates with their integration suites.
-No binary opens a pool yet — `database` is an optional configuration section that is validated but not
-yet consumed, and the first route that reads persisted data is milestone 5.
+
+Present since milestone 7: `GET /v2/capabilities`; the `platform_ingest` schema and the generic
+webhook adapter at `POST /v2/ingest/webhooks/{source_id}`, served by `ratatoskr-ingest` on a public
+listener of its own; and the generated public `OpenAPI` document in `openapi/openapi.json`, written
+and drift-checked by `cargo run -p openapic`. `ratatoskr-ingest` now REQUIRES
+`RATATOSKR__DATABASE__URL` and a public listener, applies no migrations, and refuses to start against
+a database `ratatoskr-edge` has not migrated.
 
 Present since milestone 6: the outbox publisher and the operation-event consumer run inside
 `ratatoskr-edge`, and `GET /v2/operations/{id}/events` streams progress as Server-Sent Events with
 `Last-Event-ID` replay. The bus is optional — a developer polling `/v2/operations` needs no broker —
 but a deployment without one accumulates commands nobody publishes, which the process warns about at
-startup.
+startup, and `GET /v2/capabilities` reports `content.submit` as unavailable in it.
 
 Present since milestone 5: the versioned public API — `POST /v2/captures` and
 `GET /v2/operations/{id}` — session authentication, and the idempotency ledger. `ratatoskr-edge` now
@@ -34,14 +40,13 @@ writes the database, and a process that started anyway would report itself ready
 request.
 
 Present since milestone 4: the transactional outbox and the inbox in `operations`, the NATS subject
-grammar, a `JetStream` publisher, and the pump that moves claimed rows onto the bus. No service binary
-runs the pump yet — the first command is published by the capture API at milestone 5.
+grammar, a `JetStream` publisher, and the pump that moves claimed rows onto the bus. Both routes that
+accept work write their command into the outbox; the pump runs in `ratatoskr-edge` only.
 
-Absent:
-any versioned public route; OpenAPI in any form; authentication, authorization, idempotency, SSE,
-capability discovery, ingress adapters and scheduled command publication; a `Dockerfile` and
-deployment profiles. Those are milestones 2 through 10, and none of them is scaffolded, stubbed or
-present in the checkout.
+Absent: the OAuth callback facade and Telegram assertion exchange; scheduled command publication —
+`ratatoskr-scheduler` still binds nothing but its operator listener; the workspace end-to-end slice; a
+`Dockerfile` and deployment profiles. Those are milestones 8 through 10, and none of them is
+scaffolded, stubbed or present in the checkout.
 
 ## Toolchain
 
@@ -65,7 +70,7 @@ makes it real.
 | PostgreSQL | **real** | milestone 2 |
 | Migration | **real** | milestone 2 |
 | NATS | **real** | milestone 4 |
-| OpenAPI | **does not exist** | milestone 7 |
+| `OpenAPI` | **real** | milestone 7 |
 
 ### Rust — also the CI gate, in this order
 
@@ -87,6 +92,12 @@ That is why the failure was invisible on a developer machine and immediate in CI
 
 This list and the step list in `.github/workflows/ci.yml` are the same list. If they drift, this
 document is wrong.
+
+`cargo run -p openapic -- generate` is **not** in the gate, and must never be. It writes
+`openapi/openapi.json` from the routes, so a gate that ran it before `cargo test` would regenerate
+the artifact it is about to check and pass on any drift at all — the same vacuous sequence the
+sibling contracts repository documents. Generating is the FIX, run by a developer who changed a
+route; `cargo test` is the CHECK, and it is the only one CI runs.
 
 `cargo fetch --locked` resolves the `ratatoskr-contracts` git dependency over `https://`, and
 `ratatoskr-contracts` is a public repository, so it needs **no credential at all** — not locally and
@@ -141,9 +152,19 @@ curl -si localhost:8080/health/live # 404 — probes are NOT on the public liste
 kill -TERM "$(pgrep -f ratatoskr-edge)"
 ```
 
-`ratatoskr-edge` binds a public listener that serves no routes; every request to it returns a contract
-`ErrorEnvelope`. `ratatoskr-ingest` binds no public listener until milestone 7, and
-`ratatoskr-scheduler` never binds one (`docs/ARCHITECTURE.md` S18).
+`ratatoskr-edge` and `ratatoskr-ingest` each bind a public listener; their defaults are `8080` and
+`8081` so both run on one machine with no configuration. `ratatoskr-scheduler` never binds one
+(`docs/ARCHITECTURE.md` S18) and refuses to start if one is configured.
+
+A webhook source is registered by an operator — there is no route for it, because who may create a
+source on whose behalf is the authorization work of milestone 8:
+
+```sql
+insert into platform_ingest.webhook_sources
+    (source_id, owner_user_id, label, token_hash, target, created_at)
+values (gen_random_uuid(), '<user>', 'an rss shim', digest('<credential>', 'sha256'),
+        'content.capture', now());
+```
 
 ### PostgreSQL — real
 
@@ -157,9 +178,10 @@ by `cargo test --workspace` needs no further setup. The integration suite create
 database per test and drops it afterwards; a test that panics deliberately leaves its database behind
 so the failure can be inspected.
 
-No service binary opens a pool yet. `RATATOSKR__DATABASE__URL` is validated at startup when it is set
-(rules V11 and V12) but nothing consumes it: the first route that reads persisted data is milestone 5,
-and a pool with no reader would be a connection held open to prove a point.
+`ratatoskr-edge` and `ratatoskr-ingest` both require `RATATOSKR__DATABASE__URL` and refuse to start
+without it. Edge owns the migrations and applies them at startup; ingest applies none — S18 gives it a
+least-privilege role, and a role that may create a schema is not one — so it checks that the schema is
+there and says so in one sentence if it is not.
 
 ### Migration — real
 
@@ -191,34 +213,63 @@ acknowledges nothing.
 Subjects are `cmd.<type>` and `evt.<type>` where `<type>` is the contract type name (ADR-0005). The
 class prefix is the privilege boundary a NATS credential is granted over.
 
-No service binary runs the pump yet. `platform_eventing::pump::run_once` is one pass, driven by its
-caller; the first caller is the capture API at milestone 5.
+`platform_eventing::pump::run_once` is one pass, driven by its caller. `ratatoskr-edge` is the only
+caller: `ratatoskr-ingest` writes commands into the outbox and publishes none of them, so a deployment
+of ingest without edge accumulates work nobody sends. Where publishers run is a deployment-profile
+decision and milestone 9 is where that profile is written.
 
-### OpenAPI — does not exist, milestone 7
+### `OpenAPI` — real
 
-The routes are the contract until the document exists, which is why they are tested through the real
-public pipeline rather than in isolation. ADR-0006 fixes the direction: Platform generates the
-document FROM its routes, and `ratatoskr-contracts` owns the payload types the routes carry. It
-arrives with the capability endpoint at milestone 7, when there is enough surface for the machinery
-to be worth its weight.
+```bash
+cargo run --locked -p openapic -- generate   # write openapi/openapi.json from the route tables
+cargo run --locked -p openapic -- check      # exit 1 if it would differ
+```
 
-### `docs/ARCHITECTURE.md` S16 coverage at milestone 1
+ADR-0006 fixes the direction: Platform generates the document FROM its routes, and
+`ratatoskr-contracts` owns the payload types the routes carry — their schemas come from the same
+`schemars` derives that produce contracts' published `JSON` Schema, so no type is described twice.
 
-The second column is the point. Emitting the absent signals as always-zero series would be worse than
-absence: a panel reading `outbox_lag: 0` and a `for: 5m` alert that never fires both assert that a
-component is healthy when it does not exist.
+The document cannot drift from the router because there is one table. Each serving crate exposes a
+list of `(RouteDoc, MethodRouter)` pairs; `routes()` folds the first half and `surface()` collects the
+second. A documented route with no handler does not compile, and a served route with no description
+cannot be added without writing one.
 
-| S16 requirement | Milestone 1 | Arrives |
+`cargo test --workspace` fails when `openapi/openapi.json` is stale, and its message names the command
+above. Never edit the file: the routes are the source, and the next `generate` undoes a hand edit.
+
+### `docs/ARCHITECTURE.md` S16 coverage — and the debt in it
+
+The "Emitted" column is the point, and every `no` in it is deliberate. Emitting an absent signal as
+an always-zero series would be worse than absence: a panel reading `outbox_lag: 0` and a `for: 5m`
+alert that never fires both assert that a component is healthy when nothing is watching it.
+
+Three instruments exist, and only three: `http_server_request_duration_seconds`,
+`platform_readiness` and `platform_build_info` (`platform_telemetry::metrics::ALL`, held to exactly
+that list by test T-4).
+
+**This table was a plan and has become a debt.** Milestone 1 wrote it with an "Arrives" column, and
+milestones 2 through 7 then shipped the SUBJECTS — operations, an outbox, idempotency, SSE, a
+capability document — without shipping the instruments that watch them. Every row below whose
+milestone has passed is a thing this repository does and cannot see itself do.
+
+| S16 requirement | Emitted | Subject exists since |
 |---|---|---|
-| request count, latency, status, route template | **emitted** — `http_server_request_duration_seconds` and its derived `_count` | — |
-| dependency health and capability state | **partial** — `platform_readiness`; there is no dependency yet and the two checks that exist are reported honestly | milestone 2 (PostgreSQL), milestone 7 (capabilities) |
-| authentication and authorization outcomes | not emitted — no authentication exists | milestones 2 / 5 |
-| operation age and transition counts | not emitted — no operations | milestone 3 |
-| outbox and inbox lag | not emitted — no outbox | milestone 4 |
-| command publication failures | not emitted — no publisher | milestone 4 |
-| idempotency hits and conflicts | not emitted — no idempotency | milestone 5 |
-| SSE connection count and delivery lag | not emitted — no SSE | milestone 6 |
-| scheduler drift and duplicate suppression | not emitted — no schedules | milestone 9 |
+| request count, latency, status, route template | **yes** — `http_server_request_duration_seconds` and its derived `_count` | milestone 1 |
+| dependency health | **yes** — `platform_readiness`, one gauge covering the database probe | milestone 2 |
+| capability state | no | milestone 7 |
+| authentication and authorization outcomes | no | milestone 5 |
+| operation age and transition counts | no | milestone 3 |
+| outbox and inbox lag | no | milestone 4 |
+| command publication failures | no | milestone 4 |
+| idempotency hits and conflicts | no | milestone 5 |
+| SSE connection count and delivery lag | no | milestone 6 |
+| scheduler drift and duplicate suppression | no | milestone 9, not yet |
+
+Closing this is its own piece of work rather than a tail end of the milestone that happened to notice
+it: each row needs a publication point that is truthful about WHEN the value is known, a bounded
+label set, and a test that pins the name — a rename silently breaks every dashboard and every alert.
+Adding a gauge to tick a row, published from wherever was convenient, would produce exactly the
+misleading series the paragraph above refuses.
 
 ## Expected workflow
 
@@ -231,14 +282,16 @@ component is healthy when it does not exist.
 
 ## Open questions for the repository owner
 
-None of these blocks milestone 1. Each blocks a later milestone or records a contradiction between
-documents that milestone 1 must not resolve unilaterally. Q2 and Q4 are **hard blockers**: they cannot
-be worked around in the milestone that hits them.
+Each blocks a later milestone or records a contradiction between documents that the milestone which
+found it must not resolve unilaterally. Q2 and Q4 are **hard blockers**: they cannot be worked around
+in the milestone that hits them. Q2 is closed by milestone 7; Q4 is a one-line change to a sibling
+repository and is still open. A struck-through row is answered; it is kept rather than deleted so the
+answer stays attached to the question.
 
 | # | Question | Blocks |
 |---|---|---|
 | Q1 | `README.md` listed `crates/{identity, operations, api-contracts, ingress, platform-infrastructure}`; `docs/ARCHITECTURE.md` S3 lists a different set sharing only `identity` and `operations`. Milestone 1 treats S3 as normative and deleted the README tree. If README's list was intended, S3 must change instead. | milestone 2, which creates the first crate whose name appears in one list and not the other |
-| Q2 | **Ingress schema spelling.** `README.md` and `AGENTS.md` say `platform_ingress.*`; `docs/ARCHITECTURE.md` S4.1 says `platform_ingest.*`. A schema name is a migration. | milestone 2, **hard** — the first migration fixes it forever |
+| ~~Q2~~ | ~~**Ingress schema spelling.**~~ **Closed by [ADR-0009](docs/adr/0009-one-spelling-for-generic-ingest.md) at milestone 7.** The word is `ingest` wherever it is an identifier: the schema, the crate, the library, the binary, the S18 database role and the `/v2/ingest` path prefix. `README.md` is corrected; `AGENTS.md` turned out to use "ingress" only in prose and needed no change. | — |
 | Q3 | **Event family mismatch.** `README.md` names `platform.operation.accepted.v1`, `.completed.v1` and `.failed.v1`, but `ratatoskr-contracts` ships only `platform.operation.progressed.v1`, whose payload is a state-carried `OperationSnapshot` covering every transition. Either Platform emits one event type or contracts gains three. Contracts made the choice; README looks stale. | milestone 4 |
 | Q4 | **`correlation` is not in `contracts.toml [entity_kinds].known`.** `EntityKind` is open on the wire, so nothing breaks at milestones 1 through 3, but a Platform event fixture carrying `correlation:` fails `cargo contracts check`. The fix is a one-line contracts changeset. See [ADR-0007](docs/adr/0007-correlation-identity-and-trace-context.md). | milestone 4, **hard** |
 | Q5 | Contracts pins `serde_json = "=1.0.151"` and `schemars = "=1.2.2"` exactly. Those are graph-wide constraints: Platform cannot move past them while depending on this contracts commit, including for a security advisory. The remedy is a contracts bump, and it is worth knowing before an advisory rather than during one. | any milestone, on the day it happens |
@@ -246,7 +299,7 @@ be worked around in the milestone that hits them.
 | Q7 | The seven-command-families sentence is genuinely ambiguous. This document takes the documentation reading; the literal reading forces a database and a message bus into milestone 1, contradicting `docs/IMPLEMENTATION_PLAN.md` items 2 and 4. | milestone 1, if the literal reading was intended |
 | Q8 | `README.md`'s former Observability metric names (`http_request_duration`, `operation_duration`, `outbox_lag`, …) carry no units and mostly have no subject. They are treated as aspirational and were replaced by the three implemented names, with S16 as normative. If those names are a contract with a dashboard that already exists somewhere, that needs saying. | milestone 1 |
 | Q9 | `missing_docs`, `unwrap_used`, `expect_used` and `panic` are all denied, inherited from contracts. That is strict for a service: every `LazyLock` constant needs an `#[allow(…, reason = "…")]`. Kept, because a control plane is exactly where an `unwrap` is a 500 — but the `reason =` discipline must hold or the allows become noise. | ongoing |
-| Q10 | `ingest` and `scheduler` `main.rs` differ by one constant at milestone 1, and `AGENTS.md` forbids collapsing them. Flagged so a reviewer knows it is a deliberate cost, paid once, repaid at milestone 2 when edge and ingest gain a connection pool and scheduler gains a lease. If they have not diverged by milestone 7, that is a signal to collapse them — not to add an abstraction now. | ongoing |
+| ~~Q10~~ | ~~`ingest` and `scheduler` `main.rs` differ by one constant.~~ **Answered at milestone 7, as scheduled: they diverged.** Ingest gained a public listener, a required database, a schema check and a router; scheduler still binds nothing but its operator listener. The duplication is repaid and the two must not be collapsed. | — |
 
 ## Rules
 

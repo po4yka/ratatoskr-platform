@@ -50,6 +50,21 @@ impl SecretDigest {
         Self(digest)
     }
 
+    /// The digest of a presented credential.
+    ///
+    /// The one place a credential is hashed. Two surfaces authenticate against a stored digest —
+    /// a session on the client listener and a webhook source on the ingest listener — and a second
+    /// implementation of "hash the credential" is a way for them to disagree about what a
+    /// credential is.
+    ///
+    /// SHA-256, and deliberately not a password hash: the credential is a 256-bit random value we
+    /// minted, not a secret a person chose, so there is no low-entropy guess for a slow hash to
+    /// defend against.
+    #[must_use]
+    pub fn of(credential: &str) -> Self {
+        Self(<sha2::Sha256 as sha2::Digest>::digest(credential.as_bytes()).into())
+    }
+
     /// The bytes, for the one place that writes them into a `bytea` column.
     #[must_use]
     pub const fn as_bytes(&self) -> &[u8; 32] {
@@ -63,6 +78,26 @@ impl core::fmt::Debug for SecretDigest {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str("SecretDigest([REDACTED])")
     }
+}
+
+/// The digest of the credential in `Authorization: Bearer …`, when there is one.
+///
+/// The scheme is matched case-insensitively, per RFC 9110 11.1. The credential is hashed
+/// immediately and the plaintext is never returned, so no caller can hold it, log it, or pass it
+/// on. Shared by both authenticating surfaces for the same reason [`SecretDigest::of`] is: two
+/// parsers is two chances to disagree about what counts as a credential.
+#[must_use]
+pub fn bearer(headers: &http::HeaderMap) -> Option<SecretDigest> {
+    let value = headers.get(http::header::AUTHORIZATION)?.to_str().ok()?;
+    let (scheme, credential) = value.split_once(' ')?;
+    if !scheme.eq_ignore_ascii_case("bearer") {
+        return None;
+    }
+    let credential = credential.trim();
+    if credential.is_empty() {
+        return None;
+    }
+    Some(SecretDigest::of(credential))
 }
 
 /// Why a credential stopped being valid.

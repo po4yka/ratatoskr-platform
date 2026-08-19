@@ -52,9 +52,18 @@ fn each_role_boots_on_its_documented_configuration_and_reports_ready() {
         9464,
     );
 
-    // `DEVELOPMENT.md`, "Local run": scheduler and ingest, on defaults alone, no environment at
-    // all. Their admin ports differ per role precisely so that this works.
-    boots("ratatoskr-ingest", &[], 9465);
+    // Ingest, since milestone 7: a public listener of its own and a database it does not migrate.
+    // It runs AFTER edge on purpose — edge owns the migrations, so this order is the ownership
+    // relation, executed. Reversing the two makes ingest refuse to start, which is the behaviour
+    // `ingest_refuses_to_start_against_an_unmigrated_database` asserts deliberately.
+    boots(
+        "ratatoskr-ingest",
+        &[("RATATOSKR__DATABASE__URL", &database_url())],
+        9465,
+    );
+
+    // `DEVELOPMENT.md`, "Local run": the scheduler, on defaults alone, no environment at all. It is
+    // the one role that still needs none, and the one that never binds a public listener.
     boots("ratatoskr-scheduler", &[], 9466);
 }
 
@@ -80,7 +89,7 @@ fn edge_refuses_to_start_without_a_database() {
     let path = built_binary("ratatoskr-edge");
     let output = Command::new(&path)
         .env("RATATOSKR__ADMIN__BIND", "127.0.0.1:9467")
-        .env("RATATOSKR__PUBLIC__BIND", "127.0.0.1:8081")
+        .env("RATATOSKR__PUBLIC__BIND", "127.0.0.1:8090")
         .env_remove("RATATOSKR__DATABASE__URL")
         .output()
         .unwrap_or_else(|error| panic!("{} could not be spawned: {error}", path.display()));
@@ -98,6 +107,87 @@ fn edge_refuses_to_start_without_a_database() {
         text.contains("RATATOSKR__DATABASE__URL"),
         "the refusal must name the variable that is missing\n{text}"
     );
+}
+
+/// B-5. Ingest refuses to start without a database, for the same reason edge does: every signal it
+/// accepts is resolved against one, so a process that started anyway would report itself ready and
+/// then fail every delivery a source made to it.
+#[test]
+fn ingest_refuses_to_start_without_a_database() {
+    let text = refuses_to_start(
+        "ratatoskr-ingest",
+        &[
+            ("RATATOSKR__ADMIN__BIND", "127.0.0.1:9468"),
+            ("RATATOSKR__PUBLIC__BIND", "127.0.0.1:8091"),
+        ],
+    );
+    assert!(
+        text.contains("RATATOSKR__DATABASE__URL"),
+        "the refusal must name the variable that is missing\n{text}"
+    );
+}
+
+/// B-6. Ingest refuses to start against a database nobody migrated, and says who does.
+///
+/// `docs/ARCHITECTURE.md` S18 gives ingest a least-privilege database role, and a role that may
+/// create a schema is not least-privilege — so ingest applies no migrations and `ratatoskr-edge`
+/// owns them. Without this check the failure would arrive as a Postgres error on the first inbound
+/// signal, hours later, in a log nobody is reading.
+///
+/// The `postgres` maintenance database is the target because it is guaranteed to exist on the same
+/// server, is reachable with the same credential, and has never had a Platform migration applied to
+/// it. No fixture, no cleanup, and nothing to leave behind.
+#[test]
+fn ingest_refuses_to_start_against_an_unmigrated_database() {
+    let unmigrated = maintenance_database_url();
+    let text = refuses_to_start(
+        "ratatoskr-ingest",
+        &[
+            ("RATATOSKR__ADMIN__BIND", "127.0.0.1:9469"),
+            ("RATATOSKR__PUBLIC__BIND", "127.0.0.1:8092"),
+            ("RATATOSKR__DATABASE__URL", &unmigrated),
+        ],
+    );
+    assert!(
+        text.contains("platform_ingest"),
+        "the refusal must name the schema that is absent\n{text}"
+    );
+    assert!(
+        text.contains("ratatoskr-edge"),
+        "the refusal must name the process that applies the migrations\n{text}"
+    );
+}
+
+/// The `postgres` maintenance database on the same server as [`database_url`].
+///
+/// Built by replacing the path rather than by a second environment variable, so pointing the suite
+/// at another server moves both.
+fn maintenance_database_url() -> String {
+    let url = database_url();
+    match url.rfind('/') {
+        Some(cut) => format!("{}/postgres", &url[..cut]),
+        None => url,
+    }
+}
+
+/// Runs `binary` to completion with `env`, asserts it failed, and returns both its streams.
+fn refuses_to_start(binary: &str, env: &[(&str, &str)]) -> String {
+    let path = built_binary(binary);
+    // Removed first, then `env` is applied over it: a caller that supplies a database gets theirs,
+    // and one that does not gets none even if the developer running the suite exported one.
+    let output = Command::new(&path)
+        .env_remove("RATATOSKR__DATABASE__URL")
+        .envs(env.iter().copied())
+        .output()
+        .unwrap_or_else(|error| panic!("{} could not be spawned: {error}", path.display()));
+
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!output.status.success(), "{binary} must not start\n{text}");
+    text
 }
 
 /// Spawns `binary` with `env`, waits for readiness on `admin_port`, sends `SIGTERM`, and asserts a

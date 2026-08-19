@@ -31,6 +31,14 @@ fn now() -> jiff::Timestamp {
     jiff::Timestamp::now()
 }
 
+/// An `ApiState` with a healthy database and a configured bus — the two facts
+/// `GET /v2/capabilities` reads. Every route exercised here needs both.
+fn state(harness: &TestDatabase) -> ApiState {
+    let health = Arc::new(platform_http::RuntimeState::new(RuntimeRole::Edge));
+    health.set_database_reachable(true);
+    ApiState::new(harness.database.clone(), AUDIENCE, health, true)
+}
+
 fn app(state: ApiState) -> Router {
     let config = PublicConfig {
         bind: "127.0.0.1:0".parse().expect("a socket address"),
@@ -140,7 +148,7 @@ async fn the_stream_replays_history_and_ends_at_a_terminal_status() {
         ],
     )
     .await;
-    let app = app(ApiState::new(harness.database.clone(), AUDIENCE));
+    let app = app(state(&harness));
 
     let (status, body) = read_stream(&app, stream_request(CREDENTIAL, operation_id, None)).await;
     assert_eq!(status, StatusCode::OK);
@@ -175,7 +183,7 @@ async fn a_reconnect_resumes_after_the_last_event_the_client_saw() {
         ],
     )
     .await;
-    let app = app(ApiState::new(harness.database.clone(), AUDIENCE));
+    let app = app(state(&harness));
 
     let entries = platform_operations::progress_since(pool, operation_id, None, 100)
         .await
@@ -210,7 +218,7 @@ async fn the_stream_is_readable_only_by_the_owner() {
     let owner = seed_user(pool, CREDENTIAL).await;
     seed_user(pool, "another-credential").await;
     let operation_id = seed_operation(pool, owner, &[OperationStatus::Succeeded]).await;
-    let app = app(ApiState::new(harness.database.clone(), AUDIENCE));
+    let app = app(state(&harness));
 
     let (status, body) = read_stream(
         &app,
@@ -250,7 +258,7 @@ async fn the_stream_exposes_no_bus_detail() {
     let pool = harness.pool();
     let owner = seed_user(pool, CREDENTIAL).await;
     let operation_id = seed_operation(pool, owner, &[OperationStatus::Succeeded]).await;
-    let app = app(ApiState::new(harness.database.clone(), AUDIENCE));
+    let app = app(state(&harness));
 
     let (_, body) = read_stream(&app, stream_request(CREDENTIAL, operation_id, None)).await;
     for leak in [

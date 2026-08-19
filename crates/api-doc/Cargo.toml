@@ -1,0 +1,22 @@
+[package]
+name        = "ratatoskr-platform-api-doc"
+description = "The OpenAPI document, generated from the route tables that serve the public API."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+
+[lib]
+name = "platform_api_doc"
+path = "src/lib.rs"
+
+# No axum and no runtime: this crate describes routes, it does not serve them. Keeping the web
+# framework out means `openapic` builds and runs without a database, a bus or a listener.
+[dependencies]
+schemars.workspace   = true
+serde_json.workspace = true
+thiserror.workspace  = true
+
+[lints]
+workspace = true

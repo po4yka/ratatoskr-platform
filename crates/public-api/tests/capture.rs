@@ -29,6 +29,17 @@ fn now() -> jiff::Timestamp {
     jiff::Timestamp::now()
 }
 
+/// An `ApiState` with a healthy database and a configured bus.
+///
+/// The two facts `GET /v2/capabilities` reads. Every test here exercises a route that needs both,
+/// so the default is "the deployment is whole"; the capability tests are where the other
+/// combinations live.
+fn state(harness: &TestDatabase) -> ApiState {
+    let health = Arc::new(platform_http::RuntimeState::new(RuntimeRole::Edge));
+    health.set_database_reachable(true);
+    ApiState::new(harness.database.clone(), AUDIENCE, health, true)
+}
+
 /// The real public pipeline, not a bare router: the middleware is what renders an authored failure
 /// into an `ErrorEnvelope`, so a test without it would assert statuses and prove nothing about
 /// bodies.
@@ -105,7 +116,7 @@ async fn a_capture_is_accepted_and_produces_exactly_one_command() {
     let harness = TestDatabase::create().await.expect("a test database");
     let pool = harness.pool();
     let user = seed(pool, CREDENTIAL, AUDIENCE).await;
-    let app = app(ApiState::new(harness.database.clone(), AUDIENCE));
+    let app = app(state(&harness));
 
     let (status, body) = send(&app, submit(Some(CREDENTIAL), Some("key-1"), CAPTURE)).await;
     assert_eq!(status, StatusCode::ACCEPTED);
@@ -142,7 +153,7 @@ async fn a_retry_returns_the_original_operation() {
     let harness = TestDatabase::create().await.expect("a test database");
     let pool = harness.pool();
     seed(pool, CREDENTIAL, AUDIENCE).await;
-    let app = app(ApiState::new(harness.database.clone(), AUDIENCE));
+    let app = app(state(&harness));
 
     let (first_status, first) = send(&app, submit(Some(CREDENTIAL), Some("k"), CAPTURE)).await;
     let (second_status, second) = send(&app, submit(Some(CREDENTIAL), Some("k"), CAPTURE)).await;
@@ -174,7 +185,7 @@ async fn the_same_key_with_a_different_body_is_refused() {
     let harness = TestDatabase::create().await.expect("a test database");
     let pool = harness.pool();
     seed(pool, CREDENTIAL, AUDIENCE).await;
-    let app = app(ApiState::new(harness.database.clone(), AUDIENCE));
+    let app = app(state(&harness));
 
     send(&app, submit(Some(CREDENTIAL), Some("k"), CAPTURE)).await;
     let (status, body) = send(
@@ -208,7 +219,7 @@ async fn authentication_failures_are_indistinguishable() {
     seed(pool, CREDENTIAL, AUDIENCE).await;
     // A session for a different audience: a token minted for another surface must not work here.
     seed(pool, "other-surface-credential", "mini-app").await;
-    let app = app(ApiState::new(harness.database.clone(), AUDIENCE));
+    let app = app(state(&harness));
 
     for (name, credential) in [
         ("no credential", None),
@@ -246,7 +257,7 @@ async fn authentication_failures_are_indistinguishable() {
 async fn a_capture_without_an_idempotency_key_is_refused() {
     let harness = TestDatabase::create().await.expect("a test database");
     seed(harness.pool(), CREDENTIAL, AUDIENCE).await;
-    let app = app(ApiState::new(harness.database.clone(), AUDIENCE));
+    let app = app(state(&harness));
 
     let (status, body) = send(&app, submit(Some(CREDENTIAL), None, CAPTURE)).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
@@ -266,7 +277,7 @@ async fn a_capture_without_an_idempotency_key_is_refused() {
 async fn an_unusable_body_is_refused() {
     let harness = TestDatabase::create().await.expect("a test database");
     seed(harness.pool(), CREDENTIAL, AUDIENCE).await;
-    let app = app(ApiState::new(harness.database.clone(), AUDIENCE));
+    let app = app(state(&harness));
 
     for body in [
         "not json at all",
@@ -290,7 +301,7 @@ async fn an_operation_is_readable_only_by_its_owner() {
     let pool = harness.pool();
     seed(pool, CREDENTIAL, AUDIENCE).await;
     seed(pool, "second-user-credential", AUDIENCE).await;
-    let app = app(ApiState::new(harness.database.clone(), AUDIENCE));
+    let app = app(state(&harness));
 
     let (_, accepted) = send(&app, submit(Some(CREDENTIAL), Some("k"), CAPTURE)).await;
     let operation_id = accepted["operation_id"].as_str().expect("an id").to_owned();

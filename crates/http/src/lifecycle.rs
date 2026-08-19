@@ -70,6 +70,19 @@ impl RuntimeState {
         self.publish_readiness();
     }
 
+    /// What the last database probe found, or `None` when this role has no database configured.
+    ///
+    /// Read by `GET /v2/capabilities` (ADR-0008) so the "healthy" half of a capability is the same
+    /// fact `/health/ready` reports, arrived at the same way. A capability that consulted a
+    /// different signal could disagree with readiness, and one of the two would be wrong.
+    #[must_use]
+    pub fn database_reachable(&self) -> Option<bool> {
+        match self.database.load(Ordering::Acquire) {
+            DATABASE_ABSENT => None,
+            state => Some(state == DATABASE_UP),
+        }
+    }
+
     /// A shutdown signal arrived. Readiness fails immediately; the listeners stay open.
     pub fn begin_draining(&self) {
         self.draining.store(true, Ordering::Release);

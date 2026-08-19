@@ -10,11 +10,16 @@
 //!   must satisfy before it binds anything.
 //! - [`error`] — [`PlatformError`] and the closed public failure taxonomy the HTTP boundary
 //!   projects onto a contract `ErrorEnvelope`.
+//! - [`capability`] — [`Capability`], the closed vocabulary `GET /v2/capabilities` reports from.
+//! - [`address`] — the one bound both routes that accept an address apply.
 
+pub mod address;
+pub mod capability;
 pub mod config;
 pub mod error;
 pub mod role;
 
+pub use crate::capability::{Capability, Requirement};
 pub use crate::config::{BusConfig, ConfigError, DatabaseConfig, PlatformConfig, Violation};
 pub use crate::error::{FailureKind, PlatformError, PublicFault, Subsystem};
 pub use crate::role::RuntimeRole;

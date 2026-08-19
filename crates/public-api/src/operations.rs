@@ -5,6 +5,7 @@ use std::sync::Arc;
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::response::{IntoResponse as _, Response};
+use platform_api_doc::{In, Method, Parameter, Payload, ResponseDoc, RouteDoc, Security};
 use platform_core::FailureKind;
 use uuid::Uuid;
 
@@ -49,3 +50,50 @@ pub async fn read(
         }
     }
 }
+
+/// How this route is described in the generated `OpenAPI` document.
+pub const DOC: RouteDoc = RouteDoc {
+    method: Method::Get,
+    path: "/v2/operations/{operation_id}",
+    operation_id: "readOperation",
+    summary: "The current state of one operation",
+    description: "\
+Returns the operation as a snapshot: its status, the stage it is in, its progress, and its result \
+or its errors once it has one. The same shape every consumer of an operation sees; there is no \
+second, API-only projection to keep in step.\n\n\
+Poll this, or subscribe to `GET /v2/operations/{operation_id}/events` to be told instead of \
+asking. An operation you do not own and an operation that does not exist both answer 404, so this \
+route cannot be used to discover which identifiers are real.",
+    tag: "operations",
+    security: Security::Session,
+    parameters: &[Parameter {
+        name: "operation_id",
+        location: In::Path,
+        required: true,
+        format: Some("uuid"),
+        description: "The operation, as returned by the route that created it.",
+    }],
+    request: None,
+    responses: &[
+        ResponseDoc {
+            status: 200,
+            description: "The snapshot.",
+            payload: Some(Payload::Json("OperationSnapshot")),
+        },
+        ResponseDoc {
+            status: 401,
+            description: "No credential, or one that does not authenticate here.",
+            payload: Some(Payload::Json("ErrorEnvelope")),
+        },
+        ResponseDoc {
+            status: 404,
+            description: "No such operation, or it belongs to somebody else.",
+            payload: Some(Payload::Json("ErrorEnvelope")),
+        },
+        ResponseDoc {
+            status: 504,
+            description: "A dependency did not answer in time.",
+            payload: Some(Payload::Json("ErrorEnvelope")),
+        },
+    ],
+};

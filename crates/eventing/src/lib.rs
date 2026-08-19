@@ -20,12 +20,14 @@
 
 use platform_persistence::PersistenceError;
 
+pub mod command;
 pub mod consumer;
 pub mod inbox;
 pub mod outbox;
 pub mod publisher;
 pub mod pump;
 
+pub use crate::command::Command;
 pub use crate::consumer::{ConsumerReport, Handler, Incoming, deliver};
 pub use crate::inbox::{Inbox, Reception};
 pub use crate::outbox::{ClaimedMessage, Outbox, OutboxStats};

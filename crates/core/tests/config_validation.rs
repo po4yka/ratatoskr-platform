@@ -37,10 +37,11 @@ fn names(found: &[Violation], key: &str) -> bool {
 /// a startup failure and not a quietly headless process.
 #[test]
 fn edge_requires_a_public_listener() {
-    // The ingest defaults are the edge defaults minus the public table, which is exactly the
-    // configuration under test.
+    // The scheduler defaults are the edge defaults minus the public table, which is exactly the
+    // configuration under test. Milestone 7 gave ingest a listener of its own, so it is no longer
+    // the role whose defaults omit one.
     let without_public = Figment::from(Serialized::defaults(PlatformConfig::defaults(
-        RuntimeRole::Ingest,
+        RuntimeRole::Scheduler,
     )));
 
     let error = config::load_from(RuntimeRole::Edge, without_public)
@@ -80,24 +81,47 @@ fn scheduler_rejects_a_configured_public_listener() {
     });
 }
 
-/// C-9. `ARCHITECTURE.md` S9: no inbound adapter exists at milestone 1, so ingest has no public
-/// surface to expose yet.
+/// C-9. `ARCHITECTURE.md` S9: the webhook adapter of milestone 7 is reached from outside, so an
+/// ingest process without a listener is one no source can deliver to.
+///
+/// This test asserted the opposite until milestone 7, when the adapter arrived. The change is the
+/// one line `RuntimeRole::may_have_public_listener` always said it would be.
 #[test]
-fn ingest_rejects_a_configured_public_listener_at_milestone_one() {
-    Jail::expect_with(|jail| {
-        jail.set_env("RATATOSKR__PUBLIC__BIND", "127.0.0.1:8080");
+fn ingest_requires_a_public_listener() {
+    let without_public = Figment::from(Serialized::defaults(PlatformConfig::defaults(
+        RuntimeRole::Scheduler,
+    )));
 
-        let found = violations(RuntimeRole::Ingest);
+    let error = config::load_from(RuntimeRole::Ingest, without_public)
+        .expect_err("ingest without a public listener must not start");
+    let ConfigError::Invalid(found) = error else {
+        panic!("expected a semantic failure");
+    };
 
-        assert_eq!(found.len(), 1, "{found:?}");
-        assert_eq!(found[0].key, "public.bind");
-        assert!(
-            found[0]
-                .rule
-                .contains("ingest role must not open a public listener")
-        );
-        Ok(())
-    });
+    assert!(names(&found, "public.bind"));
+    assert!(
+        found[0]
+            .rule
+            .contains("ingest role requires a public listener"),
+        "{found:?}"
+    );
+}
+
+/// C-9b. The two roles that listen publicly must both start on one machine with no configuration,
+/// or a developer running the whole platform locally meets a bind failure that says nothing about
+/// roles.
+#[test]
+fn the_two_public_roles_default_to_different_ports() {
+    let edge = PlatformConfig::defaults(RuntimeRole::Edge);
+    let ingest = PlatformConfig::defaults(RuntimeRole::Ingest);
+
+    let (Some(edge_public), Some(ingest_public)) = (edge.public, ingest.public) else {
+        panic!("both roles default to a public listener");
+    };
+    assert_ne!(edge_public.bind, ingest_public.bind);
+    assert_ne!(edge.admin.bind, ingest.admin.bind);
+    assert_ne!(edge_public.bind, ingest.admin.bind);
+    assert_ne!(ingest_public.bind, edge.admin.bind);
 }
 
 /// C-10. `AGENTS.md` keeps the operator plane off the public surface; sharing one address would

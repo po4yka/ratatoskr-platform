@@ -76,6 +76,41 @@ pub enum Reservation {
     Conflict,
 }
 
+/// What a reservation means for the handler that took it.
+///
+/// Three outcomes rather than [`Reservation`]'s four, because a handler treats `InFlight` and
+/// `Conflict` identically — both refuse — while the reasons differ only in the log. Kept here
+/// rather than beside one route so the two route families that reserve keys cannot answer the same
+/// reservation differently.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Outcome {
+    /// Do the work, then [`complete`] this ledger row.
+    Proceed(Uuid),
+    /// Answer with this operation. The first attempt already created it, so doing the work again
+    /// would be the duplication the key exists to prevent.
+    Replay(Uuid),
+    /// Refuse with [`platform_core::FailureKind::IdempotencyConflict`].
+    Refuse,
+}
+
+impl Reservation {
+    /// What the caller should do about it.
+    #[must_use]
+    pub const fn outcome(&self) -> Outcome {
+        match *self {
+            Self::Fresh { record_id } => Outcome::Proceed(record_id),
+            Self::Replay {
+                operation_id: Some(operation_id),
+                ..
+            } => Outcome::Replay(operation_id),
+            // A completed reservation with no operation means the first attempt was refused before
+            // it created one. Replaying its refusal is more truthful than starting work the first
+            // attempt declined to start.
+            Self::Replay { .. } | Self::InFlight | Self::Conflict => Outcome::Refuse,
+        }
+    }
+}
+
 /// Reserve a key inside the caller's transaction.
 ///
 /// # Errors

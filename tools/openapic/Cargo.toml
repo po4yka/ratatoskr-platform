@@ -1,0 +1,22 @@
+[package]
+name        = "openapic"
+description = "Generates and drift-checks the public OpenAPI document from the route tables."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+publish     = false
+
+[[bin]]
+name = "openapic"
+path = "src/main.rs"
+
+[dependencies]
+ratatoskr-platform-api-doc.workspace    = true
+ratatoskr-platform-public-api.workspace = true
+ratatoskr-platform-ingest.workspace     = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

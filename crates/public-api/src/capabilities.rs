@@ -1,0 +1,134 @@
+//! What this deployment can actually do for the caller.
+//!
+//! `ARCHITECTURE.md` S12 and `AGENTS.md` rule 6: "Capabilities replace frontend assumptions." A
+//! client asks instead of guessing which optional service is deployed, and gates its own features
+//! on the answer.
+//!
+//! ADR-0008 fixes what the answer is computed from. Briefly: the vocabulary is closed
+//! ([`platform_core::Capability`]) and holds only names this build serves a route for; a capability
+//! is reported when the deployment has the components it needs, the last probe of those components
+//! answered, and the caller is authorized for it.
+
+use std::sync::Arc;
+
+use axum::Json;
+use axum::extract::State;
+use axum::response::{IntoResponse as _, Response};
+use platform_api_doc::{Method, Payload, ResponseDoc, RouteDoc, Security};
+use platform_core::Capability;
+
+use crate::{ApiState, Principal};
+
+/// The major version of this surface, as a client reads it. `ARCHITECTURE.md` S12.
+///
+/// A build constant, not configuration: it states what this binary serves, and an operator does not
+/// decide that.
+const API_VERSION: &str = "2.0";
+
+/// The oldest client release this surface still answers correctly.
+///
+/// Constants for the same reason [`API_VERSION`] is one. Raising a floor is a decision about the
+/// API's behaviour — a removed field, a narrowed accept — and it is made in the pull request that
+/// makes that change, not in a `ConfigMap`.
+const MINIMUM_WEB: &str = "2.0";
+const MINIMUM_MOBILE: &str = "2.0";
+
+/// What a client is told it may do.
+#[derive(Debug, serde::Serialize, schemars::JsonSchema)]
+pub struct CapabilityDocument {
+    /// The major version of this API surface.
+    pub api_version: &'static str,
+    /// The oldest client release per surface that this API still answers correctly.
+    pub minimum_client_versions: MinimumClientVersions,
+    /// The capabilities available to the caller right now, sorted, so two consecutive responses
+    /// from an unchanged deployment are byte-identical.
+    pub capabilities: Vec<&'static str>,
+}
+
+/// The client-version floors.
+///
+/// A struct rather than a map, so the set of surfaces is closed and a typo in a client name cannot
+/// silently produce a floor nobody reads. `ARCHITECTURE.md` S12 names these two.
+#[derive(Debug, serde::Serialize, schemars::JsonSchema)]
+pub struct MinimumClientVersions {
+    /// `ratatoskr-web`.
+    pub web: &'static str,
+    /// `ratatoskr-mobile`.
+    pub mobile: &'static str,
+}
+
+/// `GET /v2/capabilities`.
+///
+/// Authenticated, like every other `/v2` route, for the three reasons ADR-0008 records: the
+/// authorization input is per-principal by definition, the health input is operational state that
+/// `ARCHITECTURE.md` S15 keeps off an anonymous surface, and an authenticated route can be opened
+/// to anonymous callers later while the reverse breaks every client.
+pub async fn read(
+    State(state): State<Arc<ApiState>>,
+    // Authenticates, and is then deliberately unused: no capability in the vocabulary is
+    // grant-gated yet, so the document is the same for every principal. The filter over
+    // `identity.grants` arrives with the first capability that needs one, and the route already
+    // authenticates, so that change is invisible to a client.
+    _principal: Principal,
+) -> Response {
+    // The prober's last answer, not a fresh probe. `None` means this role has no database
+    // configured at all, which for a role serving this route is a deployment that cannot work;
+    // reporting nothing available is the truthful answer to it.
+    let database_reachable = state.health.database_reachable().unwrap_or(false);
+
+    let capabilities = Capability::ALL
+        .into_iter()
+        .filter(|capability| {
+            capability
+                .requires()
+                .is_met(database_reachable, state.bus_configured)
+        })
+        .map(Capability::as_str)
+        .collect();
+
+    (
+        http::StatusCode::OK,
+        Json(CapabilityDocument {
+            api_version: API_VERSION,
+            minimum_client_versions: MinimumClientVersions {
+                web: MINIMUM_WEB,
+                mobile: MINIMUM_MOBILE,
+            },
+            capabilities,
+        }),
+    )
+        .into_response()
+}
+
+/// How this route is described in the generated `OpenAPI` document.
+pub const DOC: RouteDoc = RouteDoc {
+    method: Method::Get,
+    path: "/v2/capabilities",
+    operation_id: "readCapabilities",
+    summary: "What this deployment can do for you",
+    description: "\
+Returns the API version, the client-version floors, and the capabilities available to the caller.\n\n\
+A capability is a stable name a client gates a feature on. It appears when this deployment has the \
+components that capability needs, those components answered their last health probe, and the \
+caller is authorized for it. It disappears the moment any of the three stops holding, so a client \
+must read this on every session rather than caching it across deployments.\n\n\
+The array is sorted and its vocabulary is closed: a name that is absent is a name this deployment \
+cannot honour, never a name it forgot to mention. Treat an unfamiliar name as a feature this \
+client does not implement, and a familiar name that is absent as a feature to hide.",
+    tag: "capabilities",
+    security: Security::Session,
+    parameters: &[],
+    request: None,
+    responses: &[
+        ResponseDoc {
+            status: 200,
+            description: "The capability document.",
+            payload: Some(Payload::Json("CapabilityDocument")),
+        },
+        ResponseDoc {
+            status: 401,
+            description: "No credential, or one that does not authenticate here.",
+            payload: Some(Payload::Json("ErrorEnvelope")),
+        },
+    ],
+};

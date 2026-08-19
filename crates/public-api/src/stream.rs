@@ -17,6 +17,7 @@ use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse as _, Response};
 use futures_util::stream::Stream;
 use http::HeaderMap;
+use platform_api_doc::{In, Method, Parameter, Payload, ResponseDoc, RouteDoc, Security};
 use platform_core::FailureKind;
 use platform_operations::transition;
 use uuid::Uuid;
@@ -116,3 +117,60 @@ fn progress_stream(
         }
     }
 }
+
+/// How this route is described in the generated `OpenAPI` document.
+pub const DOC: RouteDoc = RouteDoc {
+    method: Method::Get,
+    path: "/v2/operations/{operation_id}/events",
+    operation_id: "streamOperationEvents",
+    summary: "Follow one operation's progress",
+    description: "\
+A `text/event-stream` of the operation's recorded progress. Each frame carries `event: progress`, \
+an `id` that is the progress entry's identifier, and a JSON `data` object with the status, the \
+stage, the percentage and the instant the entry was observed.\n\n\
+Reconnect with `Last-Event-ID` set to the last `id` you received and the stream resumes after that \
+entry, so a dropped connection loses nothing. The stream ends when the operation reaches a terminal \
+status, because no further entry can arrive; a client that sees the stream close should read the \
+operation once to learn the outcome. A comment frame every fifteen seconds keeps an idle \
+connection open through a proxy.\n\n\
+Disconnecting does not affect the operation. This route reads persisted state only — no client \
+connection reaches the event bus, and nothing appears here that was not durably recorded first.",
+    tag: "operations",
+    security: Security::Session,
+    parameters: &[
+        Parameter {
+            name: "operation_id",
+            location: In::Path,
+            required: true,
+            format: Some("uuid"),
+            description: "The operation to follow.",
+        },
+        Parameter {
+            name: "Last-Event-ID",
+            location: In::Header,
+            required: false,
+            format: Some("uuid"),
+            description: "Resume after this progress entry. Sent automatically by a browser \
+                          `EventSource` on reconnection.",
+        },
+    ],
+    request: None,
+    responses: &[
+        ResponseDoc {
+            status: 200,
+            description: "The stream. It opens even for an operation that has produced no entry \
+                          yet.",
+            payload: Some(Payload::EventStream),
+        },
+        ResponseDoc {
+            status: 401,
+            description: "No credential, or one that does not authenticate here.",
+            payload: Some(Payload::Json("ErrorEnvelope")),
+        },
+        ResponseDoc {
+            status: 404,
+            description: "No such operation, or it belongs to somebody else.",
+            payload: Some(Payload::Json("ErrorEnvelope")),
+        },
+    ],
+};

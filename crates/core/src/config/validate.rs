@@ -44,7 +44,7 @@ pub(crate) fn validate(role: RuntimeRole, config: &PlatformConfig) -> Vec<Violat
         (true, None) => found.push(Violation {
             key: PUBLIC_BIND.0,
             env_var: PUBLIC_BIND.1,
-            rule: "the edge role requires a public listener (ARCHITECTURE.md S18)",
+            rule: required_public_listener(role),
         }),
         (false, Some(_)) => found.push(Violation {
             key: PUBLIC_BIND.0,
@@ -262,13 +262,27 @@ fn database_violations(config: &PlatformConfig) -> Vec<Violation> {
 /// The V1 message for a role that must never open a public listener.
 const fn forbidden_public_listener(role: RuntimeRole) -> &'static str {
     match role {
-        // Unreachable while `Edge` is the only role that may listen publicly; kept exhaustive so a
-        // new role must state its own rule text.
+        // The first two are unreachable while both roles may listen publicly; kept exhaustive so a
+        // new role must state its own rule text rather than inherit somebody else's.
         RuntimeRole::Edge => "the edge role must not open a public listener (ARCHITECTURE.md S18)",
         RuntimeRole::Ingest => {
-            "the ingest role must not open a public listener at milestone 1; the first inbound \
-             adapter arrives at milestone 7 (ARCHITECTURE.md S9)"
+            "the ingest role must not open a public listener (ARCHITECTURE.md S9)"
         }
+        RuntimeRole::Scheduler => {
+            "the scheduler role must not open a public listener (ARCHITECTURE.md S18)"
+        }
+    }
+}
+
+/// V1's other half: the roles that MUST listen publicly, and why each of them must.
+const fn required_public_listener(role: RuntimeRole) -> &'static str {
+    match role {
+        RuntimeRole::Edge => "the edge role requires a public listener (ARCHITECTURE.md S18)",
+        RuntimeRole::Ingest => {
+            "the ingest role requires a public listener; a webhook source reaches it from outside \
+             (ARCHITECTURE.md S9)"
+        }
+        // Unreachable: the scheduler may not have one, so it can never be missing one.
         RuntimeRole::Scheduler => {
             "the scheduler role must not open a public listener (ARCHITECTURE.md S18)"
         }

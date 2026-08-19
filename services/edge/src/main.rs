@@ -1,15 +1,20 @@
 //! The `ratatoskr-edge` deployable.
 //!
-//! Milestones 1 to 6: typed configuration, telemetry, the operator listener, the public API, the
-//! outbox publisher and the operation-event consumer.
+//! Milestones 1 to 7: typed configuration, telemetry, the operator listener, the public API, the
+//! outbox publisher, the operation-event consumer and the capability document.
+//!
+//! It also owns the migrations. `ratatoskr-ingest` reads two of the schemas and applies none of
+//! them (`ARCHITECTURE.md` S18: separate, least-privilege database roles), so this is the one
+//! process that brings a database up to date.
 
 use std::process::ExitCode;
+use std::sync::Arc;
 use std::time::Duration;
 
 use platform_core::RuntimeRole;
 use platform_core::config::PlatformConfig;
 use platform_eventing::{NatsPublisher, pump};
-use platform_http::Serving;
+use platform_http::{RuntimeState, Serving};
 use platform_operations::ProgressProjection;
 use platform_persistence::Database;
 use sqlx::PgPool;
@@ -53,7 +58,11 @@ impl platform_http::PublicRoutes for EdgeRoutes {
     /// request. The bus is treated the same way — the outbox is the durable half, but a publisher
     /// that cannot reach the broker means commands accumulate silently, which is worse to discover
     /// later than at startup.
-    async fn build(self, config: &PlatformConfig) -> Result<Serving, String> {
+    async fn build(
+        self,
+        config: &PlatformConfig,
+        health: &Arc<RuntimeState>,
+    ) -> Result<Serving, String> {
         let Some(database) = config.database.as_ref() else {
             return Err(
                 "ratatoskr-edge serves the public API and requires RATATOSKR__DATABASE__URL"
@@ -89,7 +98,12 @@ impl platform_http::PublicRoutes for EdgeRoutes {
             );
         }
 
-        let state = platform_public_api::ApiState::new(database.clone(), AUDIENCE);
+        let state = platform_public_api::ApiState::new(
+            database.clone(),
+            AUDIENCE,
+            Arc::clone(health),
+            config.bus.is_some(),
+        );
         Ok(Serving {
             routes: platform_public_api::routes(state),
             database: Some(database),

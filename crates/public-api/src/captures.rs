@@ -10,9 +10,10 @@ use axum::Json;
 use axum::extract::State;
 use axum::response::{IntoResponse as _, Response};
 use http::HeaderMap;
+use platform_api_doc::{In, Method, Parameter, Payload, ResponseDoc, RouteDoc, Security};
 use platform_core::FailureKind;
 use platform_eventing::{MessageClass, Outbox, Subject};
-use platform_idempotency::{Digest, Reservation};
+use platform_idempotency::{Digest, Outcome};
 use uuid::Uuid;
 
 use crate::{ApiState, Principal};
@@ -30,9 +31,9 @@ const COMMAND_TYPE: &str = "content.capture.requested.v1";
 const IDEMPOTENCY_KEY: &str = "idempotency-key";
 
 /// What a client submits.
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct SubmitCapture {
-    /// The address to capture.
+    /// The address to capture. `http` or `https`, with a host, at most 2048 characters.
     pub url: String,
 }
 
@@ -40,7 +41,7 @@ pub struct SubmitCapture {
 ///
 /// `ARCHITECTURE.md` S5.1: the API acknowledges durable ACCEPTANCE, not completion. The body
 /// therefore carries an operation to poll and nothing that could be mistaken for a result.
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, serde::Serialize, schemars::JsonSchema)]
 pub struct CaptureAccepted {
     /// The operation to poll at `/v2/operations/{id}`.
     pub operation_id: Uuid,
@@ -63,8 +64,30 @@ pub async fn submit(
         Ok(parsed) => parsed,
         Err(kind) => return platform_http::reject(kind),
     };
-    let key = key.as_str();
 
+    // The correlation the middleware already minted for this request (ADR-0007). `Option` because
+    // a unit test may call the handler without the middleware; in production it is always present.
+    let correlation = context.map_or_else(
+        || platform_telemetry::correlation::mint_correlation().to_string(),
+        |axum::Extension(context)| context.correlation_id.to_string(),
+    );
+
+    accept(&state, principal, &key, &submit, &body, &correlation).await
+}
+
+/// Reserve, create, enqueue, complete — in one transaction, so a crash at any point leaves all four
+/// or none.
+///
+/// Split from [`submit`] along the boundary that means something: everything before it decides
+/// whether this request is one we accept, and this does the work.
+async fn accept(
+    state: &ApiState,
+    principal: Principal,
+    key: &str,
+    submit: &SubmitCapture,
+    body: &[u8],
+    correlation: &str,
+) -> Response {
     let now = jiff::Timestamp::now();
     let Ok(subject) = Subject::new(MessageClass::Command, COMMAND_TYPE) else {
         tracing::error!(
@@ -86,7 +109,7 @@ pub async fn submit(
         ROUTE,
         OPERATION_KIND,
         Digest::of_key(key),
-        Digest::of_body(&body),
+        Digest::of_body(body),
         now,
         state.idempotency_ttl,
     )
@@ -99,23 +122,18 @@ pub async fn submit(
         }
     };
 
-    let record_id = match settle(&reservation) {
-        Settled::Proceed(record_id) => record_id,
-        Settled::Answer(response) => return response,
+    let record_id = match reservation.outcome() {
+        Outcome::Proceed(record_id) => record_id,
+        // S8.1: "Retrying the same payload returns the original operation."
+        Outcome::Replay(operation_id) => return accepted(operation_id),
+        Outcome::Refuse => return platform_http::reject(FailureKind::IdempotencyConflict),
     };
-
-    // The correlation the middleware already minted for this request (ADR-0007). `Option` because
-    // a unit test may call the handler without the middleware; in production it is always present.
-    let correlation = context.map_or_else(
-        || platform_telemetry::correlation::mint_correlation().to_string(),
-        |axum::Extension(context)| context.correlation_id.to_string(),
-    );
 
     let operation = match platform_operations::accept(
         &mut *transaction,
         principal.user_id,
         OPERATION_KIND,
-        &correlation,
+        correlation,
         Some(key),
         now,
     )
@@ -128,14 +146,15 @@ pub async fn submit(
         }
     };
 
-    let payload = command(
-        &operation,
-        principal.user_id,
-        &correlation,
-        key,
-        &submit.url,
-        now,
-    );
+    let payload = platform_eventing::Command {
+        command_type: COMMAND_TYPE,
+        operation_id: operation.operation_id,
+        principal: principal.user_id,
+        correlation_id: correlation,
+        idempotency_key: key,
+        requested_at: now,
+    }
+    .envelope(serde_json::json!({ "url": submit.url }));
 
     if let Err(error) = Outbox::enqueue(
         &mut *transaction,
@@ -174,65 +193,6 @@ pub async fn submit(
     accepted(operation.operation_id)
 }
 
-/// Turn a reservation into either a record to complete, or the answer to send instead.
-///
-/// Split out of [`submit`] so that function stays inside the workspace's length lint, and along the
-/// boundary that means something: everything before it decides WHETHER to do the work, everything
-/// after it does the work.
-fn settle(reservation: &Reservation) -> Settled {
-    match *reservation {
-        Reservation::Fresh { record_id } => Settled::Proceed(record_id),
-        // The original answer, not a new operation. S8.1: "Retrying the same payload returns the
-        // original operation."
-        Reservation::Replay {
-            operation_id: Some(operation_id),
-            ..
-        } => Settled::Answer(accepted(operation_id)),
-        // A completed reservation with no operation means the first attempt was refused before it
-        // created one. Replaying its refusal is more truthful than starting work the first attempt
-        // declined to start.
-        Reservation::Replay { .. } | Reservation::InFlight | Reservation::Conflict => {
-            Settled::Answer(platform_http::reject(FailureKind::IdempotencyConflict))
-        }
-    }
-}
-
-/// The command document.
-///
-/// A typed command envelope arrives when `ratatoskr-contracts` ships one; until then this carries
-/// exactly the members `ARCHITECTURE.md` S5.3 names, and the subject already fixes its type and its
-/// version.
-fn command(
-    operation: &platform_operations::Operation,
-    tenant: Uuid,
-    correlation: &str,
-    idempotency_key: &str,
-    url: &str,
-    now: jiff::Timestamp,
-) -> serde_json::Value {
-    serde_json::json!({
-        "command_id": Uuid::now_v7(),
-        "command_type": COMMAND_TYPE,
-        "requested_at": now.to_string(),
-        "operation_id": operation.operation_id,
-        "tenant_id": format!("user:{tenant}"),
-        "correlation_id": correlation,
-        "idempotency_key": idempotency_key,
-        "payload": { "url": url },
-    })
-}
-
-/// What a reservation means for the rest of the handler.
-///
-/// An enum rather than a `Result`, because a replay is not an error: it is a successful answer that
-/// happens to skip the work.
-enum Settled {
-    /// Do the work, then complete this ledger row.
-    Proceed(Uuid),
-    /// Send this instead.
-    Answer(Response),
-}
-
 /// Read the idempotency key and the body, or say which client error this is.
 ///
 /// The body is parsed from raw bytes rather than through `Json<T>`, because the fingerprint must be
@@ -252,7 +212,7 @@ fn parse(
 
     let submit: SubmitCapture =
         serde_json::from_slice(body).map_err(|_| FailureKind::InvalidRequest)?;
-    if !is_capturable(&submit.url) {
+    if !platform_core::address::is_capturable(&submit.url) {
         return Err(FailureKind::InvalidRequest);
     }
     Ok((key, submit))
@@ -270,16 +230,61 @@ fn accepted(operation_id: Uuid) -> Response {
         .into_response()
 }
 
-/// Whether Platform will hand this address to the extractor.
-///
-/// Deliberately shallow. Platform routes; it does not fetch, and `ARCHITECTURE.md` S15 says Edge
-/// "does not render or inspect active content". The real defence — SSRF policy, redirect handling,
-/// content limits — belongs to `ratatoskr-extractor`, which is the process that will actually open
-/// the connection. Rejecting an obviously unusable scheme here just avoids creating an operation
-/// that can only fail.
-fn is_capturable(raw: &str) -> bool {
-    let Ok(url) = url::Url::parse(raw) else {
-        return false;
-    };
-    matches!(url.scheme(), "http" | "https") && url.host().is_some() && raw.len() <= 2048
-}
+/// How this route is described in the generated `OpenAPI` document.
+pub const DOC: RouteDoc = RouteDoc {
+    method: Method::Post,
+    path: ROUTE,
+    operation_id: "submitCapture",
+    summary: "Submit an address for capture",
+    description: "\
+Accepts the address durably and returns the operation that tracks it. It does NOT return a result: \
+the work happens elsewhere, and `GET /v2/operations/{operation_id}` is where its outcome appears.\n\n\
+`Idempotency-Key` is required, not optional. A capture is a replayable mutation, and a retry \
+without a key is a second operation that looks like the first. Retrying with the same key and the \
+same body returns the ORIGINAL operation; the same key with a different body is refused, because \
+honouring it would silently replace the meaning of a request already sent.\n\n\
+The address is checked only for a usable scheme and host. Fetching it, following its redirects and \
+bounding what it returns belong to the service that opens the connection, not to this one.",
+    tag: "captures",
+    security: Security::Session,
+    parameters: &[Parameter {
+        name: "Idempotency-Key",
+        location: In::Header,
+        required: true,
+        format: None,
+        description: "A client-chosen key, 1 to 255 characters, unique per distinct request. It is \
+                      hashed before it is stored, so it may carry meaning the client considers \
+                      private.",
+    }],
+    request: Some(Payload::Json("SubmitCapture")),
+    responses: &[
+        ResponseDoc {
+            status: 202,
+            description: "Accepted durably. The body carries the operation to poll.",
+            payload: Some(Payload::Json("CaptureAccepted")),
+        },
+        ResponseDoc {
+            status: 400,
+            description: "No `Idempotency-Key`, a body that is not readable, or an address this \
+                          API will not accept. The `code` in the envelope distinguishes them.",
+            payload: Some(Payload::Json("ErrorEnvelope")),
+        },
+        ResponseDoc {
+            status: 401,
+            description: "No credential, or one that does not authenticate here.",
+            payload: Some(Payload::Json("ErrorEnvelope")),
+        },
+        ResponseDoc {
+            status: 409,
+            description: "The key is in use for a different body, or an earlier attempt with it \
+                          has not finished.",
+            payload: Some(Payload::Json("ErrorEnvelope")),
+        },
+        ResponseDoc {
+            status: 504,
+            description: "A dependency did not answer in time. Nothing was written; retrying with \
+                          the same key is safe and is the intended response.",
+            payload: Some(Payload::Json("ErrorEnvelope")),
+        },
+    ],
+};

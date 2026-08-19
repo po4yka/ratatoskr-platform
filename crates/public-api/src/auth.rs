@@ -7,7 +7,6 @@ use axum::response::Response;
 use http::request::Parts;
 use platform_core::FailureKind;
 use platform_identity::{SecretDigest, SessionKind};
-use sha2::{Digest as _, Sha256};
 use uuid::Uuid;
 
 use crate::ApiState;
@@ -42,7 +41,7 @@ impl FromRequestParts<Arc<ApiState>> for Principal {
     ) -> Result<Self, Self::Rejection> {
         let refuse = || platform_http::reject(FailureKind::Unauthenticated);
 
-        let Some(presented) = bearer(parts) else {
+        let Some(presented) = platform_identity::bearer(&parts.headers) else {
             return Err(refuse());
         };
 
@@ -73,34 +72,12 @@ impl FromRequestParts<Arc<ApiState>> for Principal {
     }
 }
 
-/// The digest of the credential in `Authorization: Bearer …`, when there is one.
-///
-/// The scheme is matched case-insensitively, per RFC 9110 11.1. The credential itself is hashed
-/// immediately and the original is never returned, so no caller can hold it.
-fn bearer(parts: &Parts) -> Option<SecretDigest> {
-    let value = parts
-        .headers
-        .get(http::header::AUTHORIZATION)?
-        .to_str()
-        .ok()?;
-    let (scheme, credential) = value.split_once(' ')?;
-    if !scheme.eq_ignore_ascii_case("bearer") {
-        return None;
-    }
-    let credential = credential.trim();
-    if credential.is_empty() {
-        return None;
-    }
-    Some(SecretDigest::new(
-        Sha256::digest(credential.as_bytes()).into(),
-    ))
-}
-
 /// Hash a credential the same way authentication does.
 ///
-/// Public so a session can be minted with a digest that will later match. Without it a caller would
-/// have to reproduce the hashing, and a mismatch would look like an authentication bug.
+/// Public so a session can be minted with a digest that will later match. It is
+/// [`SecretDigest::of`] under a name that says what it is for at the call site; there is still one
+/// implementation.
 #[must_use]
 pub fn credential_digest(credential: &str) -> SecretDigest {
-    SecretDigest::new(Sha256::digest(credential.as_bytes()).into())
+    SecretDigest::of(credential)
 }

@@ -28,9 +28,11 @@ It accepts work, routes it to the owning bounded context, and reports progress. 
 
 ## Current phase
 
-Milestone 1 of `docs/IMPLEMENTATION_PLAN.md` is implemented. Do not assume Rust crates, binaries, migrations, API routes, NATS streams, or CI commands exist unless they are present in the checkout.
+Milestones 1 through 7 of `docs/IMPLEMENTATION_PLAN.md` are implemented. Do not assume Rust crates, binaries, migrations, API routes, NATS streams, or CI commands exist unless they are present in the checkout.
 
-What now exists: the `ratatoskr-edge`, `ratatoskr-ingest` and `ratatoskr-scheduler` binaries; the `crates/core`, `crates/telemetry` and `crates/http` libraries; and the CI gate in `.github/workflows/ci.yml`. Migrations, database connections, API routes, NATS streams and OpenAPI remain absent, and the instruction above still applies to them in full. `DEVELOPMENT.md` states what is present and what is absent, command family by command family.
+What now exists: the three binaries; the libraries under `crates/`; the `identity`, `operations` and `platform_ingest` schemas in `migrations/`; the versioned public routes on `ratatoskr-edge` and the webhook adapter on `ratatoskr-ingest`; the transactional outbox, the inbox and the `JetStream` publisher and consumer; the generated `openapi/openapi.json`; and the CI gate in `.github/workflows/ci.yml`. The OAuth facade, the Telegram assertion exchange, scheduled command publication and deployment profiles remain absent, and the instruction above still applies to them in full. `DEVELOPMENT.md` states what is present and what is absent, command family by command family.
+
+The word is `ingest` wherever it is an identifier — schema, crate, library, binary, database role and path prefix — and "ingress" only in prose, where it names the activity (ADR-0009).
 
 When creating initial scaffolding:
 
@@ -159,11 +161,11 @@ When a cross-domain view is required, create an explicit projection/query contra
 
 Ingest is a thin entry adapter for generic sources such as RSS, standard webhooks, or normalized drop signals. It should:
 
-- authenticate the ingress source;
+- authenticate the source;
 - validate size/type limits;
 - normalize the input into a stable command;
 - assign idempotency/correlation metadata;
-- store only the ingress state it owns;
+- store only the state it owns;
 - return or acknowledge quickly.
 
 It must not perform article extraction, summarization, social synchronization, or GitHub backup work.

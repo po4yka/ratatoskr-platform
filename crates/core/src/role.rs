@@ -43,14 +43,17 @@ impl RuntimeRole {
         }
     }
 
-    /// Whether this role may bind a public listener at milestone 1.
+    /// Whether this role may bind a public listener.
     ///
-    /// `Edge` only. `Scheduler` is permanently false (`ARCHITECTURE.md` S18: "no public listener
-    /// except health"). `Ingest` becomes true at milestone 7, in the pull request that adds the
-    /// first inbound adapter (`ARCHITECTURE.md` S9) — one line, reviewed where it belongs.
+    /// `Edge` and, since milestone 7, `Ingest`: a webhook source reaches
+    /// `POST /v2/ingest/webhooks/{source_id}` over the public internet, so the adapter
+    /// `ARCHITECTURE.md` S9 describes cannot exist without a listener to reach it on.
+    ///
+    /// `Scheduler` is permanently false (`ARCHITECTURE.md` S18: "no public listener except
+    /// health"). It publishes commands and answers to nobody.
     #[must_use]
     pub const fn may_have_public_listener(self) -> bool {
-        matches!(self, Self::Edge)
+        matches!(self, Self::Edge | Self::Ingest)
     }
 
     /// Distinct per role so all three binaries run on one developer machine with no configuration:
@@ -61,6 +64,20 @@ impl RuntimeRole {
             Self::Edge => 9464,
             Self::Ingest => 9465,
             Self::Scheduler => 9466,
+        }
+    }
+
+    /// The default public listener port, for the roles that have one.
+    ///
+    /// Distinct for the same reason the admin ports are: two binaries that both listen publicly
+    /// must both start on one developer machine, and a shared default would make the second one
+    /// fail to bind with an error about an address rather than about a role.
+    #[must_use]
+    pub const fn default_public_port(self) -> Option<u16> {
+        match self {
+            Self::Edge => Some(8080),
+            Self::Ingest => Some(8081),
+            Self::Scheduler => None,
         }
     }
 }

@@ -60,8 +60,15 @@ pub trait PublicRoutes {
     ///
     /// Returning an error here is a startup failure, not a request failure: a binary that cannot
     /// reach the database it needs must refuse to report itself ready rather than serve 500s.
-    fn build(self, config: &PlatformConfig)
-    -> impl Future<Output = Result<Serving, String>> + Send;
+    ///
+    /// `health` is the same [`RuntimeState`] the readiness probe reads. It is passed rather than
+    /// rebuilt because `GET /v2/capabilities` reports whether a dependency is healthy (ADR-0008),
+    /// and a second source for that fact could disagree with the first.
+    fn build(
+        self,
+        config: &PlatformConfig,
+        health: &Arc<RuntimeState>,
+    ) -> impl Future<Output = Result<Serving, String>> + Send;
 }
 
 /// What a binary serves, and what it runs alongside.
@@ -83,7 +90,11 @@ pub struct Serving {
 pub struct NoPublicRoutes;
 
 impl PublicRoutes for NoPublicRoutes {
-    async fn build(self, _config: &PlatformConfig) -> Result<Serving, String> {
+    async fn build(
+        self,
+        _config: &PlatformConfig,
+        _health: &Arc<RuntimeState>,
+    ) -> Result<Serving, String> {
         Ok(Serving::default())
     }
 }
@@ -149,7 +160,7 @@ pub async fn run<R: PublicRoutes>(role: RuntimeRole, routes: R) -> ExitCode {
         routes: public_routes,
         database,
         tasks,
-    } = match routes.build(&config).await {
+    } = match routes.build(&config, &runtime).await {
         Ok(built) => built,
         Err(reason) => {
             startup.in_scope(|| {

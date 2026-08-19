@@ -4,9 +4,9 @@
 //! signal and serves no requests. A public listener is refused permanently, not only at this
 //! milestone (`ARCHITECTURE.md` S18).
 //!
-//! This file differs from `services/ingest/src/main.rs` by the value of `ROLE` alone. That
-//! duplication is deliberate: `AGENTS.md` requires the three deployables to stay separable as
-//! binaries, so a `--role` flag that collapses them into one process is forbidden.
+//! It no longer resembles `services/ingest/src/main.rs`: milestone 7 gave ingest a listener and a
+//! database, and this binary has neither. Open question Q10 asked for exactly that signal before
+//! milestone 7, and the answer is that the two have diverged and must not be collapsed.
 
 use std::process::ExitCode;
 

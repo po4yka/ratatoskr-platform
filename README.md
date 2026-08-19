@@ -2,7 +2,7 @@
 
 `ratatoskr-platform` provides the public control plane for Ratatoskr Next: identity, authentication, the Edge API, long-running operation tracking, generic ingestion entrypoints, and deterministic scheduling.
 
-> **Status:** milestone 1 of `docs/IMPLEMENTATION_PLAN.md` is implemented. Three binaries (`ratatoskr-edge`, `ratatoskr-ingest`, `ratatoskr-scheduler`) build, load a typed configuration, install telemetry, expose liveness, readiness, metrics and version on an operator listener, and drain on SIGTERM. `ratatoskr-edge` also binds a public listener that currently serves no routes and returns a contract `ErrorEnvelope` on every non-2xx. Milestones 2 and 3 add the two schemas Platform owns: `identity` (users, external identity mappings, devices, sessions, rotating refresh tokens, assertions, grants, revocations and the public-action audit trail) and `operations` (operations, attempts, progress history, typed result references and safe diagnostics), together with the operation transition table and a trigger that enforces the same rule for any writer that bypasses it. Milestone 4 adds the transactional outbox and inbox, the `cmd.`/`evt.` subject grammar and a JetStream publisher, so a state change and the message announcing it commit together or not at all. Milestone 5 adds the first public routes — `POST /v2/captures` and `GET /v2/operations/{id}` — session authentication and the idempotency ledger: a capture reserves its key, creates its operation and enqueues its command in one transaction, a retry returns the original operation, and the same key with a different payload is refused. Milestone 6 closes the loop: `ratatoskr-edge` publishes the outbox to `JetStream`, consumes `evt.>` back into the operation projection with inbox deduplication, and streams progress at `GET /v2/operations/{id}/events` — read from persisted state, never from the bus, which is never exposed to a client. Capabilities, generic ingress, OAuth, Telegram assertions and scheduling described below are planned and are not implemented.
+> **Status:** milestones 1 through 7 of `docs/IMPLEMENTATION_PLAN.md` are implemented. Three binaries (`ratatoskr-edge`, `ratatoskr-ingest`, `ratatoskr-scheduler`) build, load a typed configuration, install telemetry, expose liveness, readiness, metrics and version on an operator listener, and drain on SIGTERM. `ratatoskr-edge` also binds a public listener that currently serves no routes and returns a contract `ErrorEnvelope` on every non-2xx. Milestones 2 and 3 add the two schemas Platform owns: `identity` (users, external identity mappings, devices, sessions, rotating refresh tokens, assertions, grants, revocations and the public-action audit trail) and `operations` (operations, attempts, progress history, typed result references and safe diagnostics), together with the operation transition table and a trigger that enforces the same rule for any writer that bypasses it. Milestone 4 adds the transactional outbox and inbox, the `cmd.`/`evt.` subject grammar and a JetStream publisher, so a state change and the message announcing it commit together or not at all. Milestone 5 adds the first public routes — `POST /v2/captures` and `GET /v2/operations/{id}` — session authentication and the idempotency ledger: a capture reserves its key, creates its operation and enqueues its command in one transaction, a retry returns the original operation, and the same key with a different payload is refused. Milestone 6 closes the loop: `ratatoskr-edge` publishes the outbox to `JetStream`, consumes `evt.>` back into the operation projection with inbox deduplication, and streams progress at `GET /v2/operations/{id}/events` — read from persisted state, never from the bus, which is never exposed to a client. Milestone 7 adds `GET /v2/capabilities`, the `platform_ingest` schema and the generic webhook adapter at `POST /v2/ingest/webhooks/{source_id}` — the first thing `ratatoskr-ingest` serves, on a public listener of its own — and the generated public `OpenAPI` document in `openapi/openapi.json`, written from the route tables and drift-checked by the test suite. OAuth, Telegram assertions and scheduling described below are planned and are not implemented.
 
 ## Role in Ratatoskr Next
 
@@ -60,10 +60,10 @@ Platform owns its own PostgreSQL schemas, expected to include:
 ```text
 identity.*
 operations.*
-platform_ingress.*
+platform_ingest.*
 ```
 
-No schema exists yet; the first migration arrives with milestone 2. The ingress schema is spelled `platform_ingress.*` here and in `AGENTS.md` but `platform_ingest.*` in `docs/ARCHITECTURE.md` S4.1. That contradiction must be settled before the first migration, because a schema name is a migration; it is recorded as open question Q2 in `DEVELOPMENT.md`.
+All three exist in `migrations/`. The generic-ingress schema is spelled `platform_ingest`, and so are the crate, the library, the binary, the database role of `docs/ARCHITECTURE.md` S18 and the `/v2/ingest` path prefix: [ADR-0009](docs/adr/0009-one-spelling-for-generic-ingest.md) settled the contradiction this README used to record as open question Q2. "Ingress" survives in prose, where it names the activity rather than an identifier.
 
 Typical records include:
 
@@ -172,22 +172,17 @@ Telegram Mini App authentication follows the same rule: `ratatoskr-telegram` val
 - Internal service topology is never exposed as a client contract.
 - Provider-specific credentials and raw errors are not returned to clients.
 
-A capability response may resemble:
+`GET /v2/capabilities` answers with the API version, the client-version floors and the capabilities available to the caller:
 
 ```json
 {
   "api_version": "2.0",
-  "capabilities": [
-    "content.submit",
-    "github.catalog",
-    "vault.snapshots",
-    "telegram.mini_app",
-    "social.x",
-    "archive.chatgpt",
-    "archive.claude"
-  ]
+  "minimum_client_versions": { "web": "2.0", "mobile": "2.0" },
+  "capabilities": ["content.submit"]
 }
 ```
+
+The array is short because the vocabulary is closed and holds only names this build serves a route for. [ADR-0008](docs/adr/0008-capability-discovery.md) records why: a name on that list is a promise the route tree has to keep, so `github.catalog` and its siblings enter it in the pull request that adds the routes behind them, not before. A capability is reported when the deployment has the components it needs, those components answered their last health probe, and the caller is authorized for it — so `content.submit` disappears from a deployment with no event bus, whose captures would be accepted and never published.
 
 ## Security invariants
 
@@ -229,12 +224,12 @@ Correlation IDs connect client requests, operations, commands, domain events, an
 The authoritative sequence is `docs/IMPLEMENTATION_PLAN.md`.
 
 1. Establish the Axum service skeleton and typed configuration. **(implemented)**
-2. Add identity, session, and operation schemas with SQLx migrations.
-3. Implement NATS outbox/inbox infrastructure.
-4. Publish the initial operation and capture APIs.
-5. Add SSE operation progress.
-6. Implement capability discovery.
-7. Add generic device capture ingestion.
+2. Add identity, session, and operation schemas with SQLx migrations. **(implemented)**
+3. Implement NATS outbox/inbox infrastructure. **(implemented)**
+4. Publish the initial operation and capture APIs. **(implemented)**
+5. Add SSE operation progress. **(implemented)**
+6. Implement capability discovery. **(implemented)**
+7. Add generic device capture ingestion. **(implemented)**
 8. Add the thin scheduler and integration tests in `ratatoskr-workspace`.
 
 ## Workspace integration
@@ -243,6 +238,6 @@ The authoritative sequence is `docs/IMPLEMENTATION_PLAN.md`.
 
 ## Project status
 
-Milestone 1 is implemented: three binaries that configure themselves, report health, expose metrics, and stop cleanly, plus a public listener on Edge whose only behaviour is a correlated contract `ErrorEnvelope`. That is the entire implemented behaviour. Everything else in this README — schemas, endpoints, authentication, idempotency, events, SSE, capabilities and scheduling — documents the intended bounded context and does not exist in the checkout. `DEVELOPMENT.md` states what is present and what is absent, command family by command family.
+Milestones 1 through 7 of `docs/IMPLEMENTATION_PLAN.md` are implemented. Two of the three binaries serve public routes; `ratatoskr-scheduler` still binds nothing but its operator listener. What remains in this README and does not exist in the checkout: OAuth callback coordination, Telegram assertion exchange, scheduled command publication, rate limiting, and deployment profiles. `DEVELOPMENT.md` states what is present and what is absent, command family by command family.
 
-Three decisions are accepted and binding: [ADR-0002](docs/adr/0002-operation-state-machine-and-progress-semantics.md) (operation state machine, binds milestone 3), [ADR-0003](docs/adr/0003-service-identity-and-producer-name.md) (one wire producer identity for all three binaries; the NATS subject half is deferred to milestone 4), and [ADR-0007](docs/adr/0007-correlation-identity-and-trace-context.md) (correlation identity and trace context).
+Every accepted decision is binding: [ADR-0002](docs/adr/0002-operation-state-machine-and-progress-semantics.md) (operation state machine), [ADR-0003](docs/adr/0003-service-identity-and-producer-name.md) (one wire producer identity for all three binaries), [ADR-0004](docs/adr/0004-migration-layout-and-query-checking.md) (migration layout and runtime-checked queries), [ADR-0005](docs/adr/0005-nats-subjects-and-delivery.md) (NATS subjects and delivery), [ADR-0006](docs/adr/0006-public-api-versioning-and-openapi.md) (REST versioning, and who owns the public `OpenAPI` document), [ADR-0007](docs/adr/0007-correlation-identity-and-trace-context.md) (correlation identity and trace context), [ADR-0008](docs/adr/0008-capability-discovery.md) (what a capability is computed from), and [ADR-0009](docs/adr/0009-one-spelling-for-generic-ingest.md) (one spelling for generic ingest).

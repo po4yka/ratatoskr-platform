@@ -1439,6 +1439,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 
 [[package]]
+name = "openapic"
+version = "0.1.0"
+dependencies = [
+ "ratatoskr-platform-api-doc",
+ "ratatoskr-platform-ingest",
+ "ratatoskr-platform-public-api",
+ "serde_json",
+]
+
+[[package]]
 name = "openssl-probe"
 version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1912,6 +1922,8 @@ version = "0.1.0"
 dependencies = [
  "ratatoskr-platform-core",
  "ratatoskr-platform-http",
+ "ratatoskr-platform-ingest",
+ "ratatoskr-platform-persistence",
  "tokio",
 ]
 
@@ -1930,6 +1942,15 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.20",
  "uuid",
+]
+
+[[package]]
+name = "ratatoskr-platform-api-doc"
+version = "0.1.0"
+dependencies = [
+ "schemars",
+ "serde_json",
+ "thiserror 2.0.20",
 ]
 
 [[package]]
@@ -2015,14 +2036,47 @@ dependencies = [
 name = "ratatoskr-platform-identity"
 version = "0.1.0"
 dependencies = [
+ "http",
  "jiff",
  "ratatoskr-identifiers",
  "ratatoskr-platform-core",
  "ratatoskr-platform-persistence",
+ "sha2",
  "sqlx",
  "thiserror 2.0.20",
  "time",
  "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "ratatoskr-platform-ingest"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "http",
+ "http-body-util",
+ "jiff",
+ "ratatoskr-error-contracts",
+ "ratatoskr-platform-api-doc",
+ "ratatoskr-platform-core",
+ "ratatoskr-platform-eventing",
+ "ratatoskr-platform-http",
+ "ratatoskr-platform-idempotency",
+ "ratatoskr-platform-identity",
+ "ratatoskr-platform-operations",
+ "ratatoskr-platform-persistence",
+ "ratatoskr-platform-telemetry",
+ "schemars",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sqlx",
+ "thiserror 2.0.20",
+ "time",
+ "tokio",
+ "tower",
  "tracing",
  "uuid",
 ]
@@ -2072,8 +2126,10 @@ dependencies = [
  "http",
  "http-body-util",
  "jiff",
+ "ratatoskr-error-contracts",
  "ratatoskr-identifiers",
  "ratatoskr-operation-contracts",
+ "ratatoskr-platform-api-doc",
  "ratatoskr-platform-core",
  "ratatoskr-platform-eventing",
  "ratatoskr-platform-http",
@@ -2082,14 +2138,13 @@ dependencies = [
  "ratatoskr-platform-operations",
  "ratatoskr-platform-persistence",
  "ratatoskr-platform-telemetry",
+ "schemars",
  "serde",
  "serde_json",
- "sha2",
  "sqlx",
  "tokio",
  "tower",
  "tracing",
- "url",
  "uuid",
 ]
 
