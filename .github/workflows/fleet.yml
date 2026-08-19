@@ -124,9 +124,12 @@ jobs:
           # this something to switch off. A real key brings its base64 body, so a file needs both. The
           # body test is deliberately unanchored — a key indented inside YAML, or inlined with \n
           # escapes in a .env, is still a key. Paths arrive NUL-delimited because one with a space in it
-          # must not be skipped.
+          # must not be skipped. The run must also contain a character no hexadecimal digit can be:
+          # without that, THIS FILE matched itself, because it carries the PEM header in its own pattern
+          # and a forty-character action SHA that reads as base64. A PEM body is base64 and a git object
+          # name is hex, so one non-hex character separates them.
           while IFS= read -r -d '' f; do
-            if grep -qE '[A-Za-z0-9+/]{40,}={0,2}' "$f"; then
+            if grep -oE '[A-Za-z0-9+/]{40,}={0,2}' "$f" | grep -qE '[g-zG-Z+/=]'; then
               echo "::error file=$f::$f contains a private key. Treat the key as compromised."
               exit 1
             fi
