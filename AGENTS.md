@@ -41,6 +41,29 @@ When creating initial scaffolding:
 - avoid a global application service that imports every domain client;
 - document implemented behavior separately from planned architecture.
 
+## Deployment target
+
+Ratatoskr runs on ONE machine and there is no second one: a Raspberry Pi 5, `aarch64`, 4 cores, 16 GiB RAM, Debian 12 with glibc 2.36 and a 16 KiB page size, root moving to an NVMe SSD and every durable byte under `/mnt/nvme`. Three systemd units supervise the three binaries. There is no orchestrator, no kubelet, no pod, no replica, no rolling deployment and no secret store, and no milestone will add one. `ratatoskr-workspace/docs/DEPLOYMENT_TARGET.md` holds the host description, the storage contract and the port table; this section is complete without it.
+
+You may assume:
+
+- exactly one process per role, started by systemd on that host;
+- one PostgreSQL cluster (major 17) and one NATS server, shared with other tenants on the box;
+- a path under `/mnt/nvme` is durable storage;
+- the operator is one person with `ssh`, not a pipeline with an API.
+
+Stop assuming:
+
+- **a second instance.** Never answer a load or availability problem by adding one. The migration advisory lock, the outbox claim lease, the scheduler lease, the idempotency ledger and inbox deduplication STAY — they are what makes a restart and a redelivery safe, and both happen with one process. Do not remove them as speculative scale machinery (ADR-0010).
+- **a rolling deployment.** An upgrade is a full stop-start. Its outage window is drain plus grace plus startup, and nothing is behind it. The compatibility that matters is client-side: a client must survive a connection reset and retry, and an SSE consumer must resume with `Last-Event-ID`.
+- **spare memory or CPU.** The host runs other services, there is no disk swap, and a default sized from `num_cpus` is a bug on four cores. Every queue, cache, batch, connection pool and worker pool carries an explicit bound.
+- **the boot device.** New durable state gets an absolute path under `/mnt/nvme`, named in the deployment unit. A named Docker volume is not a location.
+- **that a dependency runs here.** Every crate, image and binary needs a `linux/arm64` build against glibc 2.36 that works on 16 KiB pages. An allocator that hard-codes a 4 KiB page is denied in `deny.toml`. "It builds from source" is a claim to verify BEFORE the dependency lands.
+- **a free port.** A port is allocated in the port table, not chosen, and a compiled default is for a developer machine only. Never answer a bind failure by widening a bind to `0.0.0.0`.
+
+Admin listeners (`/health/*`, `/metrics`, `/version`), PostgreSQL and NATS are never reachable from outside the host. `cloudflared` is the only public path and it reaches the public listeners only; operators reach everything else over Tailscale. A public listener may trust no inbound header it did not itself mint: the tunnel terminates TLS and rewrites headers, so the arriving set is attacker-influenced.
+
+
 ## Sources of truth
 
 Use this order:
@@ -210,10 +233,10 @@ Never log bearer tokens, authorization codes, cookies, raw Mini App `initData`, 
 - Platform writes only its owned schemas.
 - Cross-schema foreign keys and cross-schema writes are forbidden.
 - Migrations are forward-safe and independently deployable.
-- Public request acceptance must remain compatible during rolling deployment.
+- Public request acceptance must remain compatible across a full stop-start upgrade: a client must survive a connection reset and retry, and an SSE consumer must resume with `Last-Event-ID`. There is no rolling deployment on this target.
 - Destructive schema contraction follows expand/migrate/contract.
 - Audit/event records required for security or idempotency are not deleted as incidental cleanup.
-- The milestone that introduces a runtime dependency introduces, in the same pull request, its compose service, its command family in `DEVELOPMENT.md`, and at least one test that fails if the dependency is absent or misconfigured. A dependency is never added to the local stack before code connects to it.
+- The milestone that introduces a runtime dependency introduces, in the same pull request, its development service in `compose.yaml`, its unit or service in `deploy/`, its command family in `DEVELOPMENT.md`, and at least one test that fails if the dependency is absent or misconfigured. A dependency is never added to the local stack before code connects to it, and never added to `compose.yaml` alone — `compose.yaml` says of itself that it is not a deployment artifact, which is how the event bus reached milestone 7 fully depended upon and absent from the target host.
 
 If a feature requires a new service-owned field, change that service contract instead of adding a shadow copy to Platform without an explicit projection design.
 

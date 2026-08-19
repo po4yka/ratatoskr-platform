@@ -28,11 +28,15 @@ jobs:
     # would have given. Without it the suite does not run and the queries are unverified.
     services:
       postgres:
-        image: postgres:16
+        image: postgres:17
         env:
           POSTGRES_USER: platform
           POSTGRES_PASSWORD: platform
           POSTGRES_DB: platform
+          # Byte-identical to compose.yaml. Without it this cluster is created with the runner's
+          # glibc collation while a developer's is created with ICU, so a text index sorts
+          # differently in the two places that are supposed to be checking each other.
+          POSTGRES_INITDB_ARGS: "--locale-provider=icu --icu-locale=und-x-icu --encoding=UTF8"
         ports:
           - 5432:5432
         options: >-

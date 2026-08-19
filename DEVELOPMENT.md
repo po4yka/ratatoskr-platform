@@ -44,9 +44,11 @@ grammar, a `JetStream` publisher, and the pump that moves claimed rows onto the 
 accept work write their command into the outbox; the pump runs in `ratatoskr-edge` only.
 
 Absent: the OAuth callback facade and Telegram assertion exchange; scheduled command publication —
-`ratatoskr-scheduler` still binds nothing but its operator listener; the workspace end-to-end slice; a
-`Dockerfile` and deployment profiles. Those are milestones 8 through 10, and none of them is
-scaffolded, stubbed or present in the checkout.
+`ratatoskr-scheduler` still binds nothing but its operator listener; the single-host deployment
+profile; the `linux/arm64` artifact; and the workspace end-to-end slice. The OAuth facade and the
+Telegram exchange are item 8; the deployment profile is item 9; the artifact and the slice on the
+target are item 10. Assigning any of them to a RANGE of milestones assigns them to nobody, which is
+how the `Dockerfile` stayed unowned. None of them is scaffolded, stubbed or present in the checkout.
 
 ## Toolchain
 
@@ -161,8 +163,11 @@ curl -si localhost:8080/health/live # 404 — probes are NOT on the public liste
 kill -TERM "$(pgrep -f ratatoskr-edge)"
 ```
 
-`ratatoskr-edge` and `ratatoskr-ingest` each bind a public listener; their defaults are `8080` and
-`8081` so both run on one machine with no configuration. `ratatoskr-scheduler` never binds one
+`ratatoskr-edge` and `ratatoskr-ingest` each bind a public listener; the edge default is `8080` so it
+runs on a DEVELOPER machine with no configuration. `ratatoskr-ingest` has no compiled default and
+refuses to start without an explicit bind: on the deployment target `8081` is already held by another
+process, and a port on a host with co-tenants is an allocation, not a default. Its allocation there
+is `8181` (`ratatoskr-workspace/docs/DEPLOYMENT_TARGET.md`). `ratatoskr-scheduler` never binds one
 (`docs/ARCHITECTURE.md` S18) and refuses to start if one is configured.
 
 A webhook source is registered by an operator — there is no route for it, because who may create a
@@ -178,9 +183,23 @@ values (gen_random_uuid(), '<user>', 'an rss shim', digest('<credential>', 'sha2
 ### PostgreSQL — real
 
 ```bash
-docker compose up -d                 # PostgreSQL 16 on 127.0.0.1:5432, user/password/database `platform`
+docker compose up -d                 # PostgreSQL 17 on 127.0.0.1:5432, user/password/database `platform`
 docker compose down -v               # the documented reset: drops the named volume with the data
 ```
+
+The major version is pinned to what the deployment target runs, which is **17**
+(`ratatoskr-workspace/docs/DEPLOYMENT_TARGET.md`). ADR-0004 chose runtime-checked queries, so this
+container is the only verification the SQL gets, and against a different major it verifies the wrong
+thing. Moving the pin is not a tag bump: PostgreSQL refuses to start on a data directory initialised
+by another major, so `docker compose down -v` — the documented reset above — is part of the change.
+
+Collation is stated, never inherited. `compose.yaml` and `.github/workflows/ci.yml` set the same
+`POSTGRES_INITDB_ARGS`, and `TestDatabase::create` names the locale on every `create database`
+instead of copying `template1`. Without that, a text index sorts one way where it is built and
+another where it is read — and a `unique` index that does not hold is not a performance problem:
+`identities_provider_external_id_key` not holding means one external account maps to two internal
+users. ICU rather than glibc because PostgreSQL tracks the ICU version and warns on a mismatch, while
+a glibc collation changes silently across a distribution upgrade.
 
 The default `PLATFORM_TEST_DATABASE_URL` matches this compose file, so `docker compose up -d` followed
 by `cargo test --workspace` needs no further setup. The integration suite creates a disposable

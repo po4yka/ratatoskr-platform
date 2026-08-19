@@ -7,9 +7,11 @@
 
 services:
   postgres:
-    # Pinned to the major version the deployment targets. 16 is what is available offline here;
-    # a major upgrade is a migration exercise, not a tag bump, so it gets its own pull request.
-    image: postgres:16
+    # Pinned to the major version the deployment target runs, which is 17
+    # (`ratatoskr-workspace/docs/DEPLOYMENT_TARGET.md`). ADR-0004 chose runtime-checked queries, so
+    # this container is the ONLY verification the SQL gets — against a different major it verifies
+    # the wrong thing. A major upgrade is a migration exercise, not a tag bump.
+    image: postgres:17
     container_name: ratatoskr-platform-postgres
     environment:
       POSTGRES_USER: platform

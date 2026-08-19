@@ -66,9 +66,24 @@ impl TestDatabase {
             .map_err(PersistenceError::Connect)?;
         // The name is generated from a UUID, so it cannot carry an injection; PostgreSQL has no
         // bind parameters for an identifier in DDL.
-        pool.execute(format!(r#"create database "{name}""#).as_str())
-            .await
-            .map_err(PersistenceError::Query)?;
+        //
+        // The locale is stated rather than inherited. A bare `create database` copies template1,
+        // whose collation is a property of the cluster somebody happened to start — ICU under
+        // `compose.yaml`, the runner's glibc in CI, the host's glibc on the deployment target. Three
+        // collations across the three places that check each other is how a text index sorts one way
+        // where it is built and another where it is read; `identities_provider_external_id_key` not
+        // holding means one external account maps to two internal users. ICU because PostgreSQL
+        // tracks its version and warns on a mismatch, while a glibc collation changes silently
+        // across a distribution upgrade.
+        pool.execute(
+            format!(
+                r#"create database "{name}" template template0
+                   locale_provider icu icu_locale 'und-x-icu' encoding 'UTF8'"#
+            )
+            .as_str(),
+        )
+        .await
+        .map_err(PersistenceError::Query)?;
         pool.close().await;
 
         let options: PgConnectOptions = admin

@@ -10,6 +10,14 @@
 > and back into the projection a client reads. Item 7 opens a second door onto the same room:
 > `ratatoskr-ingest` serves a webhook adapter that produces the SAME command, and a client can now
 > ask which doors a deployment actually has.
+>
+> Items 9 and 10 were reworded on 2026-08-19. Item 9 already owned the deployment profile — five code
+> and documentation sites defer decisions to "the deployment profile at milestone 9" — while being
+> worded as a scheduler feature, so an agent reading only the plan shipped a scheduler. Item 10 as
+> written passed entirely on a developer's machine and claimed end-to-end success without touching
+> the machine the system runs on. The `linux/arm64` build is not a separate item: it is the
+> precondition of running the slice, and an item after the one it enables lets that item's Definition
+> of Done pass on the one check it exists for. See `ratatoskr-workspace/docs/DEPLOYMENT_TARGET.md`.
 
 Open questions that block a later item are recorded in `DEVELOPMENT.md`. Q2 (the `platform_ingress` versus `platform_ingest` schema spelling) blocked item 7 and is closed by [ADR-0009](adr/0009-one-spelling-for-generic-ingest.md). Q4 (the `correlation` entity kind in `contracts.toml`) is a one-line change to a sibling repository and is still open.
 
@@ -21,7 +29,11 @@ Open questions that block a later item are recorded in `DEVELOPMENT.md`. Q2 (the
 6. Project progress/results and expose SSE. *(implemented)*
 7. Add capabilities and generic ingress. *(implemented)*
 8. Add OAuth callback facade and Telegram assertion exchange.
-9. Add thin Scheduler command publication.
-10. Run the first workspace end-to-end vertical slice.
+9. Add thin Scheduler command publication **and the single-host deployment profile**: the `deploy/`
+   systemd units with their resource limits and start ordering, stream and consumer naming with
+   explicit retention limits, the NATS credential, the three database roles inside the host's
+   existing PostgreSQL cluster, the storage layout and the port map.
+10. Build the `linux/arm64` artifact and run the first workspace end-to-end vertical slice **on the
+    deployment target**.
 
-Definition of Done: requirements, persistence constraints, auth, retries, tests, telemetry, OpenAPI drift, migrations, and workspace integration pass. Deferred: broad automation, direct domain queries, and multi-tenant SaaS controls.
+Definition of Done: requirements, persistence constraints, auth, retries, tests, telemetry, OpenAPI drift, migrations, and workspace integration pass — and, from item 10 onward, the `linux/arm64` artifact builds and its boot tests pass on the deployment target. Deferred: broad automation, direct domain queries, and multi-tenant SaaS controls.

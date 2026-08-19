@@ -516,7 +516,7 @@ scheduler:
   allowlisted command publish permissions
 ```
 
-Horizontal Edge instances are stateless apart from PostgreSQL and the event bus. Scheduler uses leases or advisory locks so only one occurrence is emitted per schedule.
+Exactly one Edge process runs, and its state is entirely in PostgreSQL and the event bus. Scheduler uses leases or advisory locks so that a restart overlapping a drain, or a bus redelivery, cannot emit an occurrence twice — not because there is a second instance. The deployment target is a single host (`ratatoskr-workspace/docs/DEPLOYMENT_TARGET.md`); ADR-0010 records why every lock, lease and deduplication control is retained there, and forbids removing them on the grounds that one instance makes them unnecessary.
 
 ## 19. Architectural invariants
 
@@ -535,7 +535,10 @@ Horizontal Edge instances are stateless apart from PostgreSQL and the event bus.
 
 ## 20. Evolution
 
-Initial milestones:
+Initial milestones, as sketched during design. **`docs/IMPLEMENTATION_PLAN.md` is the plan of
+record** and this list is not maintained against it: the two decompose the same work differently and
+number it differently, so quoting a milestone number from here is how two plans of record come to
+disagree. Kept because the ordering below still reads as the intended arc.
 
 1. Identity, session, operation, idempotency, and error foundations.
 2. Transactional outbox/inbox and NATS integration.

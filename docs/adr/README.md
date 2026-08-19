@@ -26,7 +26,11 @@ request that writes it.
   **Accepted.**
 - [ADR-0009](0009-one-spelling-for-generic-ingest.md): One spelling for generic ingest. **Accepted**,
   and closes open question Q2.
+- [ADR-0010](0010-single-node-deployment.md): One process per role, and why the locks stay.
+  **Accepted.**
 
-Still unwritten, and deliberately unnumbered until somebody writes one: idempotency retention, the
-public authentication and device credential model, and the deployment profile that decides where
-publishers and stream declarations live.
+Still unwritten, and deliberately unnumbered until somebody writes one: idempotency retention, which
+should be written in the same pull request as the retention loop rather than left here; the public
+authentication and device credential model; and the single-node deployment profile that decides
+stream retention, consumer configuration, the NATS credential and the database roles — milestone 9,
+reserved by ADR-0005 and scoped out of ADR-0010.
