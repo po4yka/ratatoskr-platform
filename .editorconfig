@@ -1,0 +1,14 @@
+# Governs the files that exist today. Editor-side settings only; the gate does not check them, and a
+# checker for them would be a second opinion about bytes `.gitattributes` already fixes.
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+[*.md]
+# Markdown gives a hard line break its meaning from two trailing spaces, and the "> Status:" headers
+# in this repository's documents rely on it.
+trim_trailing_whitespace = false

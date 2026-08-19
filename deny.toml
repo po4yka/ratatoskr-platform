@@ -1,0 +1,47 @@
+# What `cargo deny check` enforces, and why each section is here rather than left to taste.
+#
+# This file exists because of what happened without it. Nothing else in the gate reads RustSec, and
+# the graph was carrying five advisories: four in rustls-webpki 0.102.8 — including a panic reachable
+# before a certificate's signature is verified — and rustls-pemfile, unmaintained with no safe
+# upgrade. All five arrived through async-nats and all five sat in ratatoskr-edge, the binary that
+# binds the public listener, while these crates deny `panic`, `unwrap_used` and `expect_used` in their
+# own code for exactly that reason. Nothing reported them for six milestones.
+
+[advisories]
+version = 2
+yanked  = "deny"          # a yanked lockfile entry is a build that cannot be reproduced
+
+[licenses]
+version = 2
+# Every expression the current graph resolves to. The same list is used in ratatoskr-contracts, so the
+# two files can be compared rather than reasoned about separately.
+allow = [
+    "Apache-2.0",
+    "MIT",
+    "MIT-0",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+    "CDLA-Permissive-2.0",
+]
+# One shared list covers two graphs, so a few entries are unused in either one. That is the price of
+# the lists being identical, and it is not a defect worth a warning on every run.
+unused-allowed-license = "allow"
+
+[bans]
+# Two versions of one crate is usually accidental rather than wrong, so this warns rather than fails.
+# It earned its place immediately: async-nats 0.42 held rustls-webpki 0.102.8 while the rest of the
+# graph was already on 0.103.14, and removing the duplicate is what closed the four advisories.
+multiple-versions = "warn"
+
+[sources]
+unknown-registry = "deny"
+unknown-git      = "deny"
+# The rule Cargo.toml states in prose, now with an exit code behind it: "A branch moves and a tag can
+# be moved, so neither pins." Nothing else stops a future edit from replacing the contracts `rev` with
+# a branch, and that edit would look harmless in review.
+required-git-spec = "rev"
+# The one git source this workspace is allowed to have. `https://` and not `ssh://` on purpose:
+# ratatoskr-contracts is public, so an anonymous fetch resolves it and CI holds no key.
+allow-git = ["https://github.com/po4yka/ratatoskr-contracts"]

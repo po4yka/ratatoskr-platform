@@ -75,6 +75,15 @@ jobs:
           exit 1
 
       - run: cargo fetch --locked
+
+      # Reads RustSec, the licence set, duplicate versions and the source policy. Nothing else in the
+      # gate looks at any of them, and the graph was carrying five advisories in the TLS path of the
+      # public-facing binary for six milestones because of it.
+      - uses: taiki-e/install-action@5b4d68e2e660441203ab128a23676f1e4faf1532 # v2.86.3
+        with:
+          tool: cargo-deny
+      - run: cargo deny check
+
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
@@ -86,3 +95,21 @@ jobs:
       - run: cargo build --workspace --locked
       - run: cargo test --workspace --locked
       - run: cargo build --workspace --locked --release
+
+      # This file and DEVELOPMENT.md are one list by rule, and the rule had no enforcement — the same
+      # defect class as a document claiming a capability the tree lacks. It passes today, so it starts
+      # as a guard rather than as a backlog item.
+      - name: The gate and DEVELOPMENT.md are one list
+        run: |
+          set -euo pipefail
+          in_ci=$(awk '/^[[:space:]]+- run: cargo /{sub(/^[[:space:]]+- run: /,""); print}' \
+                  .github/workflows/ci.yml)
+          in_doc=$(awk '/^### Rust — also the CI gate/{f=1} f&&/^cargo /{print} f&&/^```$/{exit}' \
+                   DEVELOPMENT.md)
+          if [ "$in_ci" != "$in_doc" ]; then
+            echo "::error::ci.yml and DEVELOPMENT.md have drifted. DEVELOPMENT.md is the one that is wrong."
+            diff <(echo "$in_ci") <(echo "$in_doc") || true
+            exit 1
+          fi
+          echo "the two lists are identical:"
+          echo "$in_ci" | awk '{print "  " $0}'

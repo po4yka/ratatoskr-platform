@@ -76,6 +76,7 @@ makes it real.
 
 ```bash
 cargo fetch --locked
+cargo deny check
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo build --workspace --locked
@@ -91,7 +92,15 @@ directory that a previous `cargo build` has not already populated, which is ever
 That is why the failure was invisible on a developer machine and immediate in CI.
 
 This list and the step list in `.github/workflows/ci.yml` are the same list. If they drift, this
-document is wrong.
+document is wrong.  That is now asserted by a step in the workflow rather than left to
+whoever edits one of the two files.
+
+`cargo deny check` is in the list because nothing else in the gate reads RustSec. When it was first
+run against this graph it reported five advisories, four of them a rustls-webpki reachable from
+`ratatoskr-edge` and one an unmaintained crate with no safe upgrade — none of which `cargo clippy` or
+`cargo test` can see. `deny.toml` also pins the dependency-source policy, including
+`required-git-spec = "rev"`, which turns the prose rule in `Cargo.toml` about branches and tags not
+pinning into an exit code.
 
 `cargo run -p openapic -- generate` is **not** in the gate, and must never be. It writes
 `openapi/openapi.json` from the routes, so a gate that ran it before `cargo test` would regenerate

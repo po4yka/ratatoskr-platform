@@ -1957,7 +1957,7 @@ version = "0.1.0"
 dependencies = [
  "schemars",
  "serde_json",
- "thiserror 2.0.20",
+ "thiserror",
 ]
 
 [[package]]
@@ -2080,7 +2080,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "sqlx",
- "thiserror 2.0.20",
+ "thiserror",
  "time",
  "tokio",
  "tower",
