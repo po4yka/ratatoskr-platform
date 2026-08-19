@@ -1,0 +1,197 @@
+# The artifact, published where something else can verify it came from here.
+#
+# `ci.yml` already builds this image on every push and smoke-tests it on a native arm64 runner. What
+# it does not do is keep it: the image exists for the length of one job and is discarded. So today
+# there is no way to deploy anything except by building it again on the target, which means the
+# thing that runs in production was compiled by a machine nobody audited from a tree nobody gated.
+#
+# This file publishes it, and attaches a provenance attestation. The attestation is the part that
+# matters: it is a signed statement, made by GitHub's own OIDC identity rather than by a key kept
+# here, that this exact image digest was produced by this workflow from this commit. Anyone holding
+# the image can check that with `gh attestation verify` and get an answer that does not depend on
+# trusting whoever handed them the image. That is the property SHA-pinning every action and digest-
+# pinning the PostgreSQL service were protecting on the way in; this is the same property on the
+# way out.
+#
+# The image is published under its version and NOT under `latest`. A moving tag is the thing this
+# project refuses everywhere else, and a deployment that follows one cannot say what it is running.
+#
+# Nothing here is triggered by a branch. The only automatic trigger is a `v*.*.*` tag.
+name: release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Push and attest. Leave off to build and smoke-test only.
+        type: boolean
+        default: false
+
+# SECURITY.md: deny by default. Raised on the one job, and only there.
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  # Never. A cancelled release is a half-published one.
+  cancel-in-progress: false
+
+jobs:
+  release:
+    # Native arm64, because that is what the artifact is. `ratatoskr-workspace/docs/
+    # DEPLOYMENT_TARGET.md` fixes the target as one Raspberry Pi 5, and a release built on x86 would
+    # be a release nobody can run. GitHub's arm64 runners are free on a public repository.
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+
+    permissions:
+      contents: write      # to create the GitHub release
+      packages: write      # to push the image to ghcr.io
+      id-token: write      # the OIDC token the attestation is signed with — no key is stored here
+      attestations: write  # to record the attestation against the repository
+
+    env:
+      IMAGE: ghcr.io/po4yka/ratatoskr-platform
+      # A tag publishes. A manual run publishes only when asked, so the expensive and failure-prone
+      # half — the arm64 build and the smoke test — can be exercised without putting anything in a
+      # registry.
+      PUBLISH: ${{ github.event_name == 'push' || inputs.publish }}
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # `git merge-base` below needs history. A tag can be pushed from any commit in the
+          # repository, including one that was never on main.
+          fetch-depth: 0
+
+      - name: The tag is a commit that main actually contains
+        run: |
+          set -euo pipefail
+          # A tag is a name a person types, and it can name a commit that failed the gate, or one
+          # from an abandoned branch. `main` is the branch the gates protect, so an artifact is only
+          # allowed to come from a commit main can reach. The repository is public, so this fetch
+          # needs no credential and the checkout above kept none.
+          git fetch --no-tags --quiet origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" FETCH_HEAD; then
+            echo "::error::$GITHUB_SHA is not reachable from main, so it was never gated"
+            exit 1
+          fi
+          echo "$GITHUB_SHA is reachable from main"
+
+      - name: The tag and the manifest agree on the version
+        id: version
+        run: |
+          set -euo pipefail
+          case "$GITHUB_REF" in
+            refs/tags/v*)
+              version="${GITHUB_REF#refs/tags/v}"
+              # The one failure this catches is tagging v0.2.0 with the manifest still on 0.1.0,
+              # which produces an image whose name and whose `platform_build_info` disagree.
+              manifest=$(sed -n 's/^version[[:space:]]*=[[:space:]]*"\(.*\)".*/\1/p' Cargo.toml | head -1)
+              if [ "$version" != "$manifest" ]; then
+                echo "::error::tag says $version and Cargo.toml says $manifest"
+                exit 1
+              fi
+              ;;
+            *)
+              # A manual run is not a release and must not be able to name itself like one.
+              version="0.0.0-dispatch.${GITHUB_SHA:0:7}"
+              ;;
+          esac
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "building $version"
+
+      - name: Build the image
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          # `$GITHUB_SHA` rather than the `github.sha` context expression: the runner exports the
+          # same value, and a context expression is substituted into the script before the shell
+          # sees it. That substitution happens inside a `#` comment too — which is how zizmor came
+          # to report this very comment as a template injection when it named the expression.
+          docker build \
+            --build-arg RATATOSKR_GIT_SHA="$GITHUB_SHA" \
+            --tag "$IMAGE:$VERSION" .
+
+      - name: Every binary in it loads its configuration
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          # The same assertion `ci.yml` makes, made again against the image that is about to be
+          # published rather than against one built from the same tree. Ingest is expected to
+          # REFUSE without an explicit public bind: 78 is its correct answer and 0 would be a defect.
+          run() { docker run --rm "$@"; }
+          run "$IMAGE:$VERSION" ratatoskr-edge check-config >/dev/null
+          run "$IMAGE:$VERSION" ratatoskr-scheduler check-config >/dev/null
+          run -e RATATOSKR__PUBLIC__BIND=127.0.0.1:8181 \
+              "$IMAGE:$VERSION" ratatoskr-ingest check-config >/dev/null
+          if run "$IMAGE:$VERSION" ratatoskr-ingest check-config >/dev/null 2>&1; then
+            echo "::error::ingest must refuse to start without an explicit public bind"
+            exit 1
+          fi
+          echo "all three binaries load their configuration"
+
+      - name: Sign in to ghcr.io
+        if: env.PUBLISH == 'true'
+        env:
+          # The repository's own token, used through stdin so it is never an argument in the process
+          # list. No registry credential is stored in this repository.
+          REGISTRY_TOKEN: ${{ github.token }}
+          ACTOR: ${{ github.actor }}
+        run: printf '%s' "$REGISTRY_TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
+
+      - name: Push, and record the digest that was actually published
+        id: push
+        if: env.PUBLISH == 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          docker push "$IMAGE:$VERSION"
+          # Read back from the registry rather than computing locally: the digest the attestation
+          # names has to be the digest a puller resolves, and those are the same number only if it
+          # is taken from the push.
+          digest=$(docker inspect --format='{{index .RepoDigests 0}}' "$IMAGE:$VERSION" | cut -d@ -f2)
+          case "$digest" in
+            sha256:*) ;;
+            *) echo "::error::could not read the published digest, got '$digest'"; exit 1 ;;
+          esac
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "published $IMAGE@$digest"
+
+      - name: Attest that this workflow built this digest
+        if: env.PUBLISH == 'true'
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          # Stored beside the image, so a puller can verify without asking this repository first.
+          push-to-registry: true
+
+      - name: Create the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          set -euo pipefail
+          {
+            echo "\`$IMAGE:$VERSION\`"
+            echo
+            echo "Pull by digest, not by tag:"
+            echo
+            echo '```'
+            echo "docker pull $IMAGE@$DIGEST"
+            echo "gh attestation verify oci://$IMAGE@$DIGEST --repo $GITHUB_REPOSITORY"
+            echo '```'
+            echo
+            echo "Built from $GITHUB_SHA on a native arm64 runner. linux/arm64 only:"
+            echo "the deployment target is a Raspberry Pi 5 running Debian 12."
+          } > notes.md
+          gh release create "$GITHUB_REF_NAME" --title "$VERSION" --notes-file notes.md
