@@ -164,8 +164,10 @@ fn ingest_refuses_to_start_against_an_unmigrated_database() {
 /// at another server moves both.
 fn maintenance_database_url() -> String {
     let url = database_url();
-    match url.rfind('/') {
-        Some(cut) => format!("{}/postgres", &url[..cut]),
+    // `rsplit_once` rather than `rfind` and a slice: it needs no byte offset, so there is no index to
+    // be wrong about and nothing for `clippy::string_slice` to warn on.
+    match url.rsplit_once('/') {
+        Some((head, _)) => format!("{head}/postgres"),
         None => url,
     }
 }

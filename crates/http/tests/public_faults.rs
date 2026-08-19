@@ -6,6 +6,15 @@
     clippy::unwrap_used,
     reason = "assertions in a test binary"
 )]
+// Separate from the block above because the reason is different, and because clippy has an
+// `allow-indexing-slicing-in-tests` configuration key but no `allow-string-slice-in-tests` one, so
+// this cannot live in clippy.toml with the others. The text sliced here is a Prometheus exposition
+// body and a JSON error body, both ASCII by construction; the lint is denied workspace-wide because
+// production code slices header values and idempotency keys, which are not.
+#![allow(
+    clippy::string_slice,
+    reason = "ASCII fixtures parsed by offset in a test binary"
+)]
 
 use std::fs;
 use std::path::Path;
