@@ -228,13 +228,16 @@ fn a_listener_that_cannot_bind_exits_one() {
 /// The path of a workspace binary, resolved beside this package's own one.
 ///
 /// `CARGO_BIN_EXE_*` is set only for the binaries of the package under test, so the other two are
-/// found by name in the same directory. `cargo test --workspace` and
-/// `cargo build --workspace --all-targets` both put them there.
+/// found by name in the same directory. Only a build puts them there: `cargo build --workspace`
+/// does, and `cargo test --workspace` does NOT — it builds the binary of the package whose tests it
+/// is running, never a sibling package's plain binary. The gate therefore runs `cargo build
+/// --workspace --locked` before `cargo test`, and DEVELOPMENT.md records why.
 fn built_binary(binary: &str) -> PathBuf {
     let path = Path::new(env!("CARGO_BIN_EXE_ratatoskr-edge")).with_file_name(binary);
     assert!(
         path.is_file(),
-        "{} has not been built; run `cargo test --workspace`",
+        "{} has not been built; run `cargo build --workspace` first (`cargo test` does not build \
+         a sibling package's binary)",
         path.display()
     );
     path

@@ -73,9 +73,17 @@ makes it real.
 cargo fetch --locked
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo build --workspace --locked
 cargo test --workspace --locked
 cargo build --workspace --locked --release
 ```
+
+The debug build is not redundant with the release build at the end, and it is not there for speed.
+`services/edge/tests/boot.rs` executes `ratatoskr-ingest` and `ratatoskr-scheduler` as child
+processes, and `cargo test` builds the binary of the package under test only — it never produces a
+sibling package's plain binary. Skip this step and three of the four boot tests fail on any target
+directory that a previous `cargo build` has not already populated, which is every clean checkout.
+That is why the failure was invisible on a developer machine and immediate in CI.
 
 This list and the step list in `.github/workflows/ci.yml` are the same list. If they drift, this
 document is wrong.

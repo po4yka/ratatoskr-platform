@@ -77,5 +77,12 @@ jobs:
       - run: cargo fetch --locked
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      # Before the tests, not after: services/edge/tests/boot.rs executes ratatoskr-ingest and
+      # ratatoskr-scheduler as child processes, and `cargo test` builds the binary of the package
+      # under test only — a sibling package's plain binary is never produced by it. Without this step
+      # three of the four boot tests fail on any target directory that a previous `cargo build` has
+      # not already populated, which is every clean checkout, CI or laptop.
+      - run: cargo build --workspace --locked
       - run: cargo test --workspace --locked
       - run: cargo build --workspace --locked --release
