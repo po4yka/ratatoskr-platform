@@ -130,6 +130,7 @@ checksum = "31b698c5f9a010f6573133b09e0de5408834d0c82f8d7475a89fc1867a71cd90"
 dependencies = [
  "axum-core",
  "bytes",
+ "form_urlencoded",
  "futures-util",
  "http",
  "http-body",
@@ -145,6 +146,7 @@ dependencies = [
  "serde_core",
  "serde_json",
  "serde_path_to_error",
+ "serde_urlencoded",
  "sync_wrapper",
  "tokio",
  "tower",
@@ -1866,6 +1868,7 @@ name = "ratatoskr-edge"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "base64",
  "jiff",
  "ratatoskr-platform-core",
  "ratatoskr-platform-eventing",
@@ -1964,6 +1967,7 @@ dependencies = [
 name = "ratatoskr-platform-core"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "figment",
  "http",
  "ratatoskr-error-contracts",
@@ -2043,11 +2047,15 @@ dependencies = [
 name = "ratatoskr-platform-identity"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "http",
  "jiff",
  "ratatoskr-identifiers",
  "ratatoskr-platform-core",
  "ratatoskr-platform-persistence",
+ "ring",
+ "serde",
+ "serde_json",
  "sha2",
  "sqlx",
  "thiserror",
@@ -2129,6 +2137,7 @@ version = "0.1.0"
 dependencies = [
  "async-stream",
  "axum",
+ "base64",
  "futures-util",
  "http",
  "http-body-util",
@@ -2145,6 +2154,7 @@ dependencies = [
  "ratatoskr-platform-operations",
  "ratatoskr-platform-persistence",
  "ratatoskr-platform-telemetry",
+ "ring",
  "schemars",
  "serde",
  "serde_json",
@@ -2152,6 +2162,7 @@ dependencies = [
  "tokio",
  "tower",
  "tracing",
+ "url",
  "uuid",
 ]
 

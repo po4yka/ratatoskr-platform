@@ -28,9 +28,14 @@ request that writes it.
   and closes open question Q2.
 - [ADR-0010](0010-single-node-deployment.md): One process per role, and why the locks stay.
   **Accepted.**
+- [ADR-0011](0011-identity-assertion-trust-model.md): What an identity assertion is, and what
+  Platform must hold to believe one. **Accepted.**
+- [ADR-0012](0012-oauth-callback-relay.md): How an authorization code reaches the service that owns
+  it. **Accepted**, with an amendment recorded in place: the first design bound a relay to the
+  claiming session's audience and could never have worked.
 
 Still unwritten, and deliberately unnumbered until somebody writes one: idempotency retention, which
-should be written in the same pull request as the retention loop rather than left here; the public
-authentication and device credential model; and the single-node deployment profile that decides
+should be written in the same pull request as the retention loop rather than left here; the device
+credential model, which is the half of public authentication milestone 8 did not touch; and the single-node deployment profile that decides
 stream retention, consumer configuration, the NATS credential and the database roles — milestone 9,
 reserved by ADR-0005 and scoped out of ADR-0010.

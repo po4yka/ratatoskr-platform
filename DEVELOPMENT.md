@@ -1,12 +1,12 @@
 # Developing Ratatoskr Platform
 
-> Status: Implemented for milestones 1 through 7; milestones 8 through 10 are Proposed.  
+> Status: Implemented for milestones 1 through 8; milestones 9 and 10 are Proposed.  
 > Owner: `ratatoskr-platform`  
 > Last reviewed: 2026-08-19
 
 ## Current stage
 
-Milestones 1 through 7 of `docs/IMPLEMENTATION_PLAN.md` exist and the commands marked **real** below
+Milestones 1 through 8 of `docs/IMPLEMENTATION_PLAN.md` exist and the commands marked **real** below
 are real.
 
 Present: the Cargo workspace, its pinned toolchain and its committed `Cargo.lock`; the
@@ -19,6 +19,14 @@ version on an operator listener; SIGTERM draining; and the CI gate in `.github/w
 Present since milestone 2 and 3: the `identity` and `operations` schemas in `migrations/`, a local
 PostgreSQL in `compose.yaml`, the `ratatoskr-platform-persistence` pool and embedded migrator, and the
 `ratatoskr-platform-identity` and `ratatoskr-platform-operations` crates with their integration suites.
+
+Present since milestone 8: `POST /v2/sessions/telegram`, which exchanges a `ratatoskr-telegram`
+identity assertion for a session (ADR-0011 — Platform holds only the issuer's Ed25519 PUBLIC key, so
+it can verify an assertion and cannot issue one); the OAuth callback facade at
+`GET /v2/oauth/{provider}/callback` and `POST /v2/oauth/relays/{relay_id}` (ADR-0012 — the
+authorization code reaches the owning service through a one-time record and appears in no command,
+no log and no redirect); `identity.grants` finally has a reader, and it is what authorizes a claim;
+and `identity.audit_events` finally has a writer, for both the grants and the denials.
 
 Present since milestone 7: `GET /v2/capabilities`; the `platform_ingest` schema and the generic
 webhook adapter at `POST /v2/ingest/webhooks/{source_id}`, served by `ratatoskr-ingest` on a public
@@ -43,11 +51,10 @@ Present since milestone 4: the transactional outbox and the inbox in `operations
 grammar, a `JetStream` publisher, and the pump that moves claimed rows onto the bus. Both routes that
 accept work write their command into the outbox; the pump runs in `ratatoskr-edge` only.
 
-Absent: the OAuth callback facade and Telegram assertion exchange; scheduled command publication —
-`ratatoskr-scheduler` still binds nothing but its operator listener; the single-host deployment
-profile; the `linux/arm64` artifact; and the workspace end-to-end slice. The OAuth facade and the
-Telegram exchange are item 8; the deployment profile is item 9; the artifact and the slice on the
-target are item 10. Assigning any of them to a RANGE of milestones assigns them to nobody, which is
+Absent: scheduled command publication — `ratatoskr-scheduler` still binds nothing but its operator
+listener; the single-host deployment profile; and the workspace end-to-end slice on the target. The
+deployment profile is item 9; the slice is item 10. The device credential model is in no item: it is
+the half of public authentication milestone 8 did not touch, and it has no ADR yet. Assigning any of them to a RANGE of milestones assigns them to nobody, which is
 how the `Dockerfile` stayed unowned. None of them is scaffolded, stubbed or present in the checkout.
 
 ## Toolchain

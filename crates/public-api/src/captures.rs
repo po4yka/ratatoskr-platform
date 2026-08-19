@@ -65,12 +65,7 @@ pub async fn submit(
         Err(kind) => return platform_http::reject(kind),
     };
 
-    // The correlation the middleware already minted for this request (ADR-0007). `Option` because
-    // a unit test may call the handler without the middleware; in production it is always present.
-    let correlation = context.map_or_else(
-        || platform_telemetry::correlation::mint_correlation().to_string(),
-        |axum::Extension(context)| context.correlation_id.to_string(),
-    );
+    let correlation = crate::correlation_of(context);
 
     accept(&state, principal, &key, &submit, &body, &correlation).await
 }

@@ -29,8 +29,8 @@ use figment::Figment;
 use figment::providers::{Env, Serialized};
 
 pub use crate::config::model::{
-    AdminConfig, BusConfig, DatabaseConfig, LogFormat, OtlpConfig, PlatformConfig, PublicConfig,
-    ShutdownConfig, TelemetryConfig,
+    AdminConfig, BusConfig, DatabaseConfig, IdentityConfig, LogFormat, OtlpConfig, PlatformConfig,
+    PublicConfig, ShutdownConfig, TelemetryConfig,
 };
 pub use crate::config::validate::Violation;
 use crate::role::RuntimeRole;
@@ -109,6 +109,9 @@ impl PlatformConfig {
             // Absent by default. A broker URL is deployment topology, and a default would be wrong
             // everywhere except one laptop.
             bus: None,
+            // Nothing by default: a public key belongs to a service that may not be deployed, and a
+            // completion URL is a property of a front end that may not exist.
+            identity: IdentityConfig::default(),
             // Role-aware: the table is present for the roles that may serve public traffic and
             // absent from the one that may not, so rule V1 is satisfied by the defaults alone.
             public: role.default_public_port().map(|port| PublicConfig {

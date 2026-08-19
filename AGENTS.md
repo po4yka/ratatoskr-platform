@@ -28,9 +28,9 @@ It accepts work, routes it to the owning bounded context, and reports progress. 
 
 ## Current phase
 
-Milestones 1 through 7 of `docs/IMPLEMENTATION_PLAN.md` are implemented. Do not assume Rust crates, binaries, migrations, API routes, NATS streams, or CI commands exist unless they are present in the checkout.
+Milestones 1 through 8 of `docs/IMPLEMENTATION_PLAN.md` are implemented. Do not assume Rust crates, binaries, migrations, API routes, NATS streams, or CI commands exist unless they are present in the checkout.
 
-What now exists: the three binaries; the libraries under `crates/`; the `identity`, `operations` and `platform_ingest` schemas in `migrations/`; the versioned public routes on `ratatoskr-edge` and the webhook adapter on `ratatoskr-ingest`; the transactional outbox, the inbox and the `JetStream` publisher and consumer; the generated `openapi/openapi.json`; and the CI gate in `.github/workflows/ci.yml`. The OAuth facade, the Telegram assertion exchange, scheduled command publication and deployment profiles remain absent, and the instruction above still applies to them in full. `DEVELOPMENT.md` states what is present and what is absent, command family by command family.
+What now exists: the three binaries; the libraries under `crates/`; the `identity`, `operations` and `platform_ingest` schemas in `migrations/`; the versioned public routes on `ratatoskr-edge` and the webhook adapter on `ratatoskr-ingest`; the transactional outbox, the inbox and the `JetStream` publisher and consumer; the generated `openapi/openapi.json`; and the CI gate in `.github/workflows/ci.yml`. Scheduled command publication, registered-device credentials and the deployment profile remain absent, and the instruction above still applies to them in full. `DEVELOPMENT.md` states what is present and what is absent, command family by command family.
 
 The word is `ingest` wherever it is an identifier — schema, crate, library, binary, database role and path prefix — and "ingress" only in prose, where it names the activity (ADR-0009).
 

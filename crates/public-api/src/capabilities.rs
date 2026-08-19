@@ -71,18 +71,12 @@ pub async fn read(
     // authenticates, so that change is invisible to a client.
     _principal: Principal,
 ) -> Response {
-    // The prober's last answer, not a fresh probe. `None` means this role has no database
-    // configured at all, which for a role serving this route is a deployment that cannot work;
-    // reporting nothing available is the truthful answer to it.
-    let database_reachable = state.health.database_reachable().unwrap_or(false);
+    // What this deployment has, from the same facts readiness reports — never a fresh probe.
+    let deployment = state.deployment();
 
     let capabilities = Capability::ALL
         .into_iter()
-        .filter(|capability| {
-            capability
-                .requires()
-                .is_met(database_reachable, state.bus_configured)
-        })
+        .filter(|capability| capability.requires().is_met(&deployment))
         .map(Capability::as_str)
         .collect();
 

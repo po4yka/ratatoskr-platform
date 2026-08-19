@@ -236,6 +236,7 @@ fn every_capability_names_a_route_this_build_serves() {
     for capability in Capability::ALL {
         let required = match capability {
             Capability::ContentSubmit => "/v2/captures",
+            Capability::TelegramMiniApp => "/v2/sessions/telegram",
             // A new variant arrives here and fails until somebody names the route it promises,
             // which is the point: the vocabulary may not grow ahead of the route tree.
             _ => panic!("{capability} names no route in this test; add the one it promises"),
@@ -271,7 +272,9 @@ async fn every_documented_path_is_served() {
     for route in platform_public_api::surface().routes {
         let path = route
             .path
-            .replace("{operation_id}", "01a018ae-b4e5-7f90-a17f-1e60c8ce61be");
+            .replace("{operation_id}", "01a018ae-b4e5-7f90-a17f-1e60c8ce61be")
+            .replace("{relay_id}", "01a018ae-b4e5-7f90-a17f-1e60c8ce61be")
+            .replace("{provider}", "github");
         let method = match route.method {
             platform_api_doc::Method::Get => "GET",
             platform_api_doc::Method::Post => "POST",
@@ -281,14 +284,31 @@ async fn every_documented_path_is_served() {
             .uri(&path)
             .body(Body::empty())
             .expect("a request");
-
-        // No credential, so a served route refuses with 401. The two failures this rules out are
-        // the router's own: `platform.route.not_found` and `platform.route.method_not_allowed`.
         let (status, body) = send(&app, request).await;
-        assert_eq!(status, StatusCode::UNAUTHORIZED, "{method} {path}: {body}");
-        assert_eq!(
-            body["code"], "platform.auth.unauthenticated",
-            "{method} {path}"
+
+        // What this rules out is the ROUTER's own two failures. A route that authenticates answers
+        // 401 without a credential; a public one gets far enough to complain about the request
+        // itself, which is equally proof that something is serving the path.
+        assert_ne!(
+            body["code"], "platform.route.not_found",
+            "{method} {path} is documented and nothing serves it"
         );
+        assert_ne!(
+            body["code"], "platform.route.method_not_allowed",
+            "{method} {path} is documented under the wrong method"
+        );
+        if route.security == platform_api_doc::Security::None {
+            assert_eq!(
+                status,
+                StatusCode::BAD_REQUEST,
+                "{method} {path} is public, so an empty request is a CLIENT error: {body}"
+            );
+        } else {
+            assert_eq!(status, StatusCode::UNAUTHORIZED, "{method} {path}: {body}");
+            assert_eq!(
+                body["code"], "platform.auth.unauthenticated",
+                "{method} {path}"
+            );
+        }
     }
 }

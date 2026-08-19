@@ -149,6 +149,39 @@ pub struct NewSession<'a> {
     pub expires_at: jiff::Timestamp,
 }
 
+/// A fresh session credential, and its digest.
+///
+/// 256 bits from the operating system's generator. `SecretDigest::of` documents that plain SHA-256
+/// is right here "because the credential is a 256-bit random value we minted, not a secret a person
+/// chose" — this is the function that finally makes that sentence true; until milestone 8 nothing in
+/// the workspace minted anything.
+///
+/// The plaintext is returned ONCE, to be handed to the client and then dropped. Only the digest is
+/// stored, so a database disclosure yields no usable credential.
+///
+/// Encoded base64url without padding: URL-safe, header-safe, and shorter than hex.
+///
+/// # Errors
+///
+/// [`PersistenceError::Query`] carrying the generator's failure. A system random generator that
+/// cannot produce bytes is not a condition to paper over with a weaker source.
+pub fn mint_credential() -> Result<(String, SecretDigest), PersistenceError> {
+    use ring::rand::SecureRandom as _;
+
+    let mut bytes = [0_u8; 32];
+    ring::rand::SystemRandom::new()
+        .fill(&mut bytes)
+        .map_err(|_| {
+            PersistenceError::Query(sqlx::Error::Configuration(
+                "the system random generator would not produce a session credential".into(),
+            ))
+        })?;
+    let credential =
+        base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, bytes);
+    let digest = SecretDigest::of(&credential);
+    Ok((credential, digest))
+}
+
 /// Open a session.
 ///
 /// # Errors

@@ -41,6 +41,14 @@ pub struct PlatformConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bus: Option<BusConfig>,
 
+    /// What this deployment needs to authenticate people through another service.
+    ///
+    /// Always present, with every member optional: a deployment without Telegram sign-in and
+    /// without provider OAuth configures nothing here, and the routes that need one of them then
+    /// refuse rather than half-work.
+    #[serde(default)]
+    pub identity: IdentityConfig,
+
     /// The two phases of a graceful stop.
     pub shutdown: ShutdownConfig,
 
@@ -129,6 +137,33 @@ pub struct BusConfig {
     /// credential belongs in a credentials file the process reads by path, not in a URL that the
     /// effective-configuration log line prints. Same reasoning as rule V10 for the collector.
     pub url: Url,
+}
+
+/// What Platform needs in order to believe another service about who somebody is.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IdentityConfig {
+    /// `RATATOSKR__IDENTITY__ASSERTION_KEY`. The Ed25519 PUBLIC key of `ratatoskr-telegram`,
+    /// base64 with padding, decoding to exactly 32 bytes (rule V14).
+    ///
+    /// Not a `SecretString`, and that is the point of ADR-0011: Platform holds only the public half,
+    /// so it can verify an assertion and cannot issue one. A compromise of the process on the public
+    /// internet yields the ability to check signatures, which is worth nothing.
+    ///
+    /// Absent means the Telegram exchange is not served: the route refuses, and
+    /// `GET /v2/capabilities` reports `telegram.mini_app` as unavailable so a client can tell before
+    /// it tries.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assertion_key: Option<String>,
+
+    /// `RATATOSKR__IDENTITY__OAUTH_COMPLETION_URL`. Where a browser is sent after a provider
+    /// callback has been relayed.
+    ///
+    /// Configured, never taken from the callback. Every parameter of that request is
+    /// attacker-supplied, so a redirect target read out of one is an open redirect — the one
+    /// vulnerability an OAuth facade is most likely to ship (ADR-0012).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oauth_completion_url: Option<Url>,
 }
 
 /// The two phases of a graceful stop. They are separate knobs because they answer different

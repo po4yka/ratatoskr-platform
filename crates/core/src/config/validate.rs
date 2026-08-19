@@ -116,6 +116,43 @@ pub(crate) fn validate(role: RuntimeRole, config: &PlatformConfig) -> Vec<Violat
 
     found.extend(database_violations(config));
     found.extend(bus_violations(config));
+    found.extend(identity_violations(config));
+
+    found
+}
+
+/// V14 and V15 — the identity rules.
+///
+/// Both refuse at startup what would otherwise be discovered at the first request, by a person
+/// trying to sign in, as an authentication failure that names nothing.
+fn identity_violations(config: &PlatformConfig) -> Vec<Violation> {
+    let mut found = Vec::new();
+
+    // V14 — an Ed25519 public key is 32 bytes. A key that is truncated, hex-encoded or accidentally
+    // a PRIVATE key does not decode to 32, and every assertion would then fail verification, which
+    // looks exactly like an attack rather than like a typo.
+    if let Some(key) = config.identity.assertion_key.as_deref() {
+        let decoded = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, key);
+        if !decoded.is_ok_and(|bytes| bytes.len() == 32) {
+            found.push(Violation {
+                key: "identity.assertion_key",
+                env_var: "RATATOSKR__IDENTITY__ASSERTION_KEY",
+                rule: "must be a base64 Ed25519 PUBLIC key decoding to exactly 32 bytes (ADR-0011)",
+            });
+        }
+    }
+
+    // V15 — the browser is sent here after a provider callback, so it is a navigation target and
+    // must be one a browser will follow.
+    if let Some(url) = config.identity.oauth_completion_url.as_ref()
+        && (!matches!(url.scheme(), "http" | "https") || url.host().is_none())
+    {
+        found.push(Violation {
+            key: "identity.oauth_completion_url",
+            env_var: "RATATOSKR__IDENTITY__OAUTH_COMPLETION_URL",
+            rule: "must be an http or https URL with a host; a browser is redirected to it",
+        });
+    }
 
     found
 }

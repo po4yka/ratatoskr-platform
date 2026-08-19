@@ -132,7 +132,7 @@ impl platform_http::PublicRoutes for EdgeRoutes {
             spawn_projection(database.pool().clone(), publisher),
         ];
 
-        let state = platform_public_api::ApiState::new(
+        let mut state = platform_public_api::ApiState::new(
             database.clone(),
             AUDIENCE,
             Arc::clone(health),
@@ -142,6 +142,19 @@ impl platform_http::PublicRoutes for EdgeRoutes {
             // `GET /v2/capabilities` asks.
             true,
         );
+        // Decoded once, here, rather than on every request. Rule V14 already refused a key that is
+        // not 32 bytes, so this cannot fail on a configuration the process started with — and if it
+        // somehow did, refusing to start is right: a route that verifies nothing would accept
+        // nothing, silently, for the life of the deployment.
+        if let Some(key) = config.identity.assertion_key.as_deref() {
+            let decoded =
+                base64::Engine::decode(&base64::engine::general_purpose::STANDARD, key)
+                    .map_err(|error| format!("the assertion key could not be decoded: {error}"))?;
+            state.assertion_key = Some(decoded);
+        }
+        state
+            .oauth_completion_url
+            .clone_from(&config.identity.oauth_completion_url);
         Ok(Serving {
             routes: platform_public_api::routes(state),
             database: Some(database),

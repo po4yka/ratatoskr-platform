@@ -132,6 +132,19 @@
         "type": "object",
         "x-ratatoskr-unknown-policy": "preserve"
       },
+      "ExchangeAssertion": {
+        "description": "What a client presents.",
+        "properties": {
+          "assertion": {
+            "description": "The compact assertion issued by `ratatoskr-telegram`: `base64url(payload).base64url(signature)`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "assertion"
+        ],
+        "type": "object"
+      },
       "FieldPath": {
         "description": "RFC 6901 JSON Pointer to the offending member of the rejected payload, restricted to\nidentifier-shaped tokens, e.g. `/blocks/3/text`.\n\nStructure only. The restricted alphabet makes it structurally impossible to smuggle a\nrejected **value** (which may be user content or a credential) into an error payload —\n`/tenant_id=alice@example.com` does not parse. `ARCHITECTURE.md` S5.5: \"validation errors\nidentify safe field paths.\"",
         "examples": [
@@ -419,6 +432,38 @@
         "title": "ProgressPercent",
         "type": "integer"
       },
+      "RelayedCallback": {
+        "description": "What the owning service gets, once.",
+        "properties": {
+          "code": {
+            "description": "The authorization code. Present exactly once, in this response, and nowhere else.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "error": {
+            "description": "The provider's error, when the user refused.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "provider": {
+            "description": "Which provider redirected.",
+            "type": "string"
+          },
+          "state": {
+            "description": "The `state` this service issued, so it can match the callback to its own flow.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "provider",
+          "state"
+        ],
+        "type": "object"
+      },
       "SafeMessage": {
         "description": "Human-readable text safe to show to an operator or an end user.\n\n1..=1024 characters with no C0 or DEL control characters. The newline ban is the point: it\nmakes it structurally impossible to smuggle a stack trace or a forged log line into a wire\nmessage (`ARCHITECTURE.md` S5.5 \"no stack traces or secrets in wire errors\", S14).\n\nNot machine-parsed and not stable across releases; changing a message is not a contract\nchange. Consumers branch on codes, never on this.",
         "examples": [
@@ -428,6 +473,30 @@
         "pattern": "^[^\\x00-\\x1f\\x7f]{1,1024}$",
         "title": "SafeMessage",
         "type": "string"
+      },
+      "SessionMinted": {
+        "description": "The session, once.",
+        "properties": {
+          "credential": {
+            "description": "The bearer credential. Returned exactly once — only its digest is stored, so it cannot be\nrecovered from Platform afterwards.",
+            "type": "string"
+          },
+          "expires_at": {
+            "description": "When it stops working.",
+            "type": "string"
+          },
+          "user_id": {
+            "description": "The internal user it authenticates. Independent of the Telegram id, per S6.1.",
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "credential",
+          "expires_at",
+          "user_id"
+        ],
+        "type": "object"
       },
       "SignalAccepted": {
         "description": "What a source gets back.",
@@ -784,6 +853,149 @@
         ]
       }
     },
+    "/v2/oauth/relays/{relay_id}": {
+      "post": {
+        "description": "For the service that owns the provider, and for nobody else. Returns the authorization code once and destroys it in the same statement, so a second claim returns nothing and no copy remains.\n\nRequires a SERVICE session whose principal holds the claim capability for that provider, for example `oauth.claim.github`. A person's session is refused as if the relay did not exist. So is an unknown relay, an expired one, one already claimed, and one whose capability the caller does not hold — one answer for all five, because which relays exist and what each needs is not a caller's business.",
+        "operationId": "claimOauthRelay",
+        "parameters": [
+          {
+            "description": "The relay, as named in the command the owning service received.",
+            "in": "path",
+            "name": "relay_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RelayedCallback"
+                }
+              }
+            },
+            "description": "The callback. Its code appears in this response and nowhere else."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No credential, or one that does not authenticate here."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No claimable relay of that identity for this caller."
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "A dependency did not answer in time."
+          }
+        },
+        "security": [
+          {
+            "sessionBearer": []
+          }
+        ],
+        "summary": "Claim a relayed callback",
+        "tags": [
+          "oauth"
+        ]
+      }
+    },
+    "/v2/oauth/{provider}/callback": {
+      "get": {
+        "description": "The public endpoint a provider redirects a browser back to. It records the callback for the service that owns the provider and sends the browser to this deployment's completion page.\n\nPlatform does not exchange the authorization code, does not validate the `state`, and holds no client secret — all three belong to the owning service, which is the only party that can tell a real callback from a forged one. The code is handed to that service over an authenticated route and appears in no command, no log and no redirect.\n\nUnauthenticated by construction: a browser arriving from a provider carries no credential of ours. The same completion page is returned whether the provider authorized or refused, because the person is finished here either way.",
+        "operationId": "receiveOauthCallback",
+        "parameters": [
+          {
+            "description": "The provider that redirected. A closed vocabulary; anything else is 404.",
+            "in": "path",
+            "name": "provider",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The opaque value the owning service issued, carried back verbatim.",
+            "in": "query",
+            "name": "state",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The authorization code, when the user authorized. Exactly one of `code` and `error` must be present.",
+            "in": "query",
+            "name": "code",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The provider's error code, when the user refused.",
+            "in": "query",
+            "name": "error",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "303": {
+            "description": "Recorded. The browser is sent to the configured completion page."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Neither a `code` nor an `error`, both, or a value outside its bound."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No such provider."
+          }
+        },
+        "security": [],
+        "summary": "Receive a provider's OAuth redirect",
+        "tags": [
+          "oauth"
+        ]
+      }
+    },
     "/v2/operations/{operation_id}": {
       "get": {
         "description": "Returns the operation as a snapshot: its status, the stage it is in, its progress, and its result or its errors once it has one. The same shape every consumer of an operation sees; there is no second, API-only projection to keep in step.\n\nPoll this, or subscribe to `GET /v2/operations/{operation_id}/events` to be told instead of asking. An operation you do not own and an operation that does not exist both answer 404, so this route cannot be used to discover which identifiers are real.",
@@ -919,6 +1131,69 @@
         "summary": "Follow one operation's progress",
         "tags": [
           "operations"
+        ]
+      }
+    },
+    "/v2/sessions/telegram": {
+      "post": {
+        "description": "Takes a short-lived assertion issued by `ratatoskr-telegram` — which is the service that owns the bot token and validates the raw Mini App `initData` — and returns a Platform session credential.\n\nThe credential is returned ONCE. Only its digest is stored, so it cannot be recovered afterwards; a client that loses it exchanges a new assertion.\n\nAn assertion is single-use. Presenting the same one twice mints one session, and the second attempt is refused exactly as an invalid one is. Every refusal is the same 401: a missing key, a bad signature, a wrong audience, an expired assertion and a replayed one are indistinguishable from outside, because the difference is a fact about the verification and not about the caller.\n\nThe internal user is independent of the Telegram account. Signing in for the first time creates one.",
+        "operationId": "exchangeTelegramAssertion",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExchangeAssertion"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionMinted"
+                }
+              }
+            },
+            "description": "The session. Its credential appears in this response and nowhere else."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The body is not readable."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The assertion was not believed, for a reason this API does not disclose."
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "A dependency did not answer in time. Nothing was written."
+          }
+        },
+        "security": [],
+        "summary": "Exchange a Telegram identity assertion for a session",
+        "tags": [
+          "sessions"
         ]
       }
     }

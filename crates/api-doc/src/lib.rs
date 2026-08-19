@@ -76,15 +76,20 @@ pub enum Security {
     Session,
     /// The credential a registered webhook source presents.
     SourceToken,
+    /// None: the route is how a caller becomes authenticated, or is reached by a party that has no
+    /// credential of ours to present. Spelled rather than omitted, because a route with no
+    /// `security` key reads as an oversight and this must read as a decision.
+    None,
 }
 
 impl Security {
-    /// The `components.securitySchemes` key.
+    /// The `components.securitySchemes` key, for the routes that need one.
     #[must_use]
-    pub const fn scheme(self) -> &'static str {
+    pub const fn scheme(self) -> Option<&'static str> {
         match self {
-            Self::Session => "sessionBearer",
-            Self::SourceToken => "sourceBearer",
+            Self::Session => Some("sessionBearer"),
+            Self::SourceToken => Some("sourceBearer"),
+            Self::None => None,
         }
     }
 
@@ -100,6 +105,7 @@ impl Security {
                 "The credential issued to a registered webhook source, presented as \
                  `Authorization: Bearer <credential>`. It authenticates the source, not a person."
             }
+            Self::None => "",
         }
     }
 }
@@ -111,6 +117,8 @@ pub enum In {
     Path,
     /// A request header.
     Header,
+    /// A query-string parameter.
+    Query,
 }
 
 impl In {
@@ -118,6 +126,7 @@ impl In {
         match self {
             Self::Path => "path",
             Self::Header => "header",
+            Self::Query => "query",
         }
     }
 }
@@ -257,14 +266,16 @@ pub fn document(api_version: &str, surfaces: &[ApiSurface]) -> Result<Value, Doc
 
     let mut security_schemes = serde_json::Map::new();
     for security in routes.iter().map(|route| route.security) {
-        security_schemes.insert(
-            security.scheme().to_owned(),
-            json!({
-                "type": "http",
-                "scheme": "bearer",
-                "description": security.description(),
-            }),
-        );
+        if let Some(scheme) = security.scheme() {
+            security_schemes.insert(
+                scheme.to_owned(),
+                json!({
+                    "type": "http",
+                    "scheme": "bearer",
+                    "description": security.description(),
+                }),
+            );
+        }
     }
 
     Ok(json!({
@@ -335,9 +346,15 @@ fn operation(route: &RouteDoc) -> Value {
     object.insert("summary".to_owned(), json!(route.summary));
     object.insert("description".to_owned(), json!(route.description));
     object.insert("tags".to_owned(), json!([route.tag]));
+    // An empty array is OpenAPI's way of saying "no security applies here", and it is emitted
+    // deliberately: an absent `security` key inherits the document default, so omitting it would
+    // make a public route look like whatever the document happens to say later.
     object.insert(
         "security".to_owned(),
-        json!([{ route.security.scheme(): [] }]),
+        route
+            .security
+            .scheme()
+            .map_or_else(|| json!([]), |scheme| json!([{ scheme: [] }])),
     );
 
     if !route.parameters.is_empty() {

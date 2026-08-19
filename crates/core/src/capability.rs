@@ -20,18 +20,23 @@
 pub enum Capability {
     /// `content.submit` — submitting an address for capture, at `POST /v2/captures`.
     ContentSubmit,
+    /// `telegram.mini_app` — exchanging a `ratatoskr-telegram` identity assertion for a session, at
+    /// `POST /v2/sessions/telegram`.
+    TelegramMiniApp,
 }
 
 impl Capability {
-    /// Every capability, in wire order. The array length is the documented count, so adding a
-    /// variant without extending this does not compile.
-    pub const ALL: [Self; 1] = [Self::ContentSubmit];
+    /// Every capability, in wire order — sorted, so two consecutive responses from an unchanged
+    /// deployment are byte-identical. The array length is the documented count, so adding a variant
+    /// without extending this does not compile.
+    pub const ALL: [Self; 2] = [Self::ContentSubmit, Self::TelegramMiniApp];
 
     /// The public name. This is a contract: a client gates a feature on this exact string.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::ContentSubmit => "content.submit",
+            Self::TelegramMiniApp => "telegram.mini_app",
         }
     }
 
@@ -44,6 +49,10 @@ impl Capability {
             // outbox is the durable half — but the command is then never published and the
             // operation never progresses. From the client's side that is not a working feature.
             Self::ContentSubmit => Requirement::DatabaseAndBus,
+            // No bus: exchanging an assertion for a session touches the database and nothing else.
+            // The key is what makes it possible at all — without one, Platform cannot verify what
+            // `ratatoskr-telegram` says and the route refuses everything (ADR-0011).
+            Self::TelegramMiniApp => Requirement::DatabaseAndAssertionKey,
         }
     }
 }
@@ -65,19 +74,38 @@ pub enum Requirement {
     Database,
     /// A reachable database and a configured bus.
     DatabaseAndBus,
+    /// A reachable database and a configured assertion key.
+    DatabaseAndAssertionKey,
 }
 
 impl Requirement {
-    /// Whether this requirement is met.
-    ///
-    /// `database_reachable` is the answer the readiness prober last recorded, not a fresh probe:
-    /// a public request must never be the thing that opens a connection to decide whether
-    /// connections can be opened.
+    /// Whether this requirement is met by `deployment`.
     #[must_use]
-    pub const fn is_met(self, database_reachable: bool, bus_configured: bool) -> bool {
+    pub const fn is_met(self, deployment: &Deployment) -> bool {
         match self {
-            Self::Database => database_reachable,
-            Self::DatabaseAndBus => database_reachable && bus_configured,
+            Self::Database => deployment.database_reachable,
+            Self::DatabaseAndBus => deployment.database_reachable && deployment.bus_configured,
+            Self::DatabaseAndAssertionKey => {
+                deployment.database_reachable && deployment.assertion_key_configured
+            }
         }
     }
+}
+
+/// What this deployment has, as far as a capability is concerned.
+///
+/// A struct rather than a growing argument list, because every capability added since has needed a
+/// different subset and a positional `bool` pair was already one rename away from being silently
+/// swapped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Deployment {
+    /// What the readiness prober last found — never a fresh probe. A public request must not be the
+    /// thing that opens a connection in order to decide whether connections can be opened.
+    pub database_reachable: bool,
+    /// Whether an event bus is configured at all. Not "is the broker up": a bus that is configured
+    /// and briefly unreachable still publishes the outbox when it returns, whereas a deployment
+    /// with none never will.
+    pub bus_configured: bool,
+    /// Whether an assertion verification key is configured.
+    pub assertion_key_configured: bool,
 }

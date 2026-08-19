@@ -66,7 +66,7 @@ sqlx = { version = "0.8.6", default-features = false, features = [
 
 # ---- async runtime and HTTP ----
 tokio      = { version = "1.53.1", features = ["rt-multi-thread", "macros", "signal", "net", "time", "sync"] }
-axum       = { version = "0.8.9", default-features = false, features = ["http1", "json", "matched-path", "tokio", "tracing"] }
+axum       = { version = "0.8.9", default-features = false, features = ["http1", "json", "matched-path", "query", "tokio", "tracing"] }
 tower      = "0.5.3"
 tower-http = { version = "0.7.0", default-features = false, features = ["catch-panic", "limit", "timeout"] }
 http       = "1.5.0"
@@ -116,9 +116,16 @@ futures-util = { version = "0.3.31", default-features = false, features = ["std"
 # repository's generator calls. Q5 in DEVELOPMENT.md records that this pin is graph-wide.
 schemars = { version = "=1.2.2", features = ["uuid1", "jiff02"] }
 
-# ---- hashing ----
+# ---- hashing and signatures ----
 # SHA-256 for the idempotency key and request fingerprint. Not a password hash and not used as one.
 sha2 = "0.10.9"
+# Ed25519 VERIFICATION for identity assertions (ADR-0011). `ring` rather than a new signature crate
+# because it is already in the graph beneath rustls, so this adds a direct dependency and not a
+# dependency. Platform holds only public keys: it verifies assertions and cannot issue one.
+ring = "0.17.14"
+# base64url for the two-part assertion token. Already in the graph; `default-features = false` keeps
+# it out of the allocator-free paths it does not need.
+base64 = "0.22.1"
 
 # ---- serialization and errors ----
 serde      = { version = "1.0.229", features = ["derive"] }

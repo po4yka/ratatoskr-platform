@@ -1,7 +1,7 @@
 # Platform implementation plan
 
-> **Status:** items 1 through 7 are implemented (see `DEVELOPMENT.md`). Items 8 through 10 are planned,
-> and none of them is scaffolded or stubbed in the checkout.
+> **Status:** items 1 through 8 are implemented (see `DEVELOPMENT.md`). Items 9 and 10 are planned,
+> and neither is scaffolded or stubbed in the checkout.
 >
 > Item 5 is where the earlier ones meet: `ratatoskr-edge` opens a pool, applies the migrations,
 > authenticates a session, and writes the idempotency reservation, the operation and the outbox
@@ -28,7 +28,7 @@ Open questions that block a later item are recorded in `DEVELOPMENT.md`. Q2 (the
 5. Implement authenticated capture API and idempotency. *(implemented)*
 6. Project progress/results and expose SSE. *(implemented)*
 7. Add capabilities and generic ingress. *(implemented)*
-8. Add OAuth callback facade and Telegram assertion exchange.
+8. Add OAuth callback facade and Telegram assertion exchange. *(implemented)*
 9. Add thin Scheduler command publication **and the single-host deployment profile**: the `deploy/`
    systemd units with their resource limits and start ordering, stream and consumer naming with
    explicit retention limits, the NATS credential, the three database roles inside the host's

@@ -25,13 +25,18 @@ use sqlx::PgExecutor;
 use sqlx::Row as _;
 use uuid::Uuid;
 
+pub mod assertion;
 pub mod audit;
 pub mod device;
+pub mod grant;
+pub mod relay;
 pub mod session;
 pub mod user;
 
+pub use crate::assertion::{AssertionClaims, AssertionRejected};
 pub use crate::audit::{AuditEvent, AuditOutcome};
 pub use crate::device::{Device, DeviceKind};
+pub use crate::relay::{CallbackOutcome, ClaimedRelay};
 pub use crate::session::{NewSession, RefreshToken, Session, SessionKind};
 pub use crate::user::{ExternalIdentity, IdentityProvider, User, UserStatus};
 

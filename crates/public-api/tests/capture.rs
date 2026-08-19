@@ -341,3 +341,34 @@ async fn an_operation_is_readable_only_by_its_owner() {
 
     harness.cleanup().await.expect("cleanup");
 }
+
+/// C-12. A path segment that is not a UUID is the CLIENT's mistake, and is reported as one.
+///
+/// A regression guard for a defect milestone 8 found and fixed in the taxonomy rather than in a
+/// route. `Path<Uuid>` rejects a malformed segment before any handler runs, with a 400 that no
+/// handler authored — and `FailureKind::UNAUTHORED` had no entry for 400, so the boundary fell
+/// through to its unmapped-status branch and answered **500**. Every route with a typed path
+/// parameter had it, and nothing noticed because every test that reached those routes used a real
+/// UUID.
+#[tokio::test]
+async fn a_malformed_path_parameter_is_a_client_error() {
+    let harness = TestDatabase::create().await.expect("a test database");
+    let credential = "path-parameter-credential-0000000";
+    seed(harness.pool(), credential, AUDIENCE).await;
+    let app = app(state(&harness));
+
+    let request = Request::builder()
+        .method("GET")
+        .uri("/v2/operations/not-a-uuid")
+        .header("authorization", format!("Bearer {credential}"))
+        .body(Body::empty())
+        .expect("a request");
+    let (status, body) = send(&app, request).await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["code"], "platform.request.invalid");
+    assert!(
+        body["correlation_id"].is_string(),
+        "an unauthored failure still carries the correlation the client saw"
+    );
+}

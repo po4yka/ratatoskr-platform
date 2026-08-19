@@ -64,6 +64,10 @@ pub enum IdentityProvider {
 }
 
 impl IdentityProvider {
+    /// Every provider, so a caller that must enumerate them cannot miss one. The array length is
+    /// the documented count, so adding a variant without extending this does not compile.
+    pub const ALL: [Self; 3] = [Self::Telegram, Self::GitHub, Self::Email];
+
     /// The stored token.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
@@ -72,6 +76,22 @@ impl IdentityProvider {
             Self::GitHub => "github",
             Self::Email => "email",
         }
+    }
+
+    /// The provider a stored token or a path segment names, or `None`.
+    ///
+    /// `None` is what makes an attacker-chosen path segment a `404` rather than a row: the OAuth
+    /// callback route takes its provider from the URL, and the set of providers is a vocabulary
+    /// rather than configuration precisely so that it can be closed here.
+    #[must_use]
+    pub fn from_str_opt(value: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|kind| kind.as_str() == value)
+    }
+}
+
+impl core::fmt::Display for IdentityProvider {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 

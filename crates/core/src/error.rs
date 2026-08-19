@@ -205,14 +205,22 @@ impl FailureKind {
         Self::IdempotencyConflict,
     ];
 
-    /// The kinds a response can arrive as with no handler involved: axum's own routing failures and
-    /// the transport limits `tower-http` enforces. Each has a distinct status, which is what lets
-    /// [`PlatformError::from_status`] be a function rather than a guess.
-    pub const UNAUTHORED: [Self; 4] = [
+    /// The kinds a response can arrive as with no handler involved: axum's own routing and
+    /// EXTRACTOR failures, and the transport limits `tower-http` enforces. Each has a distinct
+    /// status, which is what lets [`PlatformError::from_status`] be a function rather than a guess.
+    ///
+    /// `InvalidRequest` is here because an extractor that cannot read what it was given rejects the
+    /// request itself, before any handler runs. Without an entry, that 400 matched nothing, fell
+    /// through to the unmapped-status branch, and reached the client as a **500** — a client error
+    /// reported as ours, on every route that takes a typed body or query string. It was found by a
+    /// test asserting a public route's answer to an empty request, which is the only kind of route
+    /// where nothing else fails first.
+    pub const UNAUTHORED: [Self; 5] = [
         Self::RouteNotFound,
         Self::MethodNotAllowed,
         Self::PayloadTooLarge,
         Self::RequestTimeout,
+        Self::InvalidRequest,
     ];
 
     /// The only thing a client ever learns about this failure.

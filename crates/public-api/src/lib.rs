@@ -26,7 +26,9 @@ use platform_persistence::Database;
 pub mod auth;
 pub mod capabilities;
 pub mod captures;
+pub mod oauth;
 pub mod operations;
+pub mod sessions;
 pub mod stream;
 
 pub use crate::auth::Principal;
@@ -50,6 +52,13 @@ pub struct ApiState {
     /// and briefly unreachable still publishes the outbox when it returns, whereas a deployment
     /// with none never will.
     pub bus_configured: bool,
+    /// The Ed25519 PUBLIC key of the assertion issuer, decoded. `None` means this deployment does
+    /// not accept identity assertions, and both the exchange route and the capability say so
+    /// (ADR-0011).
+    pub assertion_key: Option<Vec<u8>>,
+    /// Where a browser goes after a provider callback has been relayed. Configured, never taken
+    /// from the callback (ADR-0012).
+    pub oauth_completion_url: Option<url::Url>,
 }
 
 impl ApiState {
@@ -70,8 +79,33 @@ impl ApiState {
             idempotency_ttl: jiff::SignedDuration::from_hours(24),
             health,
             bus_configured,
+            assertion_key: None,
+            oauth_completion_url: None,
         }
     }
+
+    /// What a capability is evaluated against.
+    #[must_use]
+    pub fn deployment(&self) -> platform_core::Deployment {
+        platform_core::Deployment {
+            database_reachable: self.health.database_reachable().unwrap_or(false),
+            bus_configured: self.bus_configured,
+            assertion_key_configured: self.assertion_key.is_some(),
+        }
+    }
+}
+
+/// The correlation the middleware already minted for this request (ADR-0007).
+///
+/// `Option` because a unit test may call a handler without the middleware; in production it is
+/// always present. Shared by every handler that audits, so a record cannot be written with a
+/// correlation the client never saw.
+#[must_use]
+pub fn correlation_of(context: Option<axum::Extension<platform_http::RequestContext>>) -> String {
+    context.map_or_else(
+        || platform_telemetry::correlation::mint_correlation().to_string(),
+        |axum::Extension(context)| context.correlation_id.to_string(),
+    )
 }
 
 /// One served route: how it is reached, and how it is described.
@@ -108,6 +142,18 @@ fn table() -> Vec<Endpoint> {
             doc: capabilities::DOC,
             handler: get(capabilities::read),
         },
+        Endpoint {
+            doc: sessions::DOC,
+            handler: post(sessions::exchange_telegram),
+        },
+        Endpoint {
+            doc: oauth::CALLBACK_DOC,
+            handler: get(oauth::callback),
+        },
+        Endpoint {
+            doc: oauth::CLAIM_DOC,
+            handler: post(oauth::claim),
+        },
     ]
 }
 
@@ -139,6 +185,9 @@ fn register_schemas(generator: &mut schemars::SchemaGenerator) {
     generator.subschema_for::<captures::SubmitCapture>();
     generator.subschema_for::<captures::CaptureAccepted>();
     generator.subschema_for::<capabilities::CapabilityDocument>();
+    generator.subschema_for::<sessions::ExchangeAssertion>();
+    generator.subschema_for::<sessions::SessionMinted>();
+    generator.subschema_for::<oauth::RelayedCallback>();
     generator.subschema_for::<ratatoskr_operation_contracts::OperationSnapshot>();
     generator.subschema_for::<ratatoskr_error_contracts::ErrorEnvelope>();
 }
