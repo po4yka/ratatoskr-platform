@@ -1,0 +1,68 @@
+# Static analysis of this repository's own GitHub Actions. Nothing else in the fleet reads a workflow
+# as code, and a workflow is the one file here that runs with a token.
+#
+# This file is identical in all sixteen repositories, and it is deliberately NOT a job inside
+# fleet.yml. fleet.yml installs nothing and uses one action, so it cannot fail for a reason that has
+# nothing to do with the tree; zizmor pulls a container image and queries the GitHub API, so a failure
+# here can mean the network. Keeping them apart keeps that difference readable from the check name.
+#
+# WHY THE PEDANTIC PERSONA, not the default. Measured against a fixture carrying ten known-bad
+# patterns: the regular persona reported five findings and pedantic reported ten. The two additions
+# that matter here are `excessive-permissions`, which is the `permissions: write-all` that SECURITY.md
+# forbids and which regular does not report at all, and `unpinned-images`, which is the SHA-pinning
+# rule this fleet already applies to actions, applied to container images as well.
+#
+# WHY min-severity=low. It drops zizmor's informational tier. Across these sixteen repositories that
+# tier holds exactly one audit, `anonymous-definition` — a job with no `name:` key — and it reports 34
+# findings and no defect, one for each unnamed job. A security gate that fails because a job has no
+# label is a gate people switch off. The trade is stated rather than hidden: a finding that arrives at
+# informational severity in future is dropped without being seen.
+#
+# WHY the version is pinned, like rust-toolchain.toml and Cargo.lock. Dependabot moves the action's
+# SHA; it does not move this input. A new zizmor release therefore cannot turn sixteen repositories
+# red overnight, and the audit set stays the one that was measured.
+name: zizmor
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# SECURITY.md: deny by default. zizmor reads the checkout and needs nothing else — with
+# advanced-security off there is no SARIF upload, so no `security-events: write`.
+permissions:
+  contents: read
+
+concurrency:
+  group: zizmor-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # This job pushes nothing, so leaving the token in .git/config keeps a credential for no
+          # reason. zizmor reports the same thing about any checkout that omits this — `artipacked`.
+          persist-credentials: false
+
+      # `advanced-security: false` is what makes this a gate rather than a report. With the default
+      # `true` the action uploads SARIF to the security tab and DOES NOT FAIL on findings: GitHub's
+      # model is that a code-scanning workflow fails only on internal errors, and blocking a merge is
+      # then a separate ruleset to configure and keep configured. With it off, zizmor's own exit status
+      # is the answer, which is the shape every other check in this fleet already has.
+      #
+      # Online audits stay on (the action's default). They are what catches `impostor-commit` — a
+      # `uses:` pinned to a forty-character hex string that is not a commit in the repository it names.
+      # That is not hypothetical here: this fleet's first contracts run failed on a SHA that did not
+      # exist, and the pin grep in fleet.yml cannot tell a real object name from a plausible one.
+      - uses: zizmorcore/zizmor-action@3dc1ecc9bcb9e94e9b2c709687979e1298497054 # v0.6.2
+        with:
+          version: 1.29.0
+          persona: pedantic
+          min-severity: low
+          advanced-security: false
+          annotations: true

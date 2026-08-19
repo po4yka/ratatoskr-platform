@@ -17,3 +17,10 @@ updates:
         patterns: ["*"]          # one pull request, not one per action
     commit-message:
       prefix: chore
+    # Seven days between an action's release and the pull request that proposes it. A SHA pin defends
+    # against a tag being moved under us; it does nothing about a release that is malicious on the day
+    # it is published, because Dependabot would then hand us the attacker's commit with a version
+    # comment that looks correct. A week is the window in which such a release is normally withdrawn.
+    # zizmor reports the absence of one as `dependabot-cooldown`.
+    cooldown:
+      default-days: 7

@@ -4,6 +4,10 @@
 # action, so it has no supply-chain surface beyond the checkout and it cannot fail for a reason that
 # has nothing to do with the tree.
 #
+# It does NOT audit these workflows as code either. `.github/workflows/zizmor.yml` does that, in its own
+# file for the same reason: zizmor has to be pulled before it can run, and this file's whole promise is
+# the line above — that it installs nothing.
+#
 # It does NOT lint prose. That was measured across all sixteen repositories before this file was
 # written: markdownlint reports nothing, a link checker has nothing to read, `typos` reports eight
 # findings and no defect, and a check on backticked paths reports 156 findings of which none is a
@@ -48,7 +52,7 @@ jobs:
           for f in \
             .gitignore .gitattributes .editorconfig \
             README.md AGENTS.md DEVELOPMENT.md SECURITY.md LICENSE \
-            .githooks/pre-commit \
+            .githooks/pre-commit .github/workflows/zizmor.yml \
             docs/ARCHITECTURE.md docs/REQUIREMENTS.md docs/THREAT_MODEL.md \
             docs/TESTING.md docs/adr/README.md
           do
@@ -137,11 +141,15 @@ jobs:
           echo "no credential and no private key in the tree"
 
       - name: Every workflow pins each third-party action to a commit SHA
-        # `sha_pinning_required` is set on all sixteen repositories and rejects an unpinned action at
-        # run time, so for a push/pull_request workflow this step is a second opinion. It earns its
-        # place on the two things that setting does not reach in time: a workflow that push and
-        # pull_request never trigger (release, schedule, workflow_dispatch), which would otherwise
-        # fail at release time, and a nested `uses:` inside a composite action under .github/actions.
+        # Two other things now check this, and both are stronger. `sha_pinning_required` is set on all
+        # sixteen repositories and rejects an unpinned action at run time. zizmor's `unpinned-uses` also
+        # reaches what that setting cannot reach in time — a workflow that push and pull_request never
+        # trigger, and a nested `uses:` inside a composite action — and its `impostor-commit` goes
+        # further than a grep can: it asks GitHub whether the forty hex characters are a commit in the
+        # repository they name, which is the defect that broke this fleet's first contracts run.
+        #
+        # This step is kept anyway, and the reason is the whole reason this file exists: it needs no
+        # network and no download, so it still answers on a day when nothing can be pulled.
         run: |
           set -euo pipefail
           unpinned=$(grep -rnE '^[[:space:]]*(-[[:space:]]+)?uses:[[:space:]]*[^[:space:]]+@' .github \

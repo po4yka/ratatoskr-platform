@@ -28,7 +28,13 @@ jobs:
     # would have given. Without it the suite does not run and the queries are unverified.
     services:
       postgres:
-        image: postgres:17
+        # Pinned by digest, not by tag. A service container runs on the runner beside the checkout
+        # and the build, on the same network, so a compromised `postgres:17` is a path to the crates.io
+        # downloads that produce the release binary — the same threat that makes every action here a
+        # SHA. This digest is `postgres:17` as it stood on 2026-08-19: PostgreSQL 17.11. It is the
+        # multi-architecture index rather than one image, so the pin constrains the version and not the
+        # runner. zizmor reports the tag form as `unpinned-images`.
+        image: postgres:17@sha256:e38411452a464af89e5adadb8d223bf53b898d47d6ef918b2d58c08707350449
         env:
           POSTGRES_USER: platform
           POSTGRES_PASSWORD: platform
@@ -153,7 +159,7 @@ jobs:
       - name: Build the image
         run: |
           docker build \
-            --build-arg RATATOSKR_GIT_SHA="${{ github.sha }}" \
+            --build-arg RATATOSKR_GIT_SHA="$GITHUB_SHA" \
             --tag ratatoskr-platform:ci .
 
       # Every deployable, because the `check-config` branch is wired into each `main` separately and
@@ -188,7 +194,7 @@ jobs:
           echo
           # `git_sha` is compiled in through `option_env!`, so an image built without the build
           # argument reports "unknown" — the first thing anyone checks when a deployment misbehaves.
-          curl -sf http://127.0.0.1:9466/version | tee /dev/stderr | grep -q "${{ github.sha }}"
+          curl -sf http://127.0.0.1:9466/version | tee /dev/stderr | grep -q "$GITHUB_SHA"
           curl -sf http://127.0.0.1:9466/metrics | grep -q '^platform_build_info'
           docker stop -t 40 smoke
           test "$(docker inspect -f '{{.State.ExitCode}}' smoke)" = "0"
