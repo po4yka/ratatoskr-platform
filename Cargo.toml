@@ -104,7 +104,7 @@ jiff = { version = "0.2.15", default-features = false, features = ["std"] }
 # ---- the bus ----
 # JetStream, not core NATS: ARCHITECTURE S8.2 assumes at-least-once delivery with redelivery and a
 # dead-letter path, and core NATS is at-most-once with no persistence at all.
-async-nats   = "0.42.0"
+async-nats   = "0.50.0"
 # Stream combinators for the JetStream message stream. No executor, no runtime.
 # Generator syntax for the one place a stream is authored by hand.
 async-stream = "0.3.6"
