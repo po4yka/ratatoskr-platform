@@ -1,0 +1,108 @@
+# The question a push or pull_request trigger cannot ask: did the graph that was clean yesterday
+# stop being clean.
+#
+# `ci.yml` runs `cargo deny check` on every push and pull request, which answers "does THIS change
+# introduce a problem". RustSec publishes continuously and a crate is yanked without any commit
+# here, so a repository that is not being edited is a repository whose advisory answer is stale by
+# exactly as long as it has been quiet.
+#
+# That is not hypothetical here. `ratatoskr-workspace/docs/QUALITY_GATES.md` records five advisories
+# that sat in the TLS path of the public-facing binary for six milestones, four of them in the one
+# `rustls-webpki` version that `async-nats` supplied. No commit during those six milestones would
+# have turned the gate red, because the tree was not the thing that had changed.
+#
+# It checks `advisories` and nothing else, deliberately. `bans`, `licenses` and `sources` are
+# functions of the tree alone, so running them on a timer can only repeat what the gate already said
+# about the commit that produced that tree. `advisories` is the one section whose answer changes
+# with no commit at all — a new RUSTSEC identifier, or a yank.
+#
+# GitHub disables a scheduled workflow after 60 days with no commit to the repository, and says so
+# only by email. `workflow_dispatch` is here so the check can be run by hand, and the fleet drift
+# job in `ratatoskr-workspace` is what notices this file has stopped being present or has drifted.
+name: advisories
+
+on:
+  schedule:
+    # Daily, because RustSec publishes on no schedule of its own and a run costs about a minute of a
+    # runner that is free on a public repository. Not on the hour: GitHub queues everyone's
+    # `0 * * * *` together and delays them.
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+# SECURITY.md: deny by default. Raised to `issues: write` on the one job that needs it.
+permissions:
+  contents: read
+
+concurrency:
+  group: advisories
+  # `false`, unlike every other workflow here. A scheduled run has nothing newer to yield to, and
+  # `true` would let a manual dispatch cancel the nightly answer instead of queueing behind it.
+  cancel-in-progress: false
+
+jobs:
+  advisories:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    permissions:
+      contents: read
+      # The only write permission in this repository. It files the issue below, and a job that can
+      # write issues cannot write code, publish a package, or read a secret.
+      issues: write  # to file the finding as an issue
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Show the pinned toolchain
+        run: rustup show           # rust-toolchain.toml is the only supported toolchain
+
+      # `cargo deny` reads Cargo.lock, and the `cargo metadata` behind it needs the manifests that
+      # lock names. Nothing is built: this job never invokes rustc, which is why it has no cache.
+      - run: cargo fetch --locked
+
+      - uses: taiki-e/install-action@5b4d68e2e660441203ab128a23676f1e4faf1532 # v2.86.3
+        with:
+          tool: cargo-deny
+
+      - name: cargo deny check advisories
+        id: advisories
+        # `continue-on-error` so the next step can read the finding and file it. The job still ends
+        # red: the reporting step exits non-zero on purpose.
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          cargo deny check advisories 2>&1 | tee advisories.log
+
+      - name: File the finding where it will still be visible in a month
+        if: steps.advisories.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TITLE: cargo deny check advisories fails on main
+        run: |
+          set -euo pipefail
+          {
+            echo "\`cargo deny check advisories\` failed on \`main\`."
+            echo
+            echo "Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            echo
+            echo '```'
+            tail -n 100 advisories.log
+            echo '```'
+          } > issue-body.md
+          # One open issue, commented on, rather than one issue per night. The run is the daily
+          # signal; the issue exists because a workflow log is deleted after 90 days and an advisory
+          # can outlive that.
+          #
+          # The open issues are listed and filtered exactly, NOT searched. GitHub's search index is
+          # eventually consistent, so an issue filed last night can be missing from a search this
+          # morning — which is precisely how a "do not duplicate" check files a duplicate every day.
+          existing=$(gh issue list --state open --limit 100 --json number,title \
+                     | jq -r --arg t "$TITLE" '.[] | select(.title == $t) | .number' | head -1)
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body-file issue-body.md
+          else
+            gh issue create --title "$TITLE" --body-file issue-body.md
+          fi
+          exit 1
