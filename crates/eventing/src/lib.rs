@@ -20,11 +20,13 @@
 
 use platform_persistence::PersistenceError;
 
+pub mod consumer;
 pub mod inbox;
 pub mod outbox;
 pub mod publisher;
 pub mod pump;
 
+pub use crate::consumer::{ConsumerReport, Handler, Incoming, deliver};
 pub use crate::inbox::{Inbox, Reception};
 pub use crate::outbox::{ClaimedMessage, Outbox, OutboxStats};
 pub use crate::publisher::{NatsPublisher, PublishError, Publisher};
@@ -41,6 +43,11 @@ pub enum EventingError {
     /// The payload could not be serialized or read back.
     #[error("the message payload could not be converted")]
     Payload(#[source] serde_json::Error),
+
+    /// The bus refused or was unreachable. A string rather than the client's error type, because
+    /// that type is not `Clone` and this one crosses a task boundary.
+    #[error("the bus could not be reached: {0}")]
+    Bus(String),
 
     /// The database refused or failed.
     #[error(transparent)]

@@ -1,12 +1,13 @@
 # Platform implementation plan
 
-> **Status:** items 1 through 5 are implemented (see `DEVELOPMENT.md`). Items 6 through 10 are planned,
+> **Status:** items 1 through 6 are implemented (see `DEVELOPMENT.md`). Items 7 through 10 are planned,
 > and none of them is scaffolded or stubbed in the checkout.
 >
-> Item 5 is where the earlier ones meet: `ratatoskr-edge` now opens a pool, applies the migrations,
+> Item 5 is where the earlier ones meet: `ratatoskr-edge` opens a pool, applies the migrations,
 > authenticates a session, and writes the idempotency reservation, the operation and the outbox
-> command in one transaction. The outbox PUMP still has no caller — nothing publishes to NATS in a
-> running process yet — and SSE arrives with item 6.
+> command in one transaction. Item 6 closes the loop — the publisher and the event consumer run in
+> the process, and progress streams over SSE — so a capture now travels from a request to the bus
+> and back into the projection a client reads.
 
 Open questions that block a later item are recorded in `DEVELOPMENT.md`. Q2 (the `platform_ingress` versus `platform_ingest` schema spelling) blocks item 2 and Q4 (the `correlation` entity kind in `contracts.toml`) blocks item 4; neither can be worked around in the item that hits it.
 

@@ -24,6 +24,7 @@ use platform_persistence::Database;
 pub mod auth;
 pub mod captures;
 pub mod operations;
+pub mod stream;
 
 pub use crate::auth::Principal;
 
@@ -65,5 +66,6 @@ pub fn routes(state: ApiState) -> Router {
     Router::new()
         .route("/v2/captures", post(captures::submit))
         .route("/v2/operations/{operation_id}", get(operations::read))
+        .route("/v2/operations/{operation_id}/events", get(stream::events))
         .with_state(state)
 }

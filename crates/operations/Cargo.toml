@@ -14,10 +14,13 @@ path = "src/lib.rs"
 [dependencies]
 ratatoskr-platform-core.workspace        = true
 ratatoskr-platform-persistence.workspace = true
+ratatoskr-platform-eventing.workspace    = true
 ratatoskr-identifiers.workspace          = true
 ratatoskr-operation-contracts.workspace  = true
 ratatoskr-error-contracts.workspace      = true
 sqlx.workspace      = true
+serde.workspace      = true
+serde_json.workspace = true
 uuid.workspace      = true
 time.workspace      = true
 jiff.workspace      = true
@@ -29,7 +32,8 @@ tracing.workspace   = true
 # the integration suite, which is what replaces the compile-time checking the `sqlx::query!` macros
 # would give.
 ratatoskr-platform-persistence = { workspace = true, features = ["test-support"] }
-tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "sync"] }
+async-nats.workspace = true
 
 [lints]
 workspace = true

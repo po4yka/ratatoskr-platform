@@ -60,6 +60,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-stream"
+version = "0.3.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0b5a71a6f37880a80d1d7f19efd781e4b5de42c88f0722cc13bcb6cc2cfe8476"
+dependencies = [
+ "async-stream-impl",
+ "futures-core",
+ "pin-project-lite",
+]
+
+[[package]]
+name = "async-stream-impl"
+version = "0.3.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c7c24de15d275a1ecfd47a380fb4d5ec9bfe0933f309ed5e705b775596a3574d"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "async-trait"
 version = "0.1.92"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1827,11 +1849,17 @@ name = "ratatoskr-edge"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "jiff",
  "ratatoskr-platform-core",
+ "ratatoskr-platform-eventing",
  "ratatoskr-platform-http",
+ "ratatoskr-platform-operations",
  "ratatoskr-platform-persistence",
  "ratatoskr-platform-public-api",
+ "sqlx",
  "tokio",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -1926,6 +1954,7 @@ name = "ratatoskr-platform-eventing"
 version = "0.1.0"
 dependencies = [
  "async-nats",
+ "futures-util",
  "jiff",
  "ratatoskr-event-envelope",
  "ratatoskr-identifiers",
@@ -1951,6 +1980,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "metrics",
+ "metrics-exporter-prometheus",
  "ratatoskr-error-contracts",
  "ratatoskr-identifiers",
  "ratatoskr-platform-core",
@@ -2001,12 +2031,16 @@ dependencies = [
 name = "ratatoskr-platform-operations"
 version = "0.1.0"
 dependencies = [
+ "async-nats",
  "jiff",
  "ratatoskr-error-contracts",
  "ratatoskr-identifiers",
  "ratatoskr-operation-contracts",
  "ratatoskr-platform-core",
+ "ratatoskr-platform-eventing",
  "ratatoskr-platform-persistence",
+ "serde",
+ "serde_json",
  "sqlx",
  "thiserror 2.0.20",
  "time",
@@ -2032,11 +2066,14 @@ dependencies = [
 name = "ratatoskr-platform-public-api"
 version = "0.1.0"
 dependencies = [
+ "async-stream",
  "axum",
+ "futures-util",
  "http",
  "http-body-util",
  "jiff",
  "ratatoskr-identifiers",
+ "ratatoskr-operation-contracts",
  "ratatoskr-platform-core",
  "ratatoskr-platform-eventing",
  "ratatoskr-platform-http",

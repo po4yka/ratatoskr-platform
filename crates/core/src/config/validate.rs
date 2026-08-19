@@ -112,6 +112,20 @@ pub(crate) fn validate(role: RuntimeRole, config: &PlatformConfig) -> Vec<Violat
         });
     }
 
+    found.extend(otlp_violations(config));
+
+    found.extend(database_violations(config));
+    found.extend(bus_violations(config));
+
+    found
+}
+
+/// V7 to V10 — the OTLP exporter rules.
+///
+/// Extracted for the same reason as the database and bus rules: one subsystem, one function, and
+/// [`validate`] stays inside the workspace's function-length lint.
+fn otlp_violations(config: &PlatformConfig) -> Vec<Violation> {
+    let mut found = Vec::new();
     if let Some(otlp) = config.telemetry.otlp.as_ref() {
         // V7
         let scheme_ok = matches!(otlp.endpoint.scheme(), "http" | "https");
@@ -162,7 +176,37 @@ pub(crate) fn validate(role: RuntimeRole, config: &PlatformConfig) -> Vec<Violat
         }
     }
 
-    found.extend(database_violations(config));
+    found
+}
+
+/// V13 — the bus rules.
+///
+/// Extracted for the same reason as the database rules: [`validate`] stays inside the workspace's
+/// function-length lint, and the split follows a subsystem boundary rather than a line count.
+fn bus_violations(config: &PlatformConfig) -> Vec<Violation> {
+    let mut found = Vec::new();
+    let Some(bus) = &config.bus else {
+        return found;
+    };
+
+    if !matches!(bus.url.scheme(), "nats" | "tls" | "ws" | "wss") {
+        found.push(Violation {
+            key: "bus.url",
+            env_var: "RATATOSKR__BUS__URL",
+            rule: "must be a nats://, tls://, ws:// or wss:// URL",
+        });
+    }
+
+    // The same credential-in-a-URL hole rule V10 closes for the collector. A NATS URL prints in the
+    // effective-configuration line, so a credential in it is a credential in the log.
+    if !bus.url.username().is_empty() || bus.url.password().is_some() {
+        found.push(Violation {
+            key: "bus.url",
+            env_var: "RATATOSKR__BUS__URL",
+            rule: "must not embed a user name or a password; a bus credential belongs in a \
+                   credentials file read by path (SECURITY.md)",
+        });
+    }
 
     found
 }

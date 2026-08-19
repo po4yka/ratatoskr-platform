@@ -1,6 +1,6 @@
 # Developing Ratatoskr Platform
 
-> Status: Implemented for milestones 1 through 5; milestones 6 through 10 are Proposed.  
+> Status: Implemented for milestones 1 through 6; milestones 7 through 10 are Proposed.  
 > Owner: `ratatoskr-platform`  
 > Last reviewed: 2026-08-18
 
@@ -20,6 +20,12 @@ PostgreSQL in `compose.yaml`, the `ratatoskr-platform-persistence` pool and embe
 `ratatoskr-platform-identity` and `ratatoskr-platform-operations` crates with their integration suites.
 No binary opens a pool yet — `database` is an optional configuration section that is validated but not
 yet consumed, and the first route that reads persisted data is milestone 5.
+
+Present since milestone 6: the outbox publisher and the operation-event consumer run inside
+`ratatoskr-edge`, and `GET /v2/operations/{id}/events` streams progress as Server-Sent Events with
+`Last-Event-ID` replay. The bus is optional — a developer polling `/v2/operations` needs no broker —
+but a deployment without one accumulates commands nobody publishes, which the process warns about at
+startup.
 
 Present since milestone 5: the versioned public API — `POST /v2/captures` and
 `GET /v2/operations/{id}` — session authentication, and the idempotency ledger. `ratatoskr-edge` now
@@ -157,6 +163,9 @@ reasons, are ADR-0004.
 
 ```bash
 docker compose up -d                 # PostgreSQL and NATS JetStream together
+# Edge declares the stream it publishes to (`cmd.>`) and the one it consumes from (`evt.>`).
+# JetStream does not acknowledge a publish to a subject no stream covers, so without those streams
+# every command would be retried, backed off and eventually dead-lettered.
 docker exec ratatoskr-platform-nats wget -q -O- http://127.0.0.1:8222/healthz   # {"status":"ok"}
 ```
 

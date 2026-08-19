@@ -29,7 +29,7 @@ use figment::Figment;
 use figment::providers::{Env, Serialized};
 
 pub use crate::config::model::{
-    AdminConfig, DatabaseConfig, LogFormat, OtlpConfig, PlatformConfig, PublicConfig,
+    AdminConfig, BusConfig, DatabaseConfig, LogFormat, OtlpConfig, PlatformConfig, PublicConfig,
     ShutdownConfig, TelemetryConfig,
 };
 pub use crate::config::validate::Violation;
@@ -109,6 +109,9 @@ impl PlatformConfig {
             // it required for the roles that serve data; until then a process without one starts and
             // reports no database check.
             database: None,
+            // Absent by default. A broker URL is deployment topology, and a default would be wrong
+            // everywhere except one laptop.
+            bus: None,
             // Role-aware: the table is present for the one role that may serve public traffic and
             // absent from the others, so rule V1 is satisfied by the defaults alone.
             public: role.may_have_public_listener().then(|| PublicConfig {

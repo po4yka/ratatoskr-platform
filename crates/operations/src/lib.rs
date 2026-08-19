@@ -11,6 +11,8 @@
 //! than on the wire.
 
 use platform_persistence::PersistenceError;
+
+pub use crate::projection::ProgressProjection;
 use ratatoskr_error_contracts::{ErrorCode, ErrorEnvelope, WarningEnvelope};
 use ratatoskr_identifiers::{
     EntityRef, Extensions, OperationId, SafeMessage, TenantRef, UserId, WireTimestamp,
@@ -24,6 +26,7 @@ use sqlx::{PgExecutor, Row as _};
 use crate::transition::Transition;
 use uuid::Uuid;
 
+pub mod projection;
 pub mod transition;
 
 /// A refusal that is an expected outcome rather than a fault.
@@ -542,4 +545,79 @@ where
     }
 
     Ok((errors, warnings))
+}
+
+/// One recorded progress entry, as a client sees it.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ProgressEntry {
+    /// The entry's identity. `UUIDv7`, so ordering by it is ordering by time, and a client can resume
+    /// from the last one it saw.
+    pub progress_id: Uuid,
+    /// The status this entry recorded.
+    pub status: OperationStatus,
+    /// The display phase, when the producer gave one.
+    pub stage: Option<String>,
+    /// Bounded progress, when the producer gave one.
+    pub progress_percent: Option<u8>,
+    /// A user-safe message.
+    pub message: Option<String>,
+    /// When it was observed.
+    pub observed_at: WireTimestamp,
+}
+
+/// Read progress entries recorded after `after`, oldest first.
+///
+/// `after` is a progress id rather than a timestamp: two entries can share an instant, and a client
+/// resuming from a timestamp would either repeat one or miss one. `UUIDv7` orders by time, so this is
+/// both a cursor and a chronology.
+///
+/// # Errors
+///
+/// [`OperationError::Persistence`] if the statement fails.
+pub async fn progress_since<'e, E>(
+    executor: E,
+    operation_id: Uuid,
+    after: Option<Uuid>,
+    limit: i64,
+) -> Result<Vec<ProgressEntry>, OperationError>
+where
+    E: PgExecutor<'e>,
+{
+    let rows = sqlx::query(
+        "select progress_id, status, stage, progress_percent, message, observed_at
+           from operations.operation_progress
+          where operation_id = $1 and ($2::uuid is null or progress_id > $2)
+          order by progress_id
+          limit $3",
+    )
+    .bind(operation_id)
+    .bind(after)
+    .bind(limit)
+    .fetch_all(executor)
+    .await
+    .map_err(PersistenceError::Query)?;
+
+    rows.into_iter()
+        .map(|row| {
+            let status: String = row.try_get("status").map_err(PersistenceError::Query)?;
+            let percent: Option<i16> = row
+                .try_get("progress_percent")
+                .map_err(PersistenceError::Query)?;
+            Ok(ProgressEntry {
+                progress_id: row
+                    .try_get("progress_id")
+                    .map_err(PersistenceError::Query)?,
+                status: status_from_str(&status).ok_or_else(|| {
+                    OperationError::ContractViolation(format!("unknown stored status {status}"))
+                })?,
+                stage: row.try_get("stage").map_err(PersistenceError::Query)?,
+                progress_percent: percent.and_then(|value| u8::try_from(value).ok()),
+                message: row.try_get("message").map_err(PersistenceError::Query)?,
+                observed_at: WireTimestamp::from_jiff(from_offset(
+                    row.try_get("observed_at")
+                        .map_err(PersistenceError::Query)?,
+                )),
+            })
+        })
+        .collect()
 }

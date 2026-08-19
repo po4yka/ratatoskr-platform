@@ -11,7 +11,6 @@
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use async_nats::jetstream;
 use platform_eventing::publisher::PublishError;
 use platform_eventing::{MessageClass, NatsPublisher, Outbox, Publisher, Subject, pump};
 use platform_persistence::test_support::TestDatabase;
@@ -92,19 +91,22 @@ async fn a_message_reaches_jetstream_and_is_not_duplicated() {
 
     let test_subject = subject();
 
-    // A stream per test run, capturing exactly the subject under test. The stream NAME isolates
-    // concurrent runs; the subject cannot vary, because the grammar is the contract catalogue and a
-    // test-only subject would prove nothing about the real one.
-    let stream_name = format!("test_{}", Uuid::now_v7().simple());
+    // The production stream, not a private one. A wildcard stream covering `cmd.>` may already exist
+    // on a shared broker — `ratatoskr-edge` declares one at startup — and JetStream refuses a second
+    // stream whose subjects overlap. Using the same declaration the service uses is both what
+    // production does and the only thing that works on a broker a service has touched.
+    let stream_name = "ratatoskr_commands";
     publisher
-        .context()
-        .create_stream(jetstream::stream::Config {
-            name: stream_name.clone(),
-            subjects: vec![test_subject.as_str().to_owned()],
-            ..jetstream::stream::Config::default()
-        })
+        .ensure_stream(stream_name, vec!["cmd.>".to_owned()])
         .await
-        .expect("creating a stream");
+        .expect("declaring the command stream");
+    let stream = publisher
+        .context()
+        .get_stream(stream_name)
+        .await
+        .expect("the command stream");
+    // Start from empty, so the count below is about this test and not about whatever ran before it.
+    stream.purge().await.expect("purging");
 
     let message_id = Uuid::now_v7();
     Outbox::enqueue(
@@ -133,7 +135,7 @@ async fn a_message_reaches_jetstream_and_is_not_duplicated() {
 
     let info = publisher
         .context()
-        .get_stream(&stream_name)
+        .get_stream(stream_name)
         .await
         .expect("reading the stream")
         .info()
@@ -143,11 +145,9 @@ async fn a_message_reaches_jetstream_and_is_not_duplicated() {
         .messages;
     assert_eq!(info, 1, "the bus must hold exactly one message");
 
-    publisher
-        .context()
-        .delete_stream(&stream_name)
-        .await
-        .expect("deleting the stream");
+    // The stream is shared and declared by the service, so it is purged rather than deleted:
+    // deleting it would break a concurrently running test and any local edge process.
+    stream.purge().await.expect("purging");
     harness.cleanup().await.expect("cleanup");
 }
 

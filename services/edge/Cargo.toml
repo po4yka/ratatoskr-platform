@@ -14,6 +14,12 @@ path = "src/main.rs"
 [dependencies]
 ratatoskr-platform-core.workspace = true
 ratatoskr-platform-http.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+jiff.workspace = true
+sqlx.workspace = true
+ratatoskr-platform-operations.workspace = true
+ratatoskr-platform-eventing.workspace = true
 axum.workspace = true
 ratatoskr-platform-persistence.workspace = true
 ratatoskr-platform-public-api.workspace = true

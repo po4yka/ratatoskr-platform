@@ -60,10 +60,22 @@ pub trait PublicRoutes {
     ///
     /// Returning an error here is a startup failure, not a request failure: a binary that cannot
     /// reach the database it needs must refuse to report itself ready rather than serve 500s.
-    fn build(
-        self,
-        config: &PlatformConfig,
-    ) -> impl Future<Output = Result<(Router, Option<Database>), String>> + Send;
+    fn build(self, config: &PlatformConfig)
+    -> impl Future<Output = Result<Serving, String>> + Send;
+}
+
+/// What a binary serves, and what it runs alongside.
+#[derive(Debug, Default)]
+pub struct Serving {
+    /// The public routes.
+    pub routes: Router,
+    /// The pool, when this role has one. `run` probes it for readiness and closes it after the
+    /// grace window, so a binary does not have to remember to.
+    pub database: Option<Database>,
+    /// Background work that must stop when the process does — the outbox publisher, the event
+    /// consumer. Aborted after the listeners close, never before: a task that is still publishing
+    /// when the listener stops is finishing work a request already committed to.
+    pub tasks: Vec<tokio::task::JoinHandle<()>>,
 }
 
 /// The contribution of a role that serves no public API.
@@ -71,8 +83,8 @@ pub trait PublicRoutes {
 pub struct NoPublicRoutes;
 
 impl PublicRoutes for NoPublicRoutes {
-    async fn build(self, _config: &PlatformConfig) -> Result<(Router, Option<Database>), String> {
-        Ok((Router::new(), None))
+    async fn build(self, _config: &PlatformConfig) -> Result<Serving, String> {
+        Ok(Serving::default())
     }
 }
 
@@ -133,21 +145,11 @@ pub async fn run<R: PublicRoutes>(role: RuntimeRole, routes: R) -> ExitCode {
     let http = Arc::new(HttpState::new(role));
     let metrics = guard.metrics_handle();
 
-    let admin = match TcpListener::bind(config.admin.bind).await {
-        Ok(listener) => listener,
-        Err(error) => {
-            startup.in_scope(|| {
-                tracing::error!(bind = %config.admin.bind, %error, "the admin listener could not bind");
-            });
-            return ExitCode::FAILURE;
-        }
-    };
-    let mut servers = vec![serve(
-        admin,
-        admin_router(Arc::clone(&runtime), move || metrics.render()),
-    )];
-
-    let (public_routes, database) = match routes.build(&config).await {
+    let Serving {
+        routes: public_routes,
+        database,
+        tasks,
+    } = match routes.build(&config).await {
         Ok(built) => built,
         Err(reason) => {
             startup.in_scope(|| {
@@ -157,24 +159,14 @@ pub async fn run<R: PublicRoutes>(role: RuntimeRole, routes: R) -> ExitCode {
         }
     };
 
-    // The prober owns readiness for the dependency. A readiness handler that opened a connection
-    // would let a probe finish off a saturated pool.
     let prober = start_database_prober(database.as_ref(), &runtime).await;
 
-    if let Some(public) = config.public.as_ref() {
-        match TcpListener::bind(public.bind).await {
-            Ok(listener) => servers.push(serve(
-                listener,
-                public_router(Arc::clone(&http), public, public_routes),
-            )),
-            Err(error) => {
-                startup.in_scope(|| {
-                    tracing::error!(bind = %public.bind, %error, "the public listener could not bind");
-                });
-                return ExitCode::FAILURE;
-            }
-        }
-    }
+    let Some(servers) = startup
+        .in_scope(|| bind_listeners(&config, &runtime, &http, metrics, public_routes))
+        .await
+    else {
+        return ExitCode::FAILURE;
+    };
 
     runtime.mark_startup_complete();
     startup.record("duration_ms", observe::duration_ms(started.elapsed()));
@@ -199,6 +191,9 @@ pub async fn run<R: PublicRoutes>(role: RuntimeRole, routes: R) -> ExitCode {
 
     if let Some(prober) = prober {
         prober.abort();
+    }
+    for task in tasks {
+        task.abort();
     }
     if let Some(database) = database {
         // After the listener stopped accepting and the grace window closed, so an in-flight request
@@ -284,4 +279,47 @@ async fn start_database_prober(
             runtime.set_database_reachable(database.ping().await.is_ok());
         }
     }))
+}
+
+/// Bind the admin listener, and the public one when the role has it.
+///
+/// Extracted from [`run`] to keep it inside the workspace's function-length lint, along a boundary
+/// that means something: everything before it prepares the process, this opens its sockets, and
+/// everything after it serves.
+///
+/// `None` on failure; the caller exits `1`. The error is logged here, inside the startup span, so it
+/// carries the same fields as every other startup record.
+async fn bind_listeners(
+    config: &PlatformConfig,
+    runtime: &Arc<RuntimeState>,
+    http: &Arc<HttpState>,
+    metrics: metrics_exporter_prometheus::PrometheusHandle,
+    public_routes: Router,
+) -> Option<Vec<crate::shutdown::Served>> {
+    let admin = match TcpListener::bind(config.admin.bind).await {
+        Ok(listener) => listener,
+        Err(error) => {
+            tracing::error!(bind = %config.admin.bind, %error, "the admin listener could not bind");
+            return None;
+        }
+    };
+    let mut servers = vec![serve(
+        admin,
+        admin_router(Arc::clone(runtime), move || metrics.render()),
+    )];
+
+    if let Some(public) = config.public.as_ref() {
+        match TcpListener::bind(public.bind).await {
+            Ok(listener) => servers.push(serve(
+                listener,
+                public_router(Arc::clone(http), public, public_routes),
+            )),
+            Err(error) => {
+                tracing::error!(bind = %public.bind, %error, "the public listener could not bind");
+                return None;
+            }
+        }
+    }
+
+    Some(servers)
 }

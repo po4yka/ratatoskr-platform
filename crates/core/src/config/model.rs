@@ -35,6 +35,12 @@ pub struct PlatformConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub database: Option<DatabaseConfig>,
 
+    /// The event bus. Optional: milestones 1 to 5 ran without one, and a developer polling
+    /// `/v2/operations` needs no broker. A deployment without it accumulates commands nobody
+    /// publishes, which the process warns about at startup rather than discovering later.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bus: Option<BusConfig>,
+
     /// The two phases of a graceful stop.
     pub shutdown: ShutdownConfig,
 
@@ -111,6 +117,18 @@ const fn default_max_connections() -> u32 {
 
 const fn default_acquire_timeout_seconds() -> u64 {
     5
+}
+
+/// The `NATS` server the outbox publishes to and the projection consumes from.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BusConfig {
+    /// `RATATOSKR__BUS__URL`. A `nats://` or `tls://` URL.
+    ///
+    /// Not a `SecretString`, and validated (rule V13) to carry no user information: a `NATS`
+    /// credential belongs in a credentials file the process reads by path, not in a URL that the
+    /// effective-configuration log line prints. Same reasoning as rule V10 for the collector.
+    pub url: Url,
 }
 
 /// The two phases of a graceful stop. They are separate knobs because they answer different

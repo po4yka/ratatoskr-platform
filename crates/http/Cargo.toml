@@ -16,6 +16,7 @@ path = "src/lib.rs"
 [dependencies]
 ratatoskr-platform-core.workspace      = true
 ratatoskr-platform-telemetry.workspace = true
+metrics-exporter-prometheus.workspace  = true
 ratatoskr-platform-persistence.workspace = true
 ratatoskr-identifiers.workspace        = true
 ratatoskr-error-contracts.workspace    = true

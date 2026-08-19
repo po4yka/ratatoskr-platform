@@ -63,6 +63,37 @@ impl NatsPublisher {
     pub const fn context(&self) -> &jetstream::Context {
         &self.context
     }
+
+    /// Make sure a stream exists for `subjects`.
+    ///
+    /// `JetStream` does not acknowledge a publish to a subject no stream is bound to, and the
+    /// publisher treats an unacknowledged publish as a failure — correctly, since the message was
+    /// not stored. Without a stream the outbox therefore retries, backs off and eventually
+    /// dead-letters perfectly good commands, with a diagnosis ("not acknowledged") that does not
+    /// name the cause.
+    ///
+    /// Idempotent, so every replica calling it at startup is fine. Stream topology belongs to the
+    /// deployment profile at milestone 9; until one exists, the process that publishes declares what
+    /// it publishes to.
+    ///
+    /// # Errors
+    ///
+    /// [`PublishError::NotAcknowledged`] if the stream cannot be created.
+    pub async fn ensure_stream(
+        &self,
+        name: &str,
+        subjects: Vec<String>,
+    ) -> Result<(), PublishError> {
+        self.context
+            .get_or_create_stream(jetstream::stream::Config {
+                name: name.to_owned(),
+                subjects,
+                ..jetstream::stream::Config::default()
+            })
+            .await
+            .map_err(|error| PublishError::NotAcknowledged(Box::new(error)))?;
+        Ok(())
+    }
 }
 
 impl Publisher for NatsPublisher {
