@@ -58,10 +58,18 @@ if printf '%s\n' "$added" | grep -qE -- '-----BEGIN [A-Z ]*PRIVATE KEY-----' 2>/
     fail=1
 fi
 
-# Whole-file formatting, so staged-only checking would be wrong anyway. Runs only where there is
-# something to format, which is what lets one hook file be correct in a Rust repository and in a
-# documents-only one without knowing which it is in.
-if [ -f Cargo.toml ] && command -v cargo >/dev/null 2>&1; then
+# Whole-file formatting, because rustfmt is whole-file: checking only the staged hunks would pass a
+# commit that leaves the file unformatted. Runs only where there is something to format, which is what
+# lets one hook file be correct in a Rust repository and in a documents-only one without knowing which
+# it is in.
+#
+# It also runs only when the commit itself carries Rust, and that condition was added because the hook
+# was refusing a CI-only commit while unrelated work in progress sat unformatted in the tree. That is
+# not a weakening: a `.rs` file that is unformatted in the working tree and absent from this commit has
+# not entered history, and the check fires on the commit that puts it there. A hook that blocks a
+# commit it has no business blocking is a hook that gets bypassed, and then stays bypassed.
+if [ -f Cargo.toml ] && command -v cargo >/dev/null 2>&1 \
+   && git diff --cached --name-only --diff-filter=ACM | grep -q '\.rs$'; then
     if ! cargo fmt --all -- --check >/dev/null 2>&1; then
         echo "pre-commit: cargo fmt --all -- --check fails. Run 'cargo fmt --all'." >&2
         fail=1
