@@ -1,0 +1,173 @@
+# The checks every Ratatoskr repository can answer, whether or not it contains code yet.
+#
+# This file is identical in all sixteen repositories. It deliberately installs nothing and uses one
+# action, so it has no supply-chain surface beyond the checkout and it cannot fail for a reason that
+# has nothing to do with the tree.
+#
+# It does NOT lint prose. That was measured across all sixteen repositories before this file was
+# written: markdownlint reports nothing, a link checker has nothing to read, `typos` reports eight
+# findings and no defect, and a check on backticked paths reports 156 findings of which none is a
+# defect — the documents legitimately name planned files, files in other repositories, and a template
+# placeholder. `ratatoskr-workspace/docs/QUALITY_GATES.md` records those measurements. What is left is
+# the invariants below, each of which fails only when something is really wrong.
+name: fleet
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# SECURITY.md: deny by default. These jobs read the tree and need nothing else.
+permissions:
+  contents: read
+
+concurrency:
+  group: fleet-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  invariants:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # These jobs push nothing, so leaving the token in .git/config keeps a credential for no
+          # reason.
+          persist-credentials: false
+
+      - name: The files every repository in the fleet must have
+        # A deletion is the failure this catches. SECURITY.md and AGENTS.md are the two that would go
+        # unnoticed longest, because nothing builds from them. The test reads the INDEX rather than the
+        # working tree: a file that is present on disk but no longer tracked is also gone, and a
+        # filesystem test would call that healthy.
+        run: |
+          set -euo pipefail
+          missing=0
+          for f in \
+            .gitignore .gitattributes .editorconfig \
+            README.md AGENTS.md DEVELOPMENT.md SECURITY.md LICENSE \
+            .githooks/pre-commit \
+            docs/ARCHITECTURE.md docs/REQUIREMENTS.md docs/THREAT_MODEL.md \
+            docs/TESTING.md docs/adr/README.md
+          do
+            if ! git ls-files --error-unmatch "$f" >/dev/null 2>&1; then
+              echo "::error file=$f::$f is required in every Ratatoskr repository and is absent"
+              missing=$((missing + 1))
+            fi
+          done
+          [ "$missing" -eq 0 ] || exit 1
+          echo "all required files present"
+
+      - name: The pre-commit hook is present and executable
+        # A hook that lost its executable bit is silently inert, and git records the mode, so this is
+        # checkable. It does not assert the hook's contents: the credential check below runs the same
+        # rule over the whole tree, which is the stronger statement.
+        run: |
+          set -euo pipefail
+          mode=$(git ls-files -s .githooks/pre-commit | awk '{print $1}')
+          mode=${mode:-absent-from-the-index}
+          if [ "$mode" != "100755" ]; then
+            echo "::error file=.githooks/pre-commit::mode is $mode, expected 100755"
+            exit 1
+          fi
+          echo ".githooks/pre-commit is committed executable"
+
+      - name: No CRLF in a tracked text file
+        # `.gitattributes` declares `* text=auto eol=lf`, and git applies that at `git add`, so a
+        # normal commit cannot fail this. What can: a blob written without the filter — a commit made
+        # through the web editor or the contents API — and a lone CR, which is never normalised.
+        # `--cached` reads the index, which is what the declaration governs, and it honours `binary`,
+        # which is the one-word escape hatch for a fixture whose CR is the thing under test.
+        run: |
+          set -euo pipefail
+          found=$(git grep --cached -lI $'\r' -- . || true)
+          if [ -n "$found" ]; then
+            echo "::error::a tracked text file contains CR, which .gitattributes forbids"
+            printf '%s\n' "$found" | sed 's/^/  /'
+            exit 1
+          fi
+          echo "no tracked text file contains CR"
+
+      - name: No credential in a tracked file
+        # The rule the pre-commit hook applies to staged lines, applied here to the whole tree. This is
+        # the version that matters: `git commit --no-verify` skips the hook, and an agent can pass it.
+        #
+        # This is not redundant with GitHub secret scanning, and the reason is worth stating exactly.
+        # GitHub does have patterns for a PostgreSQL connection string that carries credentials and for
+        # an RSA private key, but its documentation classifies both as GENERIC rather than provider
+        # patterns, and generic-pattern scanning is a separate setting. On these repositories that
+        # setting reads `disabled`, and a PATCH that tries to enable it answers 200 and leaves it
+        # disabled. So neither shape is scanned here today, and the two checks below are the only thing
+        # that looks for them.
+        #
+        # A loopback host and the names RFC 2606 reserves are excluded, because both occur correctly
+        # here: `postgres://platform:platform@127.0.0.1:5432/platform` is the documented local
+        # database, and `https://otel:LEAKME@collector.example:4317` is a test asserting that a
+        # credential in an OTLP endpoint is refused. Measured across all sixteen repositories: zero
+        # matches, while a real host still matches.
+        run: |
+          set -euo pipefail
+          cred='[a-z][a-z0-9+.-]*://[^/:@[:space:]"]*:[^@[:space:]"]+@'
+          safe='@(127\.0\.0\.1|\[::1\]|::1)([:/]|$)|@([^/[:space:]"]*\.)?(localhost|example|invalid|test|local|example\.(com|org|net))([:/]|$)'
+          fake=':(\$\{?[A-Za-z_][A-Za-z0-9_]*\}?|<[^>]*>|\*+|REDACTED|CHANGEME|[A-Z][A-Z0-9_]*)@'
+          hits=$(git grep -hoIE "${cred}[^[:space:]\"]*" -- . | grep -vE "$safe" | grep -vE "$fake" || true)
+          if [ -n "$hits" ]; then
+            echo "::error::a tracked file embeds a credential in a URL"
+            printf '%s\n' "$hits" | sort -u | sed 's/^/  /'
+            echo "These repositories are public. Remove the value and rotate the credential."
+            exit 1
+          fi
+          # A header alone is not a key: contracts' tools/contractsc/tests/secrets.rs asserts that its
+          # own scanner fires on "-----BEGIN RSA PRIVATE KEY-----", and blocking that commit would make
+          # this something to switch off. A real key brings its base64 body, so a file needs both. The
+          # body test is deliberately unanchored — a key indented inside YAML, or inlined with \n
+          # escapes in a .env, is still a key. Paths arrive NUL-delimited because one with a space in it
+          # must not be skipped.
+          while IFS= read -r -d '' f; do
+            if grep -qE '[A-Za-z0-9+/]{40,}={0,2}' "$f"; then
+              echo "::error file=$f::$f contains a private key. Treat the key as compromised."
+              exit 1
+            fi
+          done < <(git grep -lzE -- '-----BEGIN [A-Z ]*PRIVATE KEY-----' -- . || true)
+          echo "no credential and no private key in the tree"
+
+      - name: Every workflow pins each third-party action to a commit SHA
+        # `sha_pinning_required` is set on all sixteen repositories and rejects an unpinned action at
+        # run time, so for a push/pull_request workflow this step is a second opinion. It earns its
+        # place on the two things that setting does not reach in time: a workflow that push and
+        # pull_request never trigger (release, schedule, workflow_dispatch), which would otherwise
+        # fail at release time, and a nested `uses:` inside a composite action under .github/actions.
+        run: |
+          set -euo pipefail
+          unpinned=$(grep -rnE '^[[:space:]]*(-[[:space:]]+)?uses:[[:space:]]*[^[:space:]]+@' .github \
+                     | grep -vE '@[0-9a-f]{40}([[:space:]]|$)' || true)
+          if [ -n "$unpinned" ]; then
+            echo "::error::an action or reusable workflow is referenced by a moving ref"
+            printf '%s\n' "$unpinned" | sed 's/^/  /'
+            echo "A branch moves and a tag can be moved, so neither pins. Use the commit SHA."
+            exit 1
+          fi
+          echo "every uses: line is pinned to a commit SHA"
+
+      - name: Code cannot land without a gate
+        # The net is not a second gate: it is the assertion that a gate EXISTS. The commit that adds a
+        # manifest must add the workflow that checks it. An earlier draft of this file tried to be the
+        # gate instead, by running the Rust commands itself. That was deleted: it knew only Cargo.toml,
+        # so it was permanently green in the three repositories whose first code is Kotlin, TypeScript
+        # and Swift — green on exactly the commit it existed to catch. This version fails closed for
+        # every language in the fleet and installs nothing.
+        run: |
+          set -euo pipefail
+          manifests=$(git ls-files -- Cargo.toml package.json pyproject.toml Package.swift 'build.gradle*' 'settings.gradle*' go.mod)
+          if [ -z "$manifests" ]; then
+            echo "no manifest, so there is nothing to gate yet"
+          elif [ -f .github/workflows/ci.yml ]; then
+            echo "this repository has code and its own ci.yml"
+          else
+            echo "::error::this repository has a manifest and no .github/workflows/ci.yml"
+            printf '%s\n' "$manifests" | sed 's/^/  /'
+            echo "The commit that adds code adds its gate. Copy ci.yml from ratatoskr-platform."
+            exit 1
+          fi

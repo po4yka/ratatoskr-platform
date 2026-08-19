@@ -73,6 +73,7 @@ makes it real.
 | Migration | **real** | milestone 2 |
 | NATS | **real** | milestone 4 |
 | `OpenAPI` | **real** | milestone 7 |
+| Artifact | **real** | — |
 
 ### Rust — also the CI gate, in this order
 
@@ -238,6 +239,23 @@ docker compose up -d                 # PostgreSQL and NATS JetStream together
 docker exec ratatoskr-platform-nats wget -q -O- http://127.0.0.1:8222/healthz   # {"status":"ok"}
 ```
 
+Both streams are created with **stated** limits, never `jetstream::stream::Config::default()`. Every
+unset field of that struct is its zero, and under `RetentionPolicy::Limits` those zeros mean "no
+limit": the stream retains everything until the store fills and then, under `DiscardPolicy::Old`,
+silently deletes the oldest messages — the ones nobody has consumed. The asymmetry between the two
+streams is the decision: a command stream **refuses** a publish when full, because the outbox is the
+durable copy and a refusal becomes a retry, a bounded backoff and a dead-lettered row an operator can
+read; an event stream drops its oldest, because an event is a fact its producer already recorded.
+
+`get_or_create_stream` does not reconcile. A stream created earlier with different limits keeps them,
+and the client says nothing — so a deployment carrying corrected limits reports success and changes
+nothing. `platform_eventing::stream::ensure` therefore compares and returns the differing fields, and
+the services log them at WARN. Fixing one is an operator action against the broker:
+
+```bash
+docker exec ratatoskr-platform-nats nats stream rm ratatoskr_commands -f   # then restart the service
+```
+
 `PLATFORM_TEST_NATS_URL` overrides the broker the suite uses; the default matches `compose.yaml`.
 JetStream is required, not optional: the publisher waits for an acknowledgement, and core NATS
 acknowledges nothing.
@@ -245,10 +263,45 @@ acknowledges nothing.
 Subjects are `cmd.<type>` and `evt.<type>` where `<type>` is the contract type name (ADR-0005). The
 class prefix is the privilege boundary a NATS credential is granted over.
 
+`ratatoskr-edge` REQUIRES `RATATOSKR__BUS__URL` and refuses to start without it, exactly as it
+refuses without a database. It was a warning until milestone 7's survey pointed out what that bought:
+edge came up healthy, reported `content.submit` unavailable through `/v2/capabilities`, and piled
+every accepted capture into `operations.outbox` with no publisher and no alert — a service that
+passes its own readiness check while doing nothing.
+
 `platform_eventing::pump::run_once` is one pass, driven by its caller. `ratatoskr-edge` is the only
 caller: `ratatoskr-ingest` writes commands into the outbox and publishes none of them, so a deployment
 of ingest without edge accumulates work nobody sends. Where publishers run is a deployment-profile
 decision and milestone 9 is where that profile is written.
+
+### Artifact — real
+
+```bash
+# The image the deployment runs. `--platform` is not optional: the target is aarch64 and a build that
+# omits it produces whatever the builder happens to be.
+docker buildx build --platform linux/arm64 \
+  --build-arg RATATOSKR_GIT_SHA="$(git rev-parse HEAD)" \
+  -t ratatoskr-platform:dev .
+
+# It carries three binaries and no default command, so every caller names one.
+docker run --rm ratatoskr-platform:dev ratatoskr-edge check-config
+```
+
+`debian:12-slim` is the runtime stage because it IS glibc 2.36, the target's version
+(`ratatoskr-workspace/docs/DEPLOYMENT_TARGET.md`) — an exact match rather than an approximation. A
+binary linked against a newer glibc does not start against an older one, and the failure is a loader
+error that names nothing useful.
+
+`RATATOSKR_GIT_SHA` is read at COMPILE time through `option_env!`, so a build that omits the argument
+produces binaries reporting `git_sha: unknown` through `/version` and `platform_build_info` — the
+first thing anyone looks at when a deployment misbehaves. CI passes `github.sha` and asserts the
+running container reports it back.
+
+CI builds this on a NATIVE `ubuntu-24.04-arm` runner rather than under QEMU on the x86 gate. This
+repository is public, so those runners cost nothing, and emulating a 368-crate Rust build is the
+difference between minutes and hours. The job builds and smoke-tests the artifact rather than
+re-running the suite: the suite checks behaviour and already does that; this job answers the one
+question the suite cannot, which is whether the thing we ship starts on the thing we ship it to.
 
 ### `OpenAPI` — real
 

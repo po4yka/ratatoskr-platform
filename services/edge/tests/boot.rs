@@ -48,6 +48,7 @@ fn each_role_boots_on_its_documented_configuration_and_reports_ready() {
             ("RATATOSKR__ADMIN__BIND", "127.0.0.1:9464"),
             ("RATATOSKR__TELEMETRY__LOG_FORMAT", "pretty"),
             ("RATATOSKR__DATABASE__URL", &database_url()),
+            ("RATATOSKR__BUS__URL", &bus_url()),
         ],
         9464,
     );
@@ -70,6 +71,15 @@ fn each_role_boots_on_its_documented_configuration_and_reports_ready() {
     // `DEVELOPMENT.md`, "Local run": the scheduler, on defaults alone, no environment at all. It is
     // the one role that still needs none, and the one that never binds a public listener.
     boots("ratatoskr-scheduler", &[], 9466);
+}
+
+/// Where edge's bus is. Matches `compose.yaml`, like the database below.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test binary choosing which broker to point a child process at"
+)]
+fn bus_url() -> String {
+    std::env::var("PLATFORM_TEST_NATS_URL").unwrap_or_else(|_| "nats://127.0.0.1:4222".to_owned())
 }
 
 /// Where edge's database is. Matches `compose.yaml`, so `docker compose up -d` then `cargo test`
@@ -110,6 +120,28 @@ fn edge_refuses_to_start_without_a_database() {
     );
     assert!(
         text.contains("RATATOSKR__DATABASE__URL"),
+        "the refusal must name the variable that is missing\n{text}"
+    );
+}
+
+/// B-4b. Edge refuses to start without a bus, for the same reason it refuses without a database.
+///
+/// Until milestone 7's survey this was a WARNING, and what that bought was worse than a crash: edge
+/// came up healthy, reported `content.submit` unavailable through `/v2/capabilities`, and piled
+/// every accepted capture into `operations.outbox` with no publisher and no alert. A service that
+/// passes its own readiness check while doing nothing is the hardest kind of failure to notice.
+#[test]
+fn edge_refuses_to_start_without_a_bus() {
+    let text = refuses_to_start(
+        "ratatoskr-edge",
+        &[
+            ("RATATOSKR__ADMIN__BIND", "127.0.0.1:9470"),
+            ("RATATOSKR__PUBLIC__BIND", "127.0.0.1:8093"),
+            ("RATATOSKR__DATABASE__URL", &database_url()),
+        ],
+    );
+    assert!(
+        text.contains("RATATOSKR__BUS__URL"),
         "the refusal must name the variable that is missing\n{text}"
     );
 }
@@ -180,10 +212,11 @@ fn maintenance_database_url() -> String {
 /// Runs `binary` to completion with `env`, asserts it failed, and returns both its streams.
 fn refuses_to_start(binary: &str, env: &[(&str, &str)]) -> String {
     let path = built_binary(binary);
-    // Removed first, then `env` is applied over it: a caller that supplies a database gets theirs,
-    // and one that does not gets none even if the developer running the suite exported one.
+    // Removed first, then `env` is applied over it: a caller that supplies a dependency gets
+    // theirs, and one that does not gets none even if the developer running the suite exported one.
     let output = Command::new(&path)
         .env_remove("RATATOSKR__DATABASE__URL")
+        .env_remove("RATATOSKR__BUS__URL")
         .envs(env.iter().copied())
         .output()
         .unwrap_or_else(|error| panic!("{} could not be spawned: {error}", path.display()));

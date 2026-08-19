@@ -103,11 +103,19 @@ jobs:
       # This file and DEVELOPMENT.md are one list by rule, and the rule had no enforcement — the same
       # defect class as a document claiming a capability the tree lacks. It passes today, so it starts
       # as a guard rather than as a backlog item.
+      #
+      # The awk is scoped to the `gate` job. Reading the whole file was a latent trap: DEVELOPMENT.md
+      # documents THIS job's command list, so the first commit adding a second job with a cargo step
+      # would have failed the guard with "DEVELOPMENT.md is the one that is wrong" — pointing the
+      # author at the wrong file entirely. A top-level job key is a bare name at two spaces, which is
+      # what the first rule tracks.
       - name: The gate and DEVELOPMENT.md are one list
         run: |
           set -euo pipefail
-          in_ci=$(awk '/^[[:space:]]+- run: cargo /{sub(/^[[:space:]]+- run: /,""); print}' \
-                  .github/workflows/ci.yml)
+          in_ci=$(awk '
+            /^  [a-z][a-z0-9_-]*:[[:space:]]*$/ { in_gate = ($0 ~ /^  gate:[[:space:]]*$/) }
+            in_gate && /^[[:space:]]+- run: cargo / { sub(/^[[:space:]]+- run: /, ""); print }
+          ' .github/workflows/ci.yml)
           in_doc=$(awk '/^### Rust — also the CI gate/{f=1} f&&/^cargo /{print} f&&/^```$/{exit}' \
                    DEVELOPMENT.md)
           if [ "$in_ci" != "$in_doc" ]; then
@@ -117,3 +125,71 @@ jobs:
           fi
           echo "the two lists are identical:"
           echo "$in_ci" | awk '{print "  " $0}'
+
+  # The artifact the deployment actually runs, built for the architecture it runs on.
+  #
+  # The gate above certifies an x86-64 binary. The target is `aarch64`
+  # (`ratatoskr-workspace/docs/DEPLOYMENT_TARGET.md`), so without this job the binary CI blesses
+  # cannot execute on the machine and the binary that can is compiled by nobody and tested by nobody
+  # — an architecture-specific codegen or feature-gate difference would first be seen in production.
+  #
+  # A NATIVE arm64 runner, not QEMU on the x86 gate. This repository is public, so GitHub's arm64
+  # runners cost nothing here, and emulating a 368-crate Rust build is the difference between minutes
+  # and hours.
+  #
+  # It builds and smoke-tests the artifact rather than re-running the suite. The suite's job is to
+  # check behaviour and it already does that; this job's job is to answer one question the suite
+  # cannot — does the thing we ship start on the thing we ship it to.
+  artifact:
+    name: linux/arm64 artifact
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build the image
+        run: |
+          docker build \
+            --build-arg RATATOSKR_GIT_SHA="${{ github.sha }}" \
+            --tag ratatoskr-platform:ci .
+
+      # Every deployable, because the `check-config` branch is wired into each `main` separately and
+      # a binary that cannot load its configuration cannot start. Ingest is expected to REFUSE: it
+      # carries no compiled public port, so 78 is its correct answer here and 0 would be the defect.
+      - name: Every binary loads its configuration
+        run: |
+          set -euo pipefail
+          run() { docker run --rm "$@"; }
+          run ratatoskr-platform:ci ratatoskr-edge check-config >/dev/null
+          run ratatoskr-platform:ci ratatoskr-scheduler check-config >/dev/null
+          run -e RATATOSKR__PUBLIC__BIND=127.0.0.1:8181 \
+              ratatoskr-platform:ci ratatoskr-ingest check-config >/dev/null
+          if run ratatoskr-platform:ci ratatoskr-ingest check-config >/dev/null 2>&1; then
+            echo "::error::ingest must refuse to start without an explicit public bind"
+            exit 1
+          fi
+
+      # The whole lifecycle against the real artifact: bind a socket, answer the operator plane,
+      # take SIGTERM, exit 0. The scheduler is the one role that needs no database or bus to do it.
+      - name: The artifact serves and stops cleanly
+        run: |
+          set -euo pipefail
+          docker run -d --name smoke -p 127.0.0.1:9466:9466 \
+            -e RATATOSKR__ADMIN__BIND=0.0.0.0:9466 \
+            ratatoskr-platform:ci ratatoskr-scheduler
+          for _ in $(seq 1 60); do
+            if curl -sf http://127.0.0.1:9466/health/ready >/dev/null; then break; fi
+            sleep 1
+          done
+          curl -sf http://127.0.0.1:9466/health/ready
+          echo
+          # `git_sha` is compiled in through `option_env!`, so an image built without the build
+          # argument reports "unknown" — the first thing anyone checks when a deployment misbehaves.
+          curl -sf http://127.0.0.1:9466/version | tee /dev/stderr | grep -q "${{ github.sha }}"
+          curl -sf http://127.0.0.1:9466/metrics | grep -q '^platform_build_info'
+          docker stop -t 40 smoke
+          test "$(docker inspect -f '{{.State.ExitCode}}' smoke)" = "0"
+          docker rm smoke

@@ -1,0 +1,13 @@
+# The build context is copied into the builder, so anything here is bytes the daemon never has to
+# read. `target/` matters most: a warm workspace holds several gigabytes of artifacts for the WRONG
+# architecture, which are then shadowed by the container's own build anyway.
+target/
+.git/
+.github/
+.omc/
+openapi/
+docs/
+*.md
+compose.yaml
+.env
+.env.*

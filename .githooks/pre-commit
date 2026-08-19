@@ -47,8 +47,14 @@ if printf '%s\n' "$added" | grep -IhE "$cred" 2>/dev/null | grep -qvE "$safe" 2>
     fail=1
 fi
 
-if printf '%s\n' "$added" | grep -qE -- '-----BEGIN [A-Z ]*PRIVATE KEY-----' 2>/dev/null; then
-    echo "pre-commit: a staged line contains a private key header." >&2
+# A header ALONE is not a key, and this repository set contains header specimens on purpose:
+# `tools/contractsc/tests/secrets.rs` asserts that contracts' own secret scanner fires on
+# "-----BEGIN RSA PRIVATE KEY-----". Blocking that commit would make the hook something to disable.
+# A real key also brings its base64 body, so both are required. Verified: the specimen passes, a real
+# OpenSSH key is refused.
+if printf '%s\n' "$added" | grep -qE -- '-----BEGIN [A-Z ]*PRIVATE KEY-----' 2>/dev/null \
+   && printf '%s\n' "$added" | grep -qE '^\+[A-Za-z0-9+/]{40,}={0,2}$' 2>/dev/null; then
+    echo "pre-commit: a staged private key. Remove it and treat the key as compromised." >&2
     fail=1
 fi
 

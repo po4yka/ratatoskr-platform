@@ -8,7 +8,7 @@
 )]
 
 use platform_eventing::inbox::Outcome;
-use platform_eventing::{Incoming, MessageClass, Subject, deliver};
+use platform_eventing::{Incoming, MessageClass, StreamSpec, Subject, deliver};
 use platform_operations::ProgressProjection;
 use platform_persistence::test_support::TestDatabase;
 use ratatoskr_operation_contracts::OperationStatus;
@@ -171,9 +171,12 @@ async fn an_event_published_to_jetstream_reaches_the_projection() {
     let consumer_name = format!("c_{}", Uuid::now_v7().simple());
     let subject =
         Subject::new(MessageClass::Event, "platform.operation.progressed.v1").expect("a subject");
+    // The same spec the service declares. Both declaration sites take one so that a stream cannot
+    // be created with one policy by whichever process reached the broker first.
+    let spec = StreamSpec::events(stream_name, vec!["evt.>".to_owned()]);
 
     publisher
-        .ensure_stream(stream_name, vec!["evt.>".to_owned()])
+        .ensure_stream(&spec)
         .await
         .expect("declaring the event stream");
     // Start from empty. The stream is shared and retains what earlier runs published; a durable
@@ -204,15 +207,13 @@ async fn an_event_published_to_jetstream_reaches_the_projection() {
     let handle = {
         let pool = pool.clone();
         let context = publisher.context().clone();
-        let stream_name = stream_name.to_owned();
+        let spec = spec.clone();
         let consumer_name = consumer_name.clone();
-        let subject = subject.as_str().to_owned();
         tokio::spawn(async move {
             platform_eventing::consumer::run(
                 &context,
-                &stream_name,
+                &spec,
                 &consumer_name,
-                vec![subject],
                 &pool,
                 &ProgressProjection,
                 async move {

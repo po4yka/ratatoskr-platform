@@ -12,7 +12,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::inbox::Outcome;
-use crate::{EventingError, Inbox, Reception, Subject};
+use crate::{EventingError, Inbox, Reception, StreamSpec, Subject};
 
 /// What a handler decided about one message.
 ///
@@ -101,19 +101,28 @@ pub async fn deliver<H: Handler>(
 /// [`EventingError::Persistence`] if the stream or consumer cannot be created.
 pub async fn run<H: Handler>(
     context: &jetstream::Context,
-    stream_name: &str,
+    spec: &StreamSpec,
     durable_name: &str,
-    subjects: Vec<String>,
     pool: &PgPool,
     handler: &H,
     stop: impl Future<Output = ()> + Send,
 ) -> Result<ConsumerReport, EventingError> {
+    // The same spec the publisher would declare, for the same reason: whichever process reaches the
+    // broker first creates the stream, and a stream created from `Config::default()` retains
+    // everything and then silently drops the oldest. Two declaration sites, one policy.
+    if let crate::stream::StreamState::Existing { mismatches } =
+        crate::stream::ensure(context, spec).await?
+        && !mismatches.is_empty()
+    {
+        tracing::warn!(
+            stream = %spec.name,
+            mismatches = ?mismatches,
+            "the stream on the broker was created with different limits and was NOT reconciled; \
+             update or delete it"
+        );
+    }
     let stream = context
-        .get_or_create_stream(jetstream::stream::Config {
-            name: stream_name.to_owned(),
-            subjects,
-            ..jetstream::stream::Config::default()
-        })
+        .get_stream(&spec.name)
         .await
         .map_err(|error| EventingError::Bus(error.to_string()))?;
 

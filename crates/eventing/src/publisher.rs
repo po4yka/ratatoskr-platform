@@ -7,7 +7,8 @@
 
 use async_nats::jetstream;
 
-use crate::Subject;
+use crate::stream::StreamState;
+use crate::{StreamSpec, Subject};
 
 /// Why a publication did not happen.
 #[derive(Debug, thiserror::Error)]
@@ -64,7 +65,7 @@ impl NatsPublisher {
         &self.context
     }
 
-    /// Make sure a stream exists for `subjects`.
+    /// Make sure the stream `spec` describes exists.
     ///
     /// `JetStream` does not acknowledge a publish to a subject no stream is bound to, and the
     /// publisher treats an unacknowledged publish as a failure — correctly, since the message was
@@ -72,27 +73,21 @@ impl NatsPublisher {
     /// dead-letters perfectly good commands, with a diagnosis ("not acknowledged") that does not
     /// name the cause.
     ///
-    /// Idempotent, so every replica calling it at startup is fine. Stream topology belongs to the
-    /// deployment profile at milestone 9; until one exists, the process that publishes declares what
-    /// it publishes to.
+    /// Idempotent. There is one publisher on one host, so this process is the right owner of the
+    /// topology it publishes to (ADR-0010); the deployment profile may take the limits over, and
+    /// cannot take over the fact that they are stated.
+    ///
+    /// A stream that already exists is NOT reconciled — that is the `JetStream` client's behaviour,
+    /// not a choice here — so the returned [`StreamState`] names every limit that differs. Changing
+    /// one is an operator action against the broker, not a redeploy.
     ///
     /// # Errors
     ///
     /// [`PublishError::NotAcknowledged`] if the stream cannot be created.
-    pub async fn ensure_stream(
-        &self,
-        name: &str,
-        subjects: Vec<String>,
-    ) -> Result<(), PublishError> {
-        self.context
-            .get_or_create_stream(jetstream::stream::Config {
-                name: name.to_owned(),
-                subjects,
-                ..jetstream::stream::Config::default()
-            })
+    pub async fn ensure_stream(&self, spec: &StreamSpec) -> Result<StreamState, PublishError> {
+        crate::stream::ensure(&self.context, spec)
             .await
-            .map_err(|error| PublishError::NotAcknowledged(Box::new(error)))?;
-        Ok(())
+            .map_err(|error| PublishError::NotAcknowledged(Box::new(error)))
     }
 }
 

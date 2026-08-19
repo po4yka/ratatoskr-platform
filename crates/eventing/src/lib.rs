@@ -26,6 +26,7 @@ pub mod inbox;
 pub mod outbox;
 pub mod publisher;
 pub mod pump;
+pub mod stream;
 
 pub use crate::command::Command;
 pub use crate::consumer::{ConsumerReport, Handler, Incoming, deliver};
@@ -33,6 +34,7 @@ pub use crate::inbox::{Inbox, Reception};
 pub use crate::outbox::{ClaimedMessage, Outbox, OutboxStats};
 pub use crate::publisher::{NatsPublisher, PublishError, Publisher};
 pub use crate::pump::{PumpReport, run_once};
+pub use crate::stream::{StreamSpec, StreamState, WhenFull};
 
 /// A failure in the outbox, the inbox, or the subject grammar.
 #[derive(Debug, thiserror::Error)]

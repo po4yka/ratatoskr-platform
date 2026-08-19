@@ -12,7 +12,9 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use platform_eventing::publisher::PublishError;
-use platform_eventing::{MessageClass, NatsPublisher, Outbox, Publisher, Subject, pump};
+use platform_eventing::{
+    MessageClass, NatsPublisher, Outbox, Publisher, StreamSpec, Subject, pump,
+};
 use platform_persistence::test_support::TestDatabase;
 use uuid::Uuid;
 
@@ -97,7 +99,7 @@ async fn a_message_reaches_jetstream_and_is_not_duplicated() {
     // production does and the only thing that works on a broker a service has touched.
     let stream_name = "ratatoskr_commands";
     publisher
-        .ensure_stream(stream_name, vec!["cmd.>".to_owned()])
+        .ensure_stream(&StreamSpec::commands(stream_name, vec!["cmd.>".to_owned()]))
         .await
         .expect("declaring the command stream");
     let stream = publisher
