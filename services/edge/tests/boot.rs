@@ -16,6 +16,7 @@
     reason = "assertions in a test binary"
 )]
 
+use platform_persistence::test_support::TestDatabase;
 use std::io::{Read, Write as _};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
@@ -68,9 +69,14 @@ fn each_role_boots_on_its_documented_configuration_and_reports_ready() {
         9465,
     );
 
-    // `DEVELOPMENT.md`, "Local run": the scheduler, on defaults alone, no environment at all. It is
-    // the one role that still needs none, and the one that never binds a public listener.
-    boots("ratatoskr-scheduler", &[], 9466);
+    // The scheduler, since milestone 9: it reads its schedules from a database and refuses to start
+    // without one, so there is now NO role that serves without a database. Like ingest it runs after
+    // edge, and for the same reason — edge owns the migrations.
+    boots(
+        "ratatoskr-scheduler",
+        &[("RATATOSKR__DATABASE__URL", &database_url())],
+        9466,
+    );
 }
 
 /// Where edge's bus is. Matches `compose.yaml`, like the database below.
@@ -352,10 +358,27 @@ fn a_listener_that_cannot_bind_exits_one() {
     let taken = std::net::TcpListener::bind("127.0.0.1:0").expect("a port must be available");
     let port = taken.local_addr().expect("the port is known").port();
 
+    // Its own migrated database, not the shared one. `platform_http::run` builds the routes BEFORE
+    // it binds, so a scheduler without a schema exits 1 for the wrong reason — and this test would
+    // then pass on the exit code while asserting nothing about the listener. Sharing the database
+    // B-1 migrates would make that depend on which test the harness scheduled first.
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("a runtime for the fixture database");
+    let database = runtime
+        .block_on(TestDatabase::create())
+        .expect("a test database");
+
     let refused = Command::new(built_binary("ratatoskr-scheduler"))
         .env("RATATOSKR__ADMIN__BIND", format!("127.0.0.1:{port}"))
+        .env("RATATOSKR__DATABASE__URL", database.url())
         .output()
         .expect("the binary must run");
+
+    runtime
+        .block_on(database.cleanup())
+        .expect("the fixture database must drop");
 
     assert_eq!(
         refused.status.code(),

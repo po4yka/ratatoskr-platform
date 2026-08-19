@@ -33,9 +33,10 @@ request that writes it.
 - [ADR-0012](0012-oauth-callback-relay.md): How an authorization code reaches the service that owns
   it. **Accepted**, with an amendment recorded in place: the first design bound a relay to the
   claiming session's audience and could never have worked.
+- [ADR-0013](0013-single-host-deployment-profile.md): The single-host deployment profile — where
+  schedules live, which process publishes, the NATS credential, the three database roles, and what
+  the units enforce. **Accepted**, and discharges what ADR-0005 reserved and ADR-0010 scoped out.
 
 Still unwritten, and deliberately unnumbered until somebody writes one: idempotency retention, which
-should be written in the same pull request as the retention loop rather than left here; the device
-credential model, which is the half of public authentication milestone 8 did not touch; and the single-node deployment profile that decides
-stream retention, consumer configuration, the NATS credential and the database roles — milestone 9,
-reserved by ADR-0005 and scoped out of ADR-0010.
+should be written in the same pull request as the retention loop rather than left here; and the
+device credential model, which is the half of public authentication milestone 8 did not touch.

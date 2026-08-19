@@ -1,0 +1,12 @@
+# /etc/ratatoskr/scheduler.conf — root:ratatoskr-scheduler 0640.
+
+RATATOSKR__ADMIN__BIND=0.0.0.0:9466
+
+# No RATATOSKR__PUBLIC__BIND. `ARCHITECTURE.md` S18: "no public listener except health", and rule V1
+# refuses one for this role permanently — setting it here is a startup failure, not an override.
+
+RATATOSKR__DATABASE__URL=postgres://ratatoskr_scheduler:CHANGE-ME@127.0.0.1:5432/ratatoskr
+
+# No RATATOSKR__BUS__* at all, for the same reason as ingest.
+
+RATATOSKR__TELEMETRY__LOG_FORMAT=json

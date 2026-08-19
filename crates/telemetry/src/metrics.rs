@@ -1,4 +1,4 @@
-//! The three instruments milestone 1 emits, and nothing else.
+//! Every instrument this workspace emits, and nothing else.
 //!
 //! Prometheus pull on the admin listener. Metrics are **not** exported over OTLP: an OTLP metrics
 //! pipeline discards every recording when no collector is running, so a developer would reasonably
@@ -27,6 +27,27 @@ pub const PLATFORM_READINESS: &str = "platform_readiness";
 /// The first thing anyone looks at when a deployment misbehaves: what is actually running.
 pub const PLATFORM_BUILD_INFO: &str = "platform_build_info";
 
+/// `platform_scheduler_drift_seconds{schedule}` — gauge, seconds.
+///
+/// `ARCHITECTURE.md` S16 item 7, the drift half: how late the most recent occurrence of that
+/// schedule was. A gauge rather than a histogram because a schedule publishes once per interval,
+/// so "how late was the last one" is the whole question — and because the shared latency buckets
+/// stop at ten seconds, which would put every interesting value in one overflow bucket.
+///
+/// The `schedule` label is bounded by the rows of `operations.schedules`, which no request path
+/// writes: an operator inserts them, and `schedules_name_is_a_label` bounds each name to 64
+/// characters of `[a-z0-9_-]`. It is not an attacker-reachable label.
+pub const PLATFORM_SCHEDULER_DRIFT_SECONDS: &str = "platform_scheduler_drift_seconds";
+
+/// `platform_scheduler_occurrences_total{schedule,outcome}` — counter.
+///
+/// `ARCHITECTURE.md` S16 item 7, the duplicate-suppression half. `outcome` is one of three
+/// constants: `published`, `suppressed` — an occurrence whose identifier already existed, which is
+/// the suppression being counted — and `skipped`, a grid point discarded by the schedule's
+/// catch-up policy. A suppression that is never zero means something is republishing; a skip that
+/// is never zero means the process is not keeping up with its own schedules.
+pub const PLATFORM_SCHEDULER_OCCURRENCES_TOTAL: &str = "platform_scheduler_occurrences_total";
+
 /// The `route` label of a request that matched no route template.
 ///
 /// A constant, never the request URI: this is what closes the 404-scanning cardinality bomb.
@@ -44,10 +65,12 @@ pub const DURATION_BUCKETS: [f64; 11] = [
     0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0,
 ];
 
-/// Every metric name milestone 1 emits. A rename silently breaks every dashboard and every alert,
-/// so it must break test T-4 first.
-pub const ALL: [&str; 3] = [
+/// Every metric name this workspace emits. A rename silently breaks every dashboard and every
+/// alert, so it must break test T-4 first.
+pub const ALL: [&str; 5] = [
     HTTP_SERVER_REQUEST_DURATION_SECONDS,
     PLATFORM_READINESS,
     PLATFORM_BUILD_INFO,
+    PLATFORM_SCHEDULER_DRIFT_SECONDS,
+    PLATFORM_SCHEDULER_OCCURRENCES_TOTAL,
 ];

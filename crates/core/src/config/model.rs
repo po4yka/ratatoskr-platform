@@ -63,10 +63,12 @@ pub struct PlatformConfig {
 pub struct AdminConfig {
     /// `RATATOSKR__ADMIN__BIND`. Default `127.0.0.1:<role default port>`.
     ///
-    /// Loopback by default because `SECURITY.md` says "deny by default". A container deployment MUST
-    /// set `0.0.0.0:<port>` so the kubelet, which reaches the pod IP, can run the probes; that is a
-    /// loud, immediate, one-variable failure, whereas an any-address default silently exposes
-    /// `/metrics` on a developer's LAN.
+    /// Loopback by default because `SECURITY.md` says "deny by default". The deployment sets
+    /// `0.0.0.0:<port>`, because the metrics stack on the target is a container on the Docker bridge
+    /// and a host loopback port is not reachable from there; what bounds the exposure is
+    /// `IPAddressAllow=` in the unit, not the bind address (ADR-0013). The default stays loopback
+    /// because an any-address default silently exposes `/metrics` on a developer's LAN, and one
+    /// variable in an environment file is a loud, deliberate override.
     pub bind: SocketAddr,
 }
 
@@ -137,6 +139,23 @@ pub struct BusConfig {
     /// credential belongs in a credentials file the process reads by path, not in a URL that the
     /// effective-configuration log line prints. Same reasoning as rule V10 for the collector.
     pub url: Url,
+
+    /// `RATATOSKR__BUS__NKEY_SEED_PATH`. The file holding this role's `NATS` nkey **seed**.
+    ///
+    /// A path rather than the value, which is what rule V13 means by "a credentials file read by
+    /// path": the seed never appears in the environment, in `Debug`, or in the
+    /// effective-configuration log line, and its permissions are the file system's job rather than
+    /// a promise about who can read `/proc/<pid>/environ`.
+    ///
+    /// An nkey rather than a `.creds` file (ADR-0013). A `.creds` file carries its permissions
+    /// inside an account JWT, so the answer to "what may `ratatoskr-ingest` publish?" would live in
+    /// a signed blob on the host; with nkeys it lives in `deploy/nats/ratatoskr.conf`, in the
+    /// repository, where a change to it is a diff somebody reviews.
+    ///
+    /// Absent means an anonymous connection, which is what `compose.yaml` serves and what no
+    /// deployment should.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nkey_seed_path: Option<std::path::PathBuf>,
 }
 
 /// What Platform needs in order to believe another service about who somebody is.
@@ -173,9 +192,11 @@ pub struct IdentityConfig {
 pub struct ShutdownConfig {
     /// `RATATOSKR__SHUTDOWN__DRAIN_SECONDS`. 0..=60, default 5.
     ///
-    /// Seconds to keep serving after SIGTERM while readiness already reports 503, so the endpoint
-    /// controller removes this instance before the listener closes. Zero is legal for local
-    /// development and guarantees 502s in a rolling deployment.
+    /// Seconds to keep serving after SIGTERM while readiness already reports 503, so whatever is
+    /// routing to this process stops before the listener closes. On the deployment target that is
+    /// `cloudflared`, which retries a closed connection; there is no load balancer to drain from and
+    /// no second instance to drain towards (ADR-0010). Zero is legal and means in-flight requests
+    /// are the only thing the grace window protects.
     #[serde(default = "default_drain_seconds")]
     pub drain_seconds: u64,
 

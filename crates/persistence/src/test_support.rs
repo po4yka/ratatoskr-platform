@@ -109,6 +109,18 @@ impl TestDatabase {
         self.database.pool()
     }
 
+    /// The connection URL of this database, for a test that starts a real process against it.
+    ///
+    /// [`admin_url`] with the database name replaced. A test that needs this is testing a BINARY
+    /// rather than a query, and it needs a migrated database that no other test is writing to —
+    /// which is exactly what this type already produces.
+    #[must_use]
+    pub fn url(&self) -> String {
+        let admin = admin_url();
+        let (prefix, _) = admin.rsplit_once('/').unwrap_or((admin.as_str(), ""));
+        format!("{prefix}/{}", self.name)
+    }
+
     /// Drop the database.
     ///
     /// Explicit rather than a `Drop` impl: dropping requires async work, and a blocking drop inside

@@ -22,11 +22,37 @@ use platform_core::RuntimeRole;
 use platform_core::config::{self, ConfigError, LogFormat, PlatformConfig};
 
 /// The variables `.env.example` documents, and the probe value each one is given by C-6.
-const DOCUMENTED: [(&str, &str); 11] = [
+///
+/// Milestone 9 grew this from eleven to eighteen. `.env.example` claims to document EVERY
+/// configuration variable, and milestones 5 to 8 added the database, the bus and the identity keys
+/// without touching it — so the claim had been false for four milestones, and this list is what
+/// makes it checkable again.
+const DOCUMENTED: [(&str, &str); 18] = [
     ("RATATOSKR__ADMIN__BIND", "127.0.0.1:19464"),
     ("RATATOSKR__PUBLIC__BIND", "127.0.0.1:18080"),
     ("RATATOSKR__PUBLIC__REQUEST_TIMEOUT_SECONDS", "17"),
     ("RATATOSKR__PUBLIC__MAX_BODY_BYTES", "2048"),
+    (
+        "RATATOSKR__DATABASE__URL",
+        "postgres://probe:probe@127.0.0.1:15432/probe",
+    ),
+    ("RATATOSKR__DATABASE__MAX_CONNECTIONS", "3"),
+    ("RATATOSKR__DATABASE__ACQUIRE_TIMEOUT_SECONDS", "4"),
+    ("RATATOSKR__BUS__URL", "nats://127.0.0.1:14222"),
+    // Replaced inside the jail by a file that exists: rule V16 refuses a path that names nothing,
+    // and no fixed absolute path is a file on every machine this suite runs on.
+    ("RATATOSKR__BUS__NKEY_SEED_PATH", NKEY_SEED_PLACEHOLDER),
+    (
+        "RATATOSKR__IDENTITY__ASSERTION_KEY",
+        // 32 zero bytes. Rule V14 checks the decoded LENGTH and nothing else, which is the whole
+        // point of it: a key that is truncated, hex-encoded or accidentally private fails here
+        // rather than as an authentication failure that names nothing.
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+    ),
+    (
+        "RATATOSKR__IDENTITY__OAUTH_COMPLETION_URL",
+        "https://ratatoskr.example/oauth/done",
+    ),
     ("RATATOSKR__SHUTDOWN__DRAIN_SECONDS", "7"),
     ("RATATOSKR__SHUTDOWN__GRACE_SECONDS", "11"),
     ("RATATOSKR__TELEMETRY__LOG_FORMAT", "pretty"),
@@ -41,6 +67,9 @@ const DOCUMENTED: [(&str, &str); 11] = [
         "probe-value",
     ),
 ];
+
+/// What C-6 puts in the nkey variable before it has a real file to point at.
+const NKEY_SEED_PLACEHOLDER: &str = "<replaced by the jail>";
 
 /// `.env.example`, read from the repository root.
 fn env_example() -> String {
@@ -206,18 +235,45 @@ fn every_variable_in_env_example_overrides_its_field() {
     }
 
     Jail::expect_with(|jail| {
+        // A real file, because rule V16 refuses a path that names nothing — which is exactly what
+        // makes `check-config` useful as a systemd ExecStartPre.
+        jail.create_file("edge.nkey", "SUAOCTHSSJR6T33K5ANSWQZ73VAX4LPTXSMYVOXSWEZ")?;
+        let seed = jail.directory().join("edge.nkey");
+
         for (name, value) in DOCUMENTED {
-            jail.set_env(name, value);
+            if value == NKEY_SEED_PLACEHOLDER {
+                jail.set_env(name, seed.display());
+            } else {
+                jail.set_env(name, value);
+            }
         }
 
         let config = config::load(RuntimeRole::Edge).expect("every documented value is valid");
         let public = config.public.expect("edge has a public listener");
+        let database = config.database.expect("the database URL was supplied");
+        let bus = config.bus.expect("the bus URL was supplied");
         let otlp = config.telemetry.otlp.expect("the endpoint was supplied");
 
         assert_eq!(config.admin.bind.port(), 19464);
         assert_eq!(public.bind.port(), 18080);
         assert_eq!(public.request_timeout_seconds, 17);
         assert_eq!(public.max_body_bytes, 2048);
+        assert_eq!(database.max_connections, 3);
+        assert_eq!(database.acquire_timeout_seconds, 4);
+        assert_eq!(bus.url.as_str(), "nats://127.0.0.1:14222");
+        assert_eq!(bus.nkey_seed_path.as_deref(), Some(seed.as_path()));
+        assert_eq!(
+            config.identity.assertion_key.as_deref(),
+            Some("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="),
+        );
+        assert_eq!(
+            config
+                .identity
+                .oauth_completion_url
+                .map(String::from)
+                .as_deref(),
+            Some("https://ratatoskr.example/oauth/done"),
+        );
         assert_eq!(config.shutdown.drain_seconds, 7);
         assert_eq!(config.shutdown.grace_seconds, 11);
         assert_eq!(config.telemetry.log_format, LogFormat::Pretty);

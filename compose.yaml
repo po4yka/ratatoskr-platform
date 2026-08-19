@@ -1,4 +1,8 @@
-# Local development dependencies. Not a deployment artifact: deployment profiles are milestone 9.
+# Local development dependencies. NOT a deployment artifact: the deployment profile is `deploy/`,
+# and it is systemd units on one host with an existing PostgreSQL cluster (ADR-0013). The two
+# differences that matter here are that this NATS accepts anonymous connections and this
+# PostgreSQL has one superuser, where the target has an nkey identity with a subject allowlist and
+# three least-privilege roles.
 #
 # PostgreSQL for the two owned schemas, and NATS JetStream for the outbox publisher (milestone 4).
 #

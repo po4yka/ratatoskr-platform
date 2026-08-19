@@ -95,7 +95,11 @@ return only sentences this ADR re-founded.
 
 ## Follow-up
 
-- The `deploy/` units, at milestone 9.
-- The Kubernetes vocabulary in the remaining code comments, swept in the same pull request as the
-  profile — the reasoning is what a future agent inherits, and it currently points at an orchestrator
-  that will never exist here.
+Both discharged at milestone 9.
+
+- The `deploy/` units, with the rest of the profile: [ADR-0013](0013-single-host-deployment-profile.md).
+- The Kubernetes vocabulary in the remaining code comments, swept in the same pull request. Nine
+  sites — a kubelet interval, a pod IP, a pod termination grace period, an endpoint controller, a
+  rolling deployment of three replicas — were re-founded on what actually supervises these
+  processes. The one remaining occurrence of each word is in `AGENTS.md`, in the sentence that
+  says none of them exists here.

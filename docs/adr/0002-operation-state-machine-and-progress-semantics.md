@@ -28,8 +28,11 @@ So Platform owns the rule, and the only open question is where it lives and when
 ## Drivers
 
 - Exactly one implementation of a rule that three code paths will need: the operation projection at
-  milestone 3, the SSE progress layer at milestone 6, and the stale-operation reconciler at
-  milestone 9.
+  milestone 3, the SSE progress layer at milestone 6, and the stale-operation reconciler.
+  **Amended at milestone 9.** That third path said "at milestone 9", and milestone 9 did not build
+  it: the item was the thin Scheduler and the deployment profile, and the reconciler of
+  `ARCHITECTURE.md` S14 is in no milestone. Two callers make the case for one implementation on
+  their own; the third is now unassigned rather than promised.
 - At-least-once delivery makes duplicates and reordering normal traffic, not error conditions
   (`ARCHITECTURE.md` S19 invariant 7).
 - The decision is cheap now and expensive after three disagreeing `match` expressions exist.

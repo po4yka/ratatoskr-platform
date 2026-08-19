@@ -1,0 +1,382 @@
+//! Publication against a real database — tests S-1 … S-8.
+//!
+//! Every one of these needs `PostgreSQL`, because every claim worth making here is about a
+//! constraint, a lock or an `on conflict`: none of them is observable from a unit test, and the
+//! deterministic-identifier machinery of `ARCHITECTURE.md` S14 is only real if the database refuses
+//! the second copy.
+
+#![allow(
+    clippy::expect_used,
+    clippy::panic,
+    clippy::unwrap_used,
+    reason = "assertions in a test binary"
+)]
+
+use jiff::{SignedDuration, Timestamp};
+use platform_persistence::test_support::TestDatabase;
+use platform_scheduling::{CatchUp, occurrence_id, run_once};
+use sqlx::{PgPool, Row as _};
+use uuid::Uuid;
+
+/// A schedule an operator could have written, with everything but the parts a test varies.
+struct Fixture {
+    schedule_id: Uuid,
+    owner_user_id: Uuid,
+    name: String,
+    next_due_at: Timestamp,
+    interval_seconds: i32,
+    catch_up: CatchUp,
+    enabled: bool,
+}
+
+impl Fixture {
+    fn new(next_due_at: Timestamp) -> Self {
+        let schedule_id = Uuid::now_v7();
+        Self {
+            schedule_id,
+            owner_user_id: Uuid::now_v7(),
+            name: format!("s{}", schedule_id.simple())
+                .chars()
+                .take(60)
+                .collect(),
+            next_due_at,
+            interval_seconds: 60,
+            catch_up: CatchUp::Skip,
+            enabled: true,
+        }
+    }
+
+    async fn insert(&self, pool: &PgPool) {
+        let created = to_offset(self.next_due_at - SignedDuration::from_hours(1));
+        sqlx::query(
+            "insert into operations.schedules
+                 (schedule_id, name, owner_user_id, command_type, operation_kind, payload,
+                  interval_seconds, next_due_at, catch_up, enabled, created_at, updated_at)
+             values ($1, $2, $3, 'github.sync.requested.v1', 'github.sync',
+                     '{\"account\": \"po4yka\"}'::jsonb, $4, $5, $6, $7, $8, $8)",
+        )
+        .bind(self.schedule_id)
+        .bind(&self.name)
+        .bind(self.owner_user_id)
+        .bind(self.interval_seconds)
+        .bind(to_offset(self.next_due_at))
+        .bind(self.catch_up.as_str())
+        .bind(self.enabled)
+        .bind(created)
+        .execute(pool)
+        .await
+        .expect("the fixture schedule must insert");
+    }
+}
+
+fn to_offset(value: Timestamp) -> time::OffsetDateTime {
+    time::OffsetDateTime::from_unix_timestamp_nanos(value.as_nanosecond())
+        .expect("a timestamp inside the supported range")
+}
+
+fn from_offset(value: time::OffsetDateTime) -> Timestamp {
+    Timestamp::from_nanosecond(value.unix_timestamp_nanos())
+        .expect("a timestamp inside the supported range")
+}
+
+async fn next_due_at(pool: &PgPool, schedule_id: Uuid) -> Timestamp {
+    let stored: time::OffsetDateTime =
+        sqlx::query_scalar("select next_due_at from operations.schedules where schedule_id = $1")
+            .bind(schedule_id)
+            .fetch_one(pool)
+            .await
+            .expect("the schedule must still exist");
+    from_offset(stored)
+}
+
+async fn occurrence_count(pool: &PgPool, schedule_id: Uuid) -> i64 {
+    sqlx::query_scalar(
+        "select count(*) from operations.schedule_occurrences where schedule_id = $1",
+    )
+    .bind(schedule_id)
+    .fetch_one(pool)
+    .await
+    .expect("the count must run")
+}
+
+fn at(seconds: i64) -> Timestamp {
+    Timestamp::from_second(seconds).expect("a timestamp inside the supported range")
+}
+
+/// S-1. One due schedule produces exactly one occurrence, one operation and one outbox command,
+/// and all three are joined by the deterministic occurrence identifier.
+#[tokio::test]
+async fn a_due_schedule_publishes_an_occurrence_an_operation_and_a_command() {
+    let database = TestDatabase::create().await.expect("a test database");
+    let pool = database.pool();
+
+    let due = at(1_700_000_000);
+    let fixture = Fixture::new(due);
+    fixture.insert(pool).await;
+
+    let now = due + SignedDuration::from_secs(7);
+    let report = run_once(pool, 32, now).await.expect("the pass must run");
+    assert_eq!((report.due, report.published, report.suppressed), (1, 1, 0));
+
+    let expected = occurrence_id(fixture.schedule_id, due);
+    let row = sqlx::query(
+        "select o.due_at, o.drift_seconds, o.operation_id,
+                op.kind, op.owner_user_id, op.idempotency_key, op.status,
+                b.subject, b.payload, b.message_id
+           from operations.schedule_occurrences o
+           join operations.operations op on op.operation_id = o.operation_id
+           join operations.outbox b on b.operation_id = o.operation_id
+          where o.occurrence_id = $1",
+    )
+    .bind(expected)
+    .fetch_one(pool)
+    .await
+    .expect("the occurrence, its operation and its command must all exist");
+
+    assert_eq!(
+        from_offset(row.get::<time::OffsetDateTime, _>("due_at")),
+        due
+    );
+    assert_eq!(row.get::<i64, _>("drift_seconds"), 7);
+    assert_eq!(row.get::<String, _>("kind"), "github.sync");
+    assert_eq!(row.get::<Uuid, _>("owner_user_id"), fixture.owner_user_id);
+    assert_eq!(row.get::<String, _>("status"), "accepted");
+    assert_eq!(
+        row.get::<String, _>("idempotency_key"),
+        expected.to_string(),
+        "the occurrence identifier is the operation's idempotency key",
+    );
+    assert_eq!(row.get::<Uuid, _>("message_id"), expected);
+    assert_eq!(
+        row.get::<String, _>("subject"),
+        "cmd.github.sync.requested.v1"
+    );
+
+    let payload: serde_json::Value = row.get("payload");
+    assert_eq!(payload["command_type"], "github.sync.requested.v1");
+    assert_eq!(payload["payload"]["account"], "po4yka");
+    assert_eq!(
+        payload["tenant_id"],
+        format!("user:{}", fixture.owner_user_id),
+        "a scheduled command carries the schedule owner as its principal, not a system actor",
+    );
+
+    // The schedule moved forward, so a second pass at the same instant has nothing to do.
+    assert!(next_due_at(pool, fixture.schedule_id).await > now);
+    let second = run_once(pool, 32, now).await.expect("the pass must run");
+    assert_eq!(second.due, 0);
+
+    database.cleanup().await.expect("cleanup");
+}
+
+/// S-2. A disabled schedule is not due, however far past its due time it is. Enabling one starts
+/// publishing to a service that may not exist, so the flag is the operator's decision and not a
+/// hint.
+#[tokio::test]
+async fn a_disabled_schedule_is_never_due() {
+    let database = TestDatabase::create().await.expect("a test database");
+    let pool = database.pool();
+
+    let due = at(1_700_000_000);
+    let mut fixture = Fixture::new(due);
+    fixture.enabled = false;
+    fixture.insert(pool).await;
+
+    let report = run_once(pool, 32, due + SignedDuration::from_hours(24))
+        .await
+        .expect("the pass must run");
+    assert_eq!(report.due, 0);
+    assert_eq!(occurrence_count(pool, fixture.schedule_id).await, 0);
+    assert_eq!(
+        next_due_at(pool, fixture.schedule_id).await,
+        due,
+        "a disabled schedule is not silently advanced either",
+    );
+
+    database.cleanup().await.expect("cleanup");
+}
+
+/// S-3. A schedule whose next occurrence is in the future publishes nothing.
+#[tokio::test]
+async fn a_schedule_that_is_not_yet_due_publishes_nothing() {
+    let database = TestDatabase::create().await.expect("a test database");
+    let pool = database.pool();
+
+    let due = at(1_700_000_000);
+    let fixture = Fixture::new(due);
+    fixture.insert(pool).await;
+
+    let report = run_once(pool, 32, due - SignedDuration::from_secs(1))
+        .await
+        .expect("the pass must run");
+    assert_eq!(report.due, 0);
+    assert_eq!(occurrence_count(pool, fixture.schedule_id).await, 0);
+
+    database.cleanup().await.expect("cleanup");
+}
+
+/// S-4. The duplicate suppression S14 requires, exercised the only way it is reachable: an operator
+/// moves `next_due_at` back to a due time that has already been published. The occurrence is
+/// recognised, NO second command is enqueued, and the schedule still moves forward — the last part
+/// being what stops the pass from spinning on that row forever.
+#[tokio::test]
+async fn a_due_time_that_has_already_been_published_is_suppressed_and_still_advances() {
+    let database = TestDatabase::create().await.expect("a test database");
+    let pool = database.pool();
+
+    let due = at(1_700_000_000);
+    let fixture = Fixture::new(due);
+    fixture.insert(pool).await;
+
+    let now = due + SignedDuration::from_secs(1);
+    run_once(pool, 32, now).await.expect("the pass must run");
+    assert_eq!(occurrence_count(pool, fixture.schedule_id).await, 1);
+
+    sqlx::query("update operations.schedules set next_due_at = $2 where schedule_id = $1")
+        .bind(fixture.schedule_id)
+        .bind(to_offset(due))
+        .execute(pool)
+        .await
+        .expect("the rewind must apply");
+
+    let report = run_once(pool, 32, now).await.expect("the pass must run");
+    assert_eq!((report.due, report.published, report.suppressed), (1, 0, 1));
+    assert_eq!(occurrence_count(pool, fixture.schedule_id).await, 1);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("select count(*) from operations.outbox")
+            .fetch_one(pool)
+            .await
+            .expect("the count must run"),
+        1,
+        "the suppressed occurrence must not enqueue a second command",
+    );
+    assert!(next_due_at(pool, fixture.schedule_id).await > now);
+
+    database.cleanup().await.expect("cleanup");
+}
+
+/// S-5. `skip` publishes one occurrence for a long outage and discards the rest, reporting how many
+/// it discarded. A snapshot taken ten times in a row is nine snapshots whose results are already
+/// superseded.
+#[tokio::test]
+async fn skip_publishes_once_after_an_outage_and_reports_what_it_discarded() {
+    let database = TestDatabase::create().await.expect("a test database");
+    let pool = database.pool();
+
+    let due = at(1_700_000_000);
+    let fixture = Fixture::new(due);
+    fixture.insert(pool).await;
+
+    let now = due + SignedDuration::from_secs(600);
+    let report = run_once(pool, 32, now).await.expect("the pass must run");
+    assert_eq!((report.published, report.skipped), (1, 10));
+    assert_eq!(occurrence_count(pool, fixture.schedule_id).await, 1);
+    assert!(next_due_at(pool, fixture.schedule_id).await > now);
+
+    database.cleanup().await.expect("cleanup");
+}
+
+/// S-6. `catch_up` publishes the backlog across successive passes, one occurrence at a time, each
+/// with its own due time and its own identifier. An incremental synchronisation may not have gaps.
+#[tokio::test]
+async fn catch_up_publishes_the_backlog_one_occurrence_per_pass() {
+    let database = TestDatabase::create().await.expect("a test database");
+    let pool = database.pool();
+
+    let due = at(1_700_000_000);
+    let mut fixture = Fixture::new(due);
+    fixture.catch_up = CatchUp::CatchUp;
+    fixture.insert(pool).await;
+
+    let now = due + SignedDuration::from_secs(300);
+    for expected in 1..=5_i64 {
+        let report = run_once(pool, 32, now).await.expect("the pass must run");
+        assert_eq!(report.published, 1, "pass {expected}");
+        assert_eq!(report.skipped, 0, "pass {expected}");
+        assert_eq!(occurrence_count(pool, fixture.schedule_id).await, expected);
+    }
+
+    // Five minutes of backlog on a one-minute schedule is five occurrences, and then it is level.
+    let report = run_once(pool, 32, now).await.expect("the pass must run");
+    assert_eq!(report.published, 1);
+    assert_eq!(report.due, 1);
+    let settled = run_once(pool, 32, now).await.expect("the pass must run");
+    assert_eq!(settled.due, 0, "the schedule has caught up with now");
+
+    let due_times: Vec<time::OffsetDateTime> = sqlx::query_scalar(
+        "select due_at from operations.schedule_occurrences where schedule_id = $1 order by due_at",
+    )
+    .bind(fixture.schedule_id)
+    .fetch_all(pool)
+    .await
+    .expect("the due times must read");
+    assert_eq!(due_times.len(), 6);
+    for (index, stored) in due_times.iter().enumerate() {
+        let expected = due + SignedDuration::from_secs(60 * i64::try_from(index).unwrap());
+        assert_eq!(from_offset(*stored), expected, "occurrence {index}");
+    }
+
+    database.cleanup().await.expect("cleanup");
+}
+
+/// S-7. The database refuses a schedule whose command type could never be published. The same
+/// grammar guards `operations.outbox.subject`, and a row that can hold an arbitrary string is a row
+/// that can address a subject outside the credential's allowlist.
+#[tokio::test]
+async fn a_command_type_outside_the_subject_grammar_is_refused_by_the_schema() {
+    let database = TestDatabase::create().await.expect("a test database");
+    let pool = database.pool();
+
+    for bad in [
+        "github.sync.requested",        // no version
+        "cmd.github.sync.requested.v1", // the class prefix belongs to the subject, not the type
+        "Github.Sync.Requested.v1",
+        "github.sync.requested.v0",
+    ] {
+        let outcome = sqlx::query(
+            "insert into operations.schedules
+                 (schedule_id, name, owner_user_id, command_type, operation_kind,
+                  interval_seconds, next_due_at, created_at, updated_at)
+             values ($1, $2, $3, $4, 'github.sync', 60, now(), now(), now())",
+        )
+        .bind(Uuid::now_v7())
+        .bind(
+            format!("n{}", Uuid::now_v7().simple())
+                .chars()
+                .take(60)
+                .collect::<String>(),
+        )
+        .bind(Uuid::now_v7())
+        .bind(bad)
+        .execute(pool)
+        .await;
+        assert!(outcome.is_err(), "`{bad}` must be refused");
+    }
+
+    database.cleanup().await.expect("cleanup");
+}
+
+/// S-8. Two schedules due at the same instant are both published in one pass, and neither takes the
+/// other's identifier. The lease is per schedule, not per process.
+#[tokio::test]
+async fn two_schedules_due_at_once_are_both_published() {
+    let database = TestDatabase::create().await.expect("a test database");
+    let pool = database.pool();
+
+    let due = at(1_700_000_000);
+    let first = Fixture::new(due);
+    let second = Fixture::new(due);
+    first.insert(pool).await;
+    second.insert(pool).await;
+
+    let report = run_once(pool, 32, due).await.expect("the pass must run");
+    assert_eq!((report.due, report.published), (2, 2));
+    assert_eq!(occurrence_count(pool, first.schedule_id).await, 1);
+    assert_eq!(occurrence_count(pool, second.schedule_id).await, 1);
+    assert_ne!(
+        occurrence_id(first.schedule_id, due),
+        occurrence_id(second.schedule_id, due),
+    );
+
+    database.cleanup().await.expect("cleanup");
+}

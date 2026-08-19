@@ -1,0 +1,16 @@
+# /etc/ratatoskr/ingest.conf — root:ratatoskr-ingest 0640.
+
+RATATOSKR__ADMIN__BIND=0.0.0.0:9465
+
+# 8181 and not 8081: 8081 is held by another process on this host, and a port here is an allocation
+# rather than a default. `ratatoskr-ingest` carries no compiled public port for exactly that reason,
+# so rule V1 refuses to start it until this line exists.
+RATATOSKR__PUBLIC__BIND=127.0.0.1:8181
+
+RATATOSKR__DATABASE__URL=postgres://ratatoskr_ingest:CHANGE-ME@127.0.0.1:5432/ratatoskr
+
+# No RATATOSKR__BUS__* at all. This process writes commands into `operations.outbox` and publishes
+# none of them; `ratatoskr-edge` is the only publisher (ADR-0013), so this role holds no NATS
+# credential and cannot reach the broker.
+
+RATATOSKR__TELEMETRY__LOG_FORMAT=json

@@ -1,0 +1,26 @@
+# Append to /home/po4yka/monitoring/promscrape.yml.
+#
+# The collector is a container on `monitoring_default`; the three services are host processes under
+# systemd. `host.docker.internal` with `extra_hosts: host-gateway` is how a container reaches the
+# host, and it is a NAME rather than the bridge gateway address because that address is not stable
+# across a network recreation. The services bind their operator listener to 0.0.0.0 so it is
+# reachable from the bridge at all, and the exposure is bounded by `IPAddressAllow=` in each unit
+# rather than by the bind address.
+#
+# VictoriaMetrics is started without `-promscrape.configCheckInterval`, so a change here takes
+# effect on `docker kill -s HUP victoriametrics` and not before.
+#
+# Add these targets WITH the deployment, never before it: a scrape target for a service that is not
+# running is a permanently failing target, which is indistinguishable from an outage.
+
+  - job_name: ratatoskr
+    scrape_interval: 15s
+    scrape_timeout: 5s
+    static_configs:
+      - targets:
+          - "host.docker.internal:9464"   # ratatoskr-edge
+          - "host.docker.internal:9465"   # ratatoskr-ingest
+          - "host.docker.internal:9466"   # ratatoskr-scheduler
+        labels:
+          site: terrace
+          system: ratatoskr

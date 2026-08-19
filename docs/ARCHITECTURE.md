@@ -502,19 +502,27 @@ The three binaries use separate runtime roles and least-privilege credentials ev
 ```text
 edge:
   public network
-  identity + operations DB roles
-  command publish and operation-event consume permissions
+  owns identity + operations + platform_ingest, and applies the migrations
+  the one NATS identity: publish cmd.>, JetStream API, consume through its own inbox
 
 ingest:
-  selected inbound adapters
-  platform_ingest DB role
-  limited command publish permissions
+  selected inbound adapters, on a public listener of its own
+  platform_ingest + operations tables it writes; NO access to identity
+  writes commands to operations.outbox; no NATS credential
 
 scheduler:
   no public listener except health
-  schedule DB role
-  allowlisted command publish permissions
+  operations tables it writes; NO access to identity or platform_ingest
+  writes commands to operations.outbox; no NATS credential
 ```
+
+The two roles that publish no NATS message hold no NATS credential, and this differs from what this
+section said before milestone 9. It promised "limited" and "allowlisted" command publish permissions
+for them, which could not have been built: both write into the SHARED `operations.outbox`, and the
+pump that drains it cannot be told which role wrote a row, so a per-role subject allowlist on the
+broker would have constrained the pump rather than the writer. What constrains them instead is the
+per-role PostgreSQL grants of `deploy/postgres/02-grants.sql` and the subject CHECK on the outbox
+itself. [ADR-0013](adr/0013-single-host-deployment-profile.md) records the trade.
 
 Exactly one Edge process runs, and its state is entirely in PostgreSQL and the event bus. Scheduler uses leases or advisory locks so that a restart overlapping a drain, or a bus redelivery, cannot emit an occurrence twice — not because there is a second instance. The deployment target is a single host (`ratatoskr-workspace/docs/DEPLOYMENT_TARGET.md`); ADR-0010 records why every lock, lease and deduplication control is retained there, and forbids removing them on the grounds that one instance makes them unnecessary.
 
@@ -548,6 +556,10 @@ disagree. Kept because the ordering below still reads as the intended arc.
 6. Registered-device auth for mobile, extension, and export agent.
 7. Telegram Mini App assertion exchange.
 8. Scheduler and generic RSS/webhook ingress.
-9. Projection hardening, reconciliation, and deployment profiles.
+9. Thin Scheduler command publication and the single-host deployment profile (ADR-0013).
+10. The `linux/arm64` artifact and the first end-to-end slice on the deployment target.
+
+Projection hardening and stale-operation reconciliation were listed at 9 and are in no item; they
+are unassigned rather than scheduled.
 
 Material changes to identity ownership, public API versioning, or operation semantics require ADRs and coordinated contract updates.

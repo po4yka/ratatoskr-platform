@@ -84,7 +84,9 @@ fn the_metric_name_set_is_exactly_the_documented_set() {
         [
             "http_server_request_duration_seconds",
             "platform_readiness",
-            "platform_build_info"
+            "platform_build_info",
+            "platform_scheduler_drift_seconds",
+            "platform_scheduler_occurrences_total"
         ],
     );
 

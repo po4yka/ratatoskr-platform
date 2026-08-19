@@ -1,7 +1,7 @@
 # Platform implementation plan
 
-> **Status:** items 1 through 8 are implemented (see `DEVELOPMENT.md`). Items 9 and 10 are planned,
-> and neither is scaffolded or stubbed in the checkout.
+> **Status:** items 1 through 9 are implemented (see `DEVELOPMENT.md`). Item 10 is planned, and is
+> not scaffolded or stubbed in the checkout.
 >
 > Item 5 is where the earlier ones meet: `ratatoskr-edge` opens a pool, applies the migrations,
 > authenticates a session, and writes the idempotency reservation, the operation and the outbox
@@ -11,13 +11,15 @@
 > `ratatoskr-ingest` serves a webhook adapter that produces the SAME command, and a client can now
 > ask which doors a deployment actually has.
 >
-> Items 9 and 10 were reworded on 2026-08-19. Item 9 already owned the deployment profile — five code
-> and documentation sites defer decisions to "the deployment profile at milestone 9" — while being
-> worded as a scheduler feature, so an agent reading only the plan shipped a scheduler. Item 10 as
-> written passed entirely on a developer's machine and claimed end-to-end success without touching
-> the machine the system runs on. The `linux/arm64` build is not a separate item: it is the
-> precondition of running the slice, and an item after the one it enables lets that item's Definition
-> of Done pass on the one check it exists for. See `ratatoskr-workspace/docs/DEPLOYMENT_TARGET.md`.
+> Items 9 and 10 were reworded on 2026-08-19, before item 9 was built. Item 9 already owned the
+> deployment profile — five code and documentation sites deferred decisions to "the deployment
+> profile at milestone 9" — while being worded as a scheduler feature, so an agent reading only the
+> plan would have shipped a scheduler and left the profile deferred to nobody. All five deferrals are
+> now discharged by [ADR-0013](adr/0013-single-host-deployment-profile.md). Item 10 as written passed
+> entirely on a developer's machine and claimed end-to-end success without touching the machine the
+> system runs on. The `linux/arm64` build is not a separate item: it is the precondition of running
+> the slice, and an item after the one it enables lets that item's Definition of Done pass on the one
+> check it exists for. See `ratatoskr-workspace/docs/DEPLOYMENT_TARGET.md`.
 
 Open questions that block a later item are recorded in `DEVELOPMENT.md`. Q2 (the `platform_ingress` versus `platform_ingest` schema spelling) blocked item 7 and is closed by [ADR-0009](adr/0009-one-spelling-for-generic-ingest.md). Q4 (the `correlation` entity kind in `contracts.toml`) is a one-line change to a sibling repository and is still open.
 
@@ -32,7 +34,7 @@ Open questions that block a later item are recorded in `DEVELOPMENT.md`. Q2 (the
 9. Add thin Scheduler command publication **and the single-host deployment profile**: the `deploy/`
    systemd units with their resource limits and start ordering, stream and consumer naming with
    explicit retention limits, the NATS credential, the three database roles inside the host's
-   existing PostgreSQL cluster, the storage layout and the port map.
+   existing PostgreSQL cluster, the storage layout and the port map. *(implemented)*
 10. Build the `linux/arm64` artifact and run the first workspace end-to-end vertical slice **on the
     deployment target**.
 

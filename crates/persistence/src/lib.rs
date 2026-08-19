@@ -97,9 +97,10 @@ impl Database {
 
     /// Apply every embedded migration that has not been applied.
     ///
-    /// Idempotent, and safe to run from more than one instance at once: `sqlx` takes a `PostgreSQL`
-    /// advisory lock for the duration, so a rolling deployment of three replicas applies each
-    /// migration once.
+    /// Idempotent, and safe to run while another process is still holding connections: `sqlx` takes
+    /// a `PostgreSQL` advisory lock for the duration, so a restart that overlaps the previous
+    /// process's grace window applies each migration once. That is why the lock still matters with
+    /// exactly one process per role (ADR-0010) — a restart IS two processes, for a few seconds.
     ///
     /// # Errors
     ///

@@ -1,0 +1,38 @@
+# /etc/ratatoskr/edge.conf — root:ratatoskr-edge 0640.
+#
+# systemd reads this as root and hands the values to a process running as `ratatoskr-edge`, so the
+# database password is never world-readable and never on a command line. A `LoadCredential=` and
+# a configuration loader that reads files would be better still, and is the upgrade path: today
+# `platform_core::config` reads the environment only.
+#
+# Every variable and its built-in default is in `.env.example` at the repository root. Only the ones
+# a deployment must state are here.
+
+# The operator plane. 0.0.0.0 and not loopback, because the metrics stack is a container on the
+# Docker bridge and a host loopback port is not reachable from there — the exposure is bounded by
+# `IPAddressAllow=` in the unit, not by the bind address.
+RATATOSKR__ADMIN__BIND=0.0.0.0:9464
+
+# The public API. Loopback, because `cloudflared` runs on this host and reaches it there. If
+# cloudflared is ever moved into a container this becomes 0.0.0.0 and the unit's IPAddressAllow=
+# becomes the only thing between the public API and the LAN.
+RATATOSKR__PUBLIC__BIND=127.0.0.1:8080
+
+# The whole URL is a secret: a PostgreSQL URL carries its password in the user information.
+RATATOSKR__DATABASE__URL=postgres://ratatoskr_edge:CHANGE-ME@127.0.0.1:5432/ratatoskr
+
+# The bus. The credential is a path, never a value: rule V13 refuses a URL with user information,
+# and rule V16 refuses a relative path or a file that is not there.
+RATATOSKR__BUS__URL=nats://127.0.0.1:4222
+RATATOSKR__BUS__NKEY_SEED_PATH=/etc/ratatoskr/edge.nkey
+
+# The Ed25519 PUBLIC key of `ratatoskr-telegram`, base64 with padding (ADR-0011). Platform holds
+# only the public half, so this is not a secret. Absent means `/v2/sessions/telegram` refuses and
+# `GET /v2/capabilities` reports `telegram.mini_app` unavailable.
+#RATATOSKR__IDENTITY__ASSERTION_KEY=
+
+# Where a browser is sent after a provider callback has been relayed. Configured, never taken from
+# the callback: every parameter of that request is attacker-supplied (ADR-0012).
+#RATATOSKR__IDENTITY__OAUTH_COMPLETION_URL=https://ratatoskr.example/oauth/done
+
+RATATOSKR__TELEMETRY__LOG_FORMAT=json

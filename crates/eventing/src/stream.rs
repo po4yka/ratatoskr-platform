@@ -71,9 +71,35 @@ pub struct StreamSpec {
 ///
 /// A bound, not a target. The messages here are small JSON documents, so a gigabyte is a very deep
 /// backlog — deep enough that reaching it means something upstream is broken, which is precisely
-/// when a limit should exist. Sized to be safe on a small single host; the deployment profile may
-/// raise it, and cannot remove it.
+/// when a limit should exist. Sized to be safe on the single host of ADR-0013, whose NATS server
+/// is given an 8 GiB file store — room for both streams and a wide margin. Raising this is a code
+/// change, deliberately: a limit that a deployment can remove is not a limit.
 const DEFAULT_MAX_BYTES: i64 = 1024 * 1024 * 1024;
+
+/// The stream every command is published to.
+///
+/// One stream for `cmd.>` rather than one per command family: a stream is a store with a retention
+/// policy, and every command in this system wants the same one. Named here rather than in the
+/// binary that declares it, because the NATS permission file in `deploy/nats/` and the operator
+/// commands in `deploy/README.md` name the same string, and a name that lives in three places is a
+/// name that will eventually differ in one of them.
+pub const COMMAND_STREAM: &str = "ratatoskr_commands";
+
+/// The subject filter of [`COMMAND_STREAM`]. ADR-0005 makes the class prefix the privilege
+/// boundary, so this is also the publish permission of a role that emits commands.
+pub const COMMAND_SUBJECTS: &str = "cmd.>";
+
+/// The stream every event is published to.
+pub const EVENT_STREAM: &str = "ratatoskr_events";
+
+/// The subject filter of [`EVENT_STREAM`].
+pub const EVENT_SUBJECTS: &str = "evt.>";
+
+/// The durable consumer `ratatoskr-edge` reads operation events through.
+///
+/// Durable and named, so a restart resumes where the last one stopped instead of replaying the
+/// stream or skipping what arrived while the process was down.
+pub const EDGE_PROJECTION_CONSUMER: &str = "platform_edge_projection";
 
 /// The default retention: seven days.
 ///
@@ -93,6 +119,18 @@ impl StreamSpec {
             max_age: DEFAULT_MAX_AGE,
             when_full: WhenFull::RefusePublish,
         }
+    }
+
+    /// The command stream this deployment publishes to, with the name and subjects of the profile.
+    #[must_use]
+    pub fn command_stream() -> Self {
+        Self::commands(COMMAND_STREAM, vec![COMMAND_SUBJECTS.to_owned()])
+    }
+
+    /// The event stream this deployment consumes from.
+    #[must_use]
+    pub fn event_stream() -> Self {
+        Self::events(EVENT_STREAM, vec![EVENT_SUBJECTS.to_owned()])
     }
 
     /// An event stream, which drops the oldest rather than refusing a fact.

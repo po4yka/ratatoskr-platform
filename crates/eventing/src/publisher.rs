@@ -17,6 +17,12 @@ pub enum PublishError {
     /// The broker refused, was unreachable, or did not acknowledge.
     #[error("the message was not acknowledged by the bus")]
     NotAcknowledged(#[source] Box<dyn std::error::Error + Send + Sync + 'static>),
+
+    /// The nkey seed file could not be read. Its path is deliberately absent from the message: the
+    /// `source` carries what the operating system said, and the configured path is already in the
+    /// effective-configuration log line.
+    #[error("the bus credential could not be read")]
+    Credential(#[source] std::io::Error),
 }
 
 /// Something that can put a message on the bus.
@@ -47,13 +53,43 @@ impl NatsPublisher {
         Self { context }
     }
 
-    /// Connect to a NATS server and take its `JetStream` context.
+    /// Connect to a NATS server anonymously and take its `JetStream` context.
+    ///
+    /// Anonymous is what `compose.yaml` serves and what no deployment should: see
+    /// [`Self::connect_with_nkey`].
     ///
     /// # Errors
     ///
     /// [`PublishError::NotAcknowledged`] if the server is unreachable.
     pub async fn connect(url: &str) -> Result<Self, PublishError> {
         let client = async_nats::connect(url)
+            .await
+            .map_err(|error| PublishError::NotAcknowledged(Box::new(error)))?;
+        Ok(Self::new(jetstream::new(client)))
+    }
+
+    /// Connect as the identity whose nkey seed is in `seed_path`.
+    ///
+    /// The seed is read here and handed straight to the client rather than being held anywhere: it
+    /// lives for the life of the connection inside `async-nats`, which needs it to sign every
+    /// server nonce, and a second copy in a configuration struct would be a second thing that can
+    /// be logged.
+    ///
+    /// Trailing whitespace is stripped because the file is written by a human or by `nk -gen user`,
+    /// and a trailing newline would otherwise become an authentication failure whose message names
+    /// nothing.
+    ///
+    /// # Errors
+    ///
+    /// [`PublishError::Credential`] if the seed file cannot be read, and
+    /// [`PublishError::NotAcknowledged`] if the server is unreachable or rejects the identity.
+    pub async fn connect_with_nkey(
+        url: &str,
+        seed_path: &std::path::Path,
+    ) -> Result<Self, PublishError> {
+        let seed = std::fs::read_to_string(seed_path).map_err(PublishError::Credential)?;
+        let client = async_nats::ConnectOptions::with_nkey(seed.trim().to_owned())
+            .connect(url)
             .await
             .map_err(|error| PublishError::NotAcknowledged(Box::new(error)))?;
         Ok(Self::new(jetstream::new(client)))
@@ -74,8 +110,9 @@ impl NatsPublisher {
     /// name the cause.
     ///
     /// Idempotent. There is one publisher on one host, so this process is the right owner of the
-    /// topology it publishes to (ADR-0010); the deployment profile may take the limits over, and
-    /// cannot take over the fact that they are stated.
+    /// topology it publishes to (ADR-0010). The deployment profile does NOT take the limits over:
+    /// ADR-0013 puts the names and the limits in [`crate::stream`] and has `deploy/` transcribe
+    /// them, so there is one source for a value a permission file and a runbook both repeat.
     ///
     /// A stream that already exists is NOT reconciled — that is the `JetStream` client's behaviour,
     /// not a choice here — so the returned [`StreamState`] names every limit that differs. Changing

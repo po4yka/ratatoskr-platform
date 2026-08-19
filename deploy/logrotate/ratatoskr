@@ -1,0 +1,22 @@
+# /etc/logrotate.d/ratatoskr
+#
+# The three units write to files rather than to the journal, because /var/log on this host is a
+# 128 MiB log2ram tmpfs (`ratatoskr-workspace/docs/DEPLOYMENT_TARGET.md`). Nothing rotates a file
+# systemd opened, so this does.
+#
+# `copytruncate` rather than `create`: systemd holds the file descriptor for the life of the
+# service and would keep writing to a renamed inode. It is safe here because `StandardOutput=append:`
+# opens with O_APPEND, so a write after truncation lands at offset zero rather than leaving a sparse
+# hole.
+
+/mnt/nvme/ratatoskr/logs/*.log {
+    daily
+    rotate 14
+    maxsize 128M
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+    su root ratatoskr
+}

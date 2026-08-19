@@ -107,6 +107,11 @@ holds exactly one message after two pump passes.
 
 ## Follow-up
 
-Stream and consumer naming, the durable consumer configuration, and the per-role NATS credentials
-belong to the deployment profile work at milestone 9. This ADR fixes only the subject grammar and the
-delivery contract, which are the parts a message shape depends on.
+Stream and consumer naming, the durable consumer configuration, and the NATS credential were
+reserved here for the deployment profile, and [ADR-0013](0013-single-host-deployment-profile.md)
+decides them. One correction to what this section assumed: there are no PER-ROLE credentials.
+`ratatoskr-edge` holds the only one, because the other two roles publish through the shared
+`operations.outbox` and a NATS-side subject allowlist cannot see which role wrote a row.
+
+This ADR still fixes only the subject grammar and the delivery contract, which are the parts a
+message shape depends on.

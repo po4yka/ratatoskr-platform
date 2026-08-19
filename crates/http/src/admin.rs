@@ -16,10 +16,10 @@ const PROMETHEUS_CONTENT_TYPE: &str = "text/plain; version=0.0.4";
 
 /// The admin plane carries NO `ErrorEnvelope`.
 ///
-/// `/health/ready` returning 503 must tell the orchestrator WHICH check failed, and `ErrorEnvelope`
+/// `/health/ready` returning 503 must tell an operator WHICH check failed, and `ErrorEnvelope`
 /// has no member for that; the only place it could go is `extensions`, and contracts ADR-0008
-/// states that a producer never authors a key there. These bodies are consumed by a Kubernetes
-/// probe, not by a Ratatoskr client. An unknown admin path returns a bare 404.
+/// states that a producer never authors a key there. These bodies are read by a person and by a
+/// metrics scrape, not by a Ratatoskr client. An unknown admin path returns a bare 404.
 ///
 /// All four routes respond `Cache-Control: no-store`: a cached "ready" is a routing decision made
 /// from stale data.

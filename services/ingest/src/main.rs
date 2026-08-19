@@ -12,10 +12,10 @@
 //! startup rather than a Postgres error on the first inbound signal.
 //!
 //! **It does not publish.** It writes commands into the transactional outbox and stops there; the
-//! publisher runs in `ratatoskr-edge`. That is a real coupling — a deployment of ingest without
-//! edge accumulates commands nobody sends — and it is recorded here rather than hidden behind a
-//! second publisher, because where publishers run is a deployment-profile decision and milestone 9
-//! is where that profile is written.
+//! publisher runs in `ratatoskr-edge`, and ADR-0013 decides that it is the ONLY one. That is a
+//! real coupling — with edge down, commands accumulate and nothing sends them — and it is a
+//! backlog rather than a loss, because the outbox is the durable half. The consequence for this
+//! binary is that it reads no `RATATOSKR__BUS__*` variable and holds no NATS credential at all.
 
 use std::process::ExitCode;
 use std::sync::Arc;

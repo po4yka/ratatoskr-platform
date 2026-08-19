@@ -13,7 +13,9 @@ use std::time::Duration;
 
 use platform_core::RuntimeRole;
 use platform_core::config::PlatformConfig;
-use platform_eventing::{NatsPublisher, StreamSpec, pump};
+use platform_eventing::{
+    COMMAND_STREAM, EDGE_PROJECTION_CONSUMER, NatsPublisher, StreamSpec, pump,
+};
 use platform_http::{RuntimeState, Serving};
 use platform_operations::ProgressProjection;
 use platform_persistence::Database;
@@ -35,31 +37,6 @@ const PUMP_INTERVAL: Duration = Duration::from_millis(250);
 
 /// How many rows one pass claims. A bound, so one slow broker cannot make one pass unbounded.
 const PUMP_BATCH: i64 = 64;
-
-/// The `JetStream` stream and durable consumer this role reads operation events from.
-const EVENT_STREAM: &str = "ratatoskr_events";
-const EVENT_CONSUMER: &str = "platform_edge_projection";
-
-/// The `JetStream` stream commands are published to.
-///
-/// Declared here because this process publishes to it, and there is one of it (ADR-0010).
-/// `JetStream` does not acknowledge a publish to a subject no stream covers, so without this every
-/// command would be retried, backed off and eventually dead-lettered.
-const COMMAND_STREAM: &str = "ratatoskr_commands";
-
-/// The two streams, with the limits they are created with.
-///
-/// The asymmetry is the decision: a command stream REFUSES a publish when full, because the outbox
-/// is the durable copy and a refusal becomes a visible retry; an event stream drops its oldest,
-/// because an event is a fact its producer already recorded and a consumer that far behind is not
-/// helped by keeping more of them.
-fn command_stream() -> StreamSpec {
-    StreamSpec::commands(COMMAND_STREAM, vec!["cmd.>".to_owned()])
-}
-
-fn event_stream() -> StreamSpec {
-    StreamSpec::events(EVENT_STREAM, vec!["evt.>".to_owned()])
-}
 
 /// Edge's contribution to its public listener.
 struct EdgeRoutes;
@@ -105,10 +82,20 @@ impl platform_http::PublicRoutes for EdgeRoutes {
                     .to_owned(),
             );
         };
-        let publisher = NatsPublisher::connect(bus.url.as_str())
-            .await
-            .map_err(|error| format!("the bus could not be reached: {error}"))?;
-        let command_stream = command_stream();
+        // An anonymous connection is legal and is what `compose.yaml` serves; a deployment sets
+        // `RATATOSKR__BUS__NKEY_SEED_PATH` so that this process may publish `cmd.>` and consume
+        // `evt.>` and nothing else (`deploy/nats/ratatoskr.conf`). Rule V16 has already checked the
+        // file is there, so reaching the error path here means it went away between validation and
+        // now.
+        let publisher = match bus.nkey_seed_path.as_deref() {
+            Some(seed) => NatsPublisher::connect_with_nkey(bus.url.as_str(), seed).await,
+            None => NatsPublisher::connect(bus.url.as_str()).await,
+        }
+        .map_err(|error| format!("the bus could not be reached: {error}"))?;
+        // The names and limits are the deployment profile's, stated once in
+        // `platform_eventing::stream` so that this process, the NATS permission file and the
+        // operator commands in `deploy/README.md` cannot disagree about them.
+        let command_stream = StreamSpec::command_stream();
         let state = publisher
             .ensure_stream(&command_stream)
             .await
@@ -195,8 +182,8 @@ fn spawn_projection(pool: PgPool, publisher: NatsPublisher) -> tokio::task::Join
     tokio::spawn(async move {
         let outcome = platform_eventing::consumer::run(
             publisher.context(),
-            &event_stream(),
-            EVENT_CONSUMER,
+            &StreamSpec::event_stream(),
+            EDGE_PROJECTION_CONSUMER,
             &pool,
             &ProgressProjection,
             std::future::pending::<()>(),

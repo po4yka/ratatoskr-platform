@@ -1,4 +1,4 @@
-//! The startup validation rules V1–V10 and the operator-facing failure report.
+//! The startup validation rules V1–V16 and the operator-facing failure report.
 //!
 //! Order at startup is strictly: extract, validate, initialise telemetry, bind listeners. Telemetry
 //! is initialised *after* validation so that an invalid `log_filter` fails as a configuration
@@ -32,10 +32,19 @@ pub struct Violation {
     pub rule: &'static str,
 }
 
+/// The ceiling V6 puts on `drain_seconds + grace_seconds`.
+///
+/// Public because a supervisor's own stop timeout must EXCEED it: systemd's default
+/// `TimeoutStopSec` is 90 seconds, so a configuration this rule accepts would be `SIGKILL`ed
+/// thirty seconds into a drain it was told to perform. `deploy/systemd/*.service` sets a larger
+/// value and a test compares the two, so raising this constant fails that test rather than
+/// silently making every unit wrong.
+pub const SHUTDOWN_CEILING_SECONDS: u64 = 120;
+
 /// The key and variable of the public listener address, named by V1 and V2.
 const PUBLIC_BIND: (&str, &str) = ("public.bind", "RATATOSKR__PUBLIC__BIND");
 
-/// Applies V1–V10 and returns every violation found, in rule order.
+/// Applies V1–V16 and returns every violation found, in rule order.
 pub(crate) fn validate(role: RuntimeRole, config: &PlatformConfig) -> Vec<Violation> {
     let mut found = Vec::new();
 
@@ -94,7 +103,9 @@ pub(crate) fn validate(role: RuntimeRole, config: &PlatformConfig) -> Vec<Violat
         });
     }
 
-    // V6 — a total above the pod termination grace period guarantees SIGKILL mid-request.
+    // V6 — a total above the supervisor's stop timeout guarantees SIGKILL mid-request. systemd's
+    // default is 90s, which is BELOW this ceiling, so `deploy/systemd/*.service` raises it and a
+    // test compares the two (ADR-0013).
     let drain = config.shutdown.drain_seconds;
     let grace = config.shutdown.grace_seconds;
     if drain > 60 {
@@ -104,7 +115,9 @@ pub(crate) fn validate(role: RuntimeRole, config: &PlatformConfig) -> Vec<Violat
             rule: "must be 0..=60, and drain_seconds + grace_seconds must not exceed 120",
         });
     }
-    if !(1..=120).contains(&grace) || drain.saturating_add(grace) > 120 {
+    if !(1..=SHUTDOWN_CEILING_SECONDS).contains(&grace)
+        || drain.saturating_add(grace) > SHUTDOWN_CEILING_SECONDS
+    {
         found.push(Violation {
             key: "shutdown.grace_seconds",
             env_var: "RATATOSKR__SHUTDOWN__GRACE_SECONDS",
@@ -216,7 +229,7 @@ fn otlp_violations(config: &PlatformConfig) -> Vec<Violation> {
     found
 }
 
-/// V13 — the bus rules.
+/// V13 and V16 — the bus rules.
 ///
 /// Extracted for the same reason as the database rules: [`validate`] stays inside the workspace's
 /// function-length lint, and the split follows a subsystem boundary rather than a line count.
@@ -243,6 +256,29 @@ fn bus_violations(config: &PlatformConfig) -> Vec<Violation> {
             rule: "must not embed a user name or a password; a bus credential belongs in a \
                    credentials file read by path (SECURITY.md)",
         });
+    }
+
+    // V16 — the credential file, checked here rather than at connect time because
+    // `<binary> check-config` is what a systemd unit runs before ExecStart, and "the seed file is
+    // not there" is the most likely thing to be wrong about a fresh host. A relative path would
+    // resolve against the unit's WorkingDirectory, which is host state no repository owns and
+    // which a reflash resets.
+    if let Some(path) = bus.nkey_seed_path.as_deref() {
+        if !path.is_absolute() {
+            found.push(Violation {
+                key: "bus.nkey_seed_path",
+                env_var: "RATATOSKR__BUS__NKEY_SEED_PATH",
+                rule: "must be an absolute path; a relative one resolves against the unit's \
+                       working directory",
+            });
+        } else if !path.is_file() {
+            found.push(Violation {
+                key: "bus.nkey_seed_path",
+                env_var: "RATATOSKR__BUS__NKEY_SEED_PATH",
+                rule: "must name a readable file holding this role's NATS nkey seed \
+                       (deploy/nats/README.md)",
+            });
+        }
     }
 
     found

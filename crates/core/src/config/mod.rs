@@ -32,7 +32,7 @@ pub use crate::config::model::{
     AdminConfig, BusConfig, DatabaseConfig, IdentityConfig, LogFormat, OtlpConfig, PlatformConfig,
     PublicConfig, ShutdownConfig, TelemetryConfig,
 };
-pub use crate::config::validate::Violation;
+pub use crate::config::validate::{SHUTDOWN_CEILING_SECONDS, Violation};
 use crate::role::RuntimeRole;
 
 /// The environment prefix, and the nesting separator inside it.
@@ -167,9 +167,10 @@ impl ConfigError {
         }
     }
 
-    /// `78` — `EX_CONFIG` from `sysexits.h`. Kubernetes surfaces it in
-    /// `lastState.terminated.exitCode`, which is what distinguishes "your configuration is wrong"
-    /// from "the process crashed" in a restart-loop dashboard.
+    /// `78` — `EX_CONFIG` from `sysexits.h`. `systemctl status` and `systemd-analyze` render it
+    /// as `EXIT_CONFIG`, which is what distinguishes "your configuration is wrong" from "the process
+    /// crashed" in a unit that is restarting every ten seconds. Each unit runs `check-config` as
+    /// `ExecStartPre`, so it is normally the pre-start step that carries this code.
     #[must_use]
     pub const fn exit_code(&self) -> u8 {
         78

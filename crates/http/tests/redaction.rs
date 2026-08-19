@@ -290,8 +290,9 @@ async fn an_inbound_traceparent_is_continued_and_a_malformed_one_does_not_fail_t
     assert_ne!(fresh, inbound);
 }
 
-/// T-5: the one middleware is attached to the public router only, so three probes at 1 Hz per
-/// replica neither dominate the request rate nor pollute the latency histogram.
+/// T-5: the one middleware is attached to the public router only, so the operator plane's own
+/// traffic — a scrape every fifteen seconds and whatever a person curls — neither dominates the
+/// request rate nor pollutes the latency histogram.
 ///
 /// It lives here rather than in `crates/telemetry/tests/subscriber.rs` because it needs an axum
 /// router, and here rather than in `tests/admin.rs` because the capturing subscriber that proves

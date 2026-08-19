@@ -183,7 +183,7 @@ fn an_unparsable_log_filter_is_rejected_at_startup_not_at_init() {
     });
 }
 
-/// C-12. V6: a drain plus grace total above the pod termination grace period guarantees SIGKILL
+/// C-12. V6: a drain plus grace total above the supervisor's stop timeout guarantees SIGKILL
 /// mid-request.
 #[test]
 fn shutdown_windows_are_bounded_and_their_sum_is_bounded() {

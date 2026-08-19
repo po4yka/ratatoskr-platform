@@ -57,7 +57,7 @@ impl RuntimeState {
     /// Record what the latest database probe found.
     ///
     /// Called by the prober, not by a request: a readiness probe must not open a connection, or a
-    /// saturated pool would make the kubelet the thing that finishes it off.
+    /// saturated pool would make the health check the thing that finishes it off.
     pub fn set_database_reachable(&self, reachable: bool) {
         self.database.store(
             if reachable {

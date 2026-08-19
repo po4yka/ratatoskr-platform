@@ -1,0 +1,99 @@
+[Unit]
+Description=Ratatoskr Platform — the generic webhook adapter
+Documentation=https://github.com/po4yka/ratatoskr-platform/blob/main/deploy/README.md
+After=network-online.target postgresql.service ratatoskr-edge.service
+Wants=network-online.target
+
+# `Wants=`, never `Requires=`. Ordering matters — only `ratatoskr-edge` applies the migrations, and
+# this process refuses to start without the schema — but a later edge failure must NOT stop this
+# one: it writes commands into the transactional outbox, which is the durable half, and edge
+# publishes them when it returns. `Requires=` would turn a publisher outage into an ingress outage.
+Wants=ratatoskr-edge.service
+
+# Restart forever. There is no orchestrator on this host to notice a unit in `failed`, and every
+# reason this process refuses to start — the database is not up yet, the schema has not been
+# migrated yet, the nkey seed is not in place yet — is transient on a first boot. A start limit
+# would latch the unit into `failed` with nothing to retry it, which
+# `ratatoskr-workspace/docs/DEPLOYMENT_TARGET.md` names as a live failure on this host.
+StartLimitIntervalSec=0
+
+[Service]
+Type=exec
+# NEVER Type=notify: no Ratatoskr binary calls sd_notify, so notify would time out and kill a
+# healthy process, and WatchdogSec= would SIGABRT it on the first interval.
+User=ratatoskr-ingest
+Group=ratatoskr
+EnvironmentFile=/etc/ratatoskr/ingest.conf
+ExecStartPre=/usr/local/bin/ratatoskr-ingest check-config
+ExecStart=/usr/local/bin/ratatoskr-ingest
+Restart=always
+RestartSec=10s
+KillSignal=SIGTERM
+
+# Must EXCEED the process's own shutdown ceiling. Platform validates drain + grace <= 120s, and
+# systemd's default TimeoutStopSec is 90s — so a configuration the process accepts would be
+# SIGKILLed thirty seconds early, in the middle of the drain it was told to perform.
+TimeoutStopSec=130s
+
+# Logs go to a file on NVMe, not to the journal. /var/log here is a 128 MiB log2ram tmpfs whose two
+# journald drop-ins disagree with each other, so a service writing JSON at volume either fills it or
+# forces a flush onto the boot device. The consequence is that `journalctl -u ratatoskr-ingest` shows
+# only systemd's own lines; the service's output is in the file below, rotated by
+# deploy/logrotate/ratatoskr. `append:` opens with O_APPEND, which is what makes logrotate's
+# copytruncate safe here.
+StandardOutput=append:/mnt/nvme/ratatoskr/logs/ingest.log
+StandardError=append:/mnt/nvme/ratatoskr/logs/ingest.log
+
+# Resource ceilings, not targets. There is 15 GiB on this board, no disk swap — only 4 GiB of zram —
+# and nine more services are queued for it. A ceiling turns a leak into one killed service instead of
+# a thrashing host.
+MemoryHigh=384M
+MemoryMax=512M
+CPUQuota=100%
+TasksMax=128
+
+# The network boundary, enforced by the unit rather than by host firewall state that a reflash
+# resets. localhost reaches PostgreSQL, NATS and cloudflared; 172.16/12 is the Docker bridge the
+# metrics stack scrapes from; 100.64/10 is Tailscale, which is how operators reach /metrics and
+# /health per DEPLOYMENT_TARGET.md. The LAN is not on this list, which is the point.
+# This filters OUTBOUND traffic too. PostgreSQL, NATS and a systemd-resolved stub are all inside
+# 127/8, so nothing this process reaches today is affected — but a resolver or a collector on the
+# LAN would be, and the failure would look like a name that does not resolve.
+# VERIFY 172.16/12 against `docker network inspect monitoring_default` on the host: a bridge on a
+# different subnet makes the scrape fail silently.
+IPAddressDeny=any
+IPAddressAllow=localhost 172.16.0.0/12 100.64.0.0/10
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectProc=invisible
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+# AF_NETLINK is not decoration: glibc's getaddrinfo opens a netlink socket to enumerate
+# interfaces for source-address selection, so a filter without it turns every name lookup
+# into a failure that names DNS rather than this line.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+AmbientCapabilities=
+UMask=0077
+
+# One host is one trust boundary. Everything above defends against a compromised PROCESS, not
+# against a compromised host, and DEPLOYMENT_TARGET.md states that limit rather than assuming it
+# away. The port this role binds is 8181 public, 9465 operator.
+
+[Install]
+WantedBy=multi-user.target

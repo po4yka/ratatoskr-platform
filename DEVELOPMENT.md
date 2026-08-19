@@ -6,7 +6,7 @@
 
 ## Current stage
 
-Milestones 1 through 8 of `docs/IMPLEMENTATION_PLAN.md` exist and the commands marked **real** below
+Milestones 1 through 9 of `docs/IMPLEMENTATION_PLAN.md` exist and the commands marked **real** below
 are real.
 
 Present: the Cargo workspace, its pinned toolchain and its committed `Cargo.lock`; the
@@ -19,6 +19,16 @@ version on an operator listener; SIGTERM draining; and the CI gate in `.github/w
 Present since milestone 2 and 3: the `identity` and `operations` schemas in `migrations/`, a local
 PostgreSQL in `compose.yaml`, the `ratatoskr-platform-persistence` pool and embedded migrator, and the
 `ratatoskr-platform-identity` and `ratatoskr-platform-operations` crates with their integration suites.
+
+Present since milestone 9: periodic command publication. `ratatoskr-scheduler` reads
+`operations.schedules`, mints a deterministic occurrence identifier for each due time, and writes
+the occurrence, an operation and an outbox command in ONE transaction. It requires
+`RATATOSKR__DATABASE__URL`, applies no migrations, and reads no `RATATOSKR__BUS__*` variable at
+all: it publishes into the outbox and `ratatoskr-edge` runs the only pump (ADR-0013). The
+single-host deployment profile is in `deploy/` — three systemd units, two PostgreSQL role files,
+the NATS server configuration with its one nkey identity, a logrotate file and a scrape fragment —
+and `services/edge/tests/deployment_profile.rs` compares the parts of it a binary could
+contradict.
 
 Present since milestone 8: `POST /v2/sessions/telegram`, which exchanges a `ratatoskr-telegram`
 identity assertion for a session (ADR-0011 — Platform holds only the issuer's Ed25519 PUBLIC key, so
@@ -51,11 +61,13 @@ Present since milestone 4: the transactional outbox and the inbox in `operations
 grammar, a `JetStream` publisher, and the pump that moves claimed rows onto the bus. Both routes that
 accept work write their command into the outbox; the pump runs in `ratatoskr-edge` only.
 
-Absent: scheduled command publication — `ratatoskr-scheduler` still binds nothing but its operator
-listener; the single-host deployment profile; and the workspace end-to-end slice on the target. The
-deployment profile is item 9; the slice is item 10. The device credential model is in no item: it is
-the half of public authentication milestone 8 did not touch, and it has no ADR yet. Assigning any of them to a RANGE of milestones assigns them to nobody, which is
-how the `Dockerfile` stayed unowned. None of them is scaffolded, stubbed or present in the checkout.
+Absent: the workspace end-to-end slice on the deployment target, which is item 10. Three things are
+in NO item, and are listed here rather than left to be discovered — the device credential model,
+which is the half of public authentication milestone 8 did not touch and has no ADR yet;
+stale-operation reconciliation, which `docs/ARCHITECTURE.md` S14 requires and ADR-0002 wrongly
+promised at milestone 9; and backup and restore, for which `deploy/README.md` allocates a path and
+writes nothing. Assigning any of them to a RANGE of milestones assigns them to nobody, which is how
+the `Dockerfile` stayed unowned. None of them is scaffolded, stubbed or present in the checkout.
 
 ## Toolchain
 
@@ -152,8 +164,9 @@ RATATOSKR__ADMIN__BIND=127.0.0.1:9464 \
 RATATOSKR__TELEMETRY__LOG_FORMAT=pretty \
   cargo run --locked -p ratatoskr-edge
 
-# scheduler, on defaults alone, no environment at all
-cargo run --locked -p ratatoskr-scheduler
+# scheduler; it reads its schedules from the database and refuses to start without one
+RATATOSKR__DATABASE__URL=postgres://platform:platform@127.0.0.1:5432/platform \
+  cargo run --locked -p ratatoskr-scheduler
 
 # ingest needs a database and an explicitly named public bind; it carries no default for one
 RATATOSKR__PUBLIC__BIND=127.0.0.1:8181 \
@@ -192,6 +205,18 @@ values (gen_random_uuid(), '<user>', 'an rss shim', digest('<credential>', 'sha2
         'content.capture', now());
 ```
 
+A schedule is registered the same way, and for the same reason: there is no route that writes
+`operations.schedules`. Every schedule is created DISABLED, because enabling one starts publishing
+commands to a domain service that may not be deployed. `deploy/README.md` explains the columns.
+
+```sql
+insert into operations.schedules
+    (schedule_id, name, owner_user_id, command_type, operation_kind, payload,
+     interval_seconds, next_due_at, catch_up, enabled, created_at, updated_at)
+values (gen_random_uuid(), 'github-sync', '<user>', 'github.sync.requested.v1', 'github.sync',
+        '{"account": "po4yka"}'::jsonb, 3600, now(), 'catch_up', true, now(), now());
+```
+
 ### PostgreSQL — real
 
 ```bash
@@ -227,8 +252,8 @@ there and says so in one sentence if it is not.
 
 ```bash
 # Migrations are embedded in the binary by `sqlx::migrate!`, so there is no separate apply step in a
-# deployment: `Database::migrate` runs them under a PostgreSQL advisory lock, which makes a rolling
-# deployment of several replicas safe.
+# deployment: `ratatoskr-edge` applies them at startup, under a PostgreSQL advisory lock, which is
+# what makes a restart overlapping the previous process's grace window safe.
 docker exec -i ratatoskr-platform-postgres psql -U platform -d platform < migrations/0001_identity.sql
 ```
 
@@ -277,9 +302,11 @@ every accepted capture into `operations.outbox` with no publisher and no alert �
 passes its own readiness check while doing nothing.
 
 `platform_eventing::pump::run_once` is one pass, driven by its caller. `ratatoskr-edge` is the only
-caller: `ratatoskr-ingest` writes commands into the outbox and publishes none of them, so a deployment
-of ingest without edge accumulates work nobody sends. Where publishers run is a deployment-profile
-decision and milestone 9 is where that profile is written.
+caller, and ADR-0013 decides that it stays the only one: `ratatoskr-ingest` and `ratatoskr-scheduler`
+write commands into the outbox and publish none of them, so with edge down the other two accumulate
+work nobody sends. That is a backlog rather than a loss — the outbox is the durable half — and
+`deploy/README.md` gives the query that shows it. The consequence for the other two roles is that
+they hold no NATS credential and open no connection to the broker.
 
 ### Artifact — real
 
@@ -355,7 +382,7 @@ milestone has passed is a thing this repository does and cannot see itself do.
 | command publication failures | no | milestone 4 |
 | idempotency hits and conflicts | no | milestone 5 |
 | SSE connection count and delivery lag | no | milestone 6 |
-| scheduler drift and duplicate suppression | no | milestone 9, not yet |
+| scheduler drift and duplicate suppression | **yes** — `platform_scheduler_drift_seconds` and `platform_scheduler_occurrences_total` | milestone 9 |
 
 Closing this is its own piece of work rather than a tail end of the milestone that happened to notice
 it: each row needs a publication point that is truthful about WHEN the value is known, a bounded

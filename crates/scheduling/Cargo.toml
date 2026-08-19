@@ -1,0 +1,33 @@
+[package]
+name        = "ratatoskr-platform-scheduling"
+description = "Periodic command publication: schedules, deterministic occurrences, and catch-up policy."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+
+[lib]
+name = "platform_scheduling"
+path = "src/lib.rs"
+
+[dependencies]
+ratatoskr-platform-persistence.workspace = true
+ratatoskr-platform-operations.workspace  = true
+ratatoskr-platform-eventing.workspace    = true
+ratatoskr-platform-telemetry.workspace   = true
+metrics.workspace    = true
+sqlx.workspace       = true
+uuid.workspace       = true
+time.workspace       = true
+jiff.workspace       = true
+serde_json.workspace = true
+thiserror.workspace  = true
+tracing.workspace    = true
+
+[dev-dependencies]
+ratatoskr-platform-persistence = { workspace = true, features = ["test-support"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+
+[lints]
+workspace = true

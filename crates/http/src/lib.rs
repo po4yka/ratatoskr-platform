@@ -11,8 +11,8 @@
 //!
 //! Every non-2xx response from the **public** listener carries a contract `ErrorEnvelope`, built in
 //! exactly one place, `fault::render`. The **admin** listener carries none: `/health/ready`
-//! returning 503 must tell the orchestrator WHICH check failed, and `ErrorEnvelope` has no member
-//! for that.
+//! returning 503 must tell an operator WHICH check failed, and `ErrorEnvelope` has no member for
+//! that.
 //!
 //! # Exit codes
 //!
@@ -102,7 +102,8 @@ impl PublicRoutes for NoPublicRoutes {
 /// How often the database prober asks whether the dependency is still there.
 ///
 /// Five seconds: long enough that the probe is not itself load, short enough that a readiness state
-/// is never more than one kubelet interval stale.
+/// is never more than one scrape interval stale — the metrics stack on the deployment target scrapes
+/// every fifteen.
 const DATABASE_PROBE_INTERVAL: Duration = Duration::from_secs(5);
 
 /// The whole process lifecycle for one runtime role. Each binary's `main` is this call and nothing

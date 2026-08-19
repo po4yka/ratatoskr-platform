@@ -9,6 +9,7 @@ members = [
     "crates/eventing",
     "crates/idempotency",
     "crates/ingest",
+    "crates/scheduling",
     "crates/api-doc",
     "crates/public-api",
     "crates/http",
@@ -35,6 +36,7 @@ ratatoskr-platform-operations  = { version = "0.1.0", path = "crates/operations"
 ratatoskr-platform-eventing    = { version = "0.1.0", path = "crates/eventing" }
 ratatoskr-platform-idempotency = { version = "0.1.0", path = "crates/idempotency" }
 ratatoskr-platform-ingest      = { version = "0.1.0", path = "crates/ingest" }
+ratatoskr-platform-scheduling  = { version = "0.1.0", path = "crates/scheduling" }
 ratatoskr-platform-api-doc     = { version = "0.1.0", path = "crates/api-doc" }
 ratatoskr-platform-public-api  = { version = "0.1.0", path = "crates/public-api" }
 ratatoskr-platform-http      = { version = "0.1.0", path = "crates/http" }
@@ -95,7 +97,11 @@ metrics-exporter-prometheus = { version = "0.18.3", default-features = false }
 
 # ---- identity and time on the boundary between the database and the wire ----
 # `uuid` v7 because ratatoskr-contracts mints v7 and the database stores the same bytes.
-uuid = { version = "1.18.1", features = ["v7", "serde"] }
+# `v5` for ONE thing: a schedule occurrence's identifier is a function of the schedule and the due
+# time, which is what makes duplicate publication refusable by a primary key (ARCHITECTURE.md S14).
+# The SHA-1 underneath v5 is not a security control there — both inputs are values this system
+# minted, and nothing is authenticated by the digest.
+uuid = { version = "1.18.1", features = ["v5", "v7", "serde"] }
 # `time` is sqlx's timestamptz type here; contracts speaks jiff. The two convert through unix
 # nanoseconds, which needs no calendar and cannot be ambiguous.
 time = { version = "0.3.44", default-features = false, features = ["std"] }

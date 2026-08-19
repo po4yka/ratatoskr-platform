@@ -12,9 +12,15 @@ name = "ratatoskr-scheduler"
 path = "src/main.rs"
 
 [dependencies]
-ratatoskr-platform-core.workspace = true
-ratatoskr-platform-http.workspace = true
-tokio.workspace = true
+ratatoskr-platform-core.workspace        = true
+ratatoskr-platform-http.workspace        = true
+ratatoskr-platform-persistence.workspace = true
+ratatoskr-platform-scheduling.workspace  = true
+axum.workspace   = true
+sqlx.workspace   = true
+tokio.workspace  = true
+jiff.workspace   = true
+tracing.workspace = true
 
 [lints]
 workspace = true

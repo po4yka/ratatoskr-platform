@@ -26,5 +26,9 @@ ratatoskr-platform-public-api.workspace = true
 base64.workspace = true
 tokio.workspace = true
 
+[dev-dependencies]
+ratatoskr-platform-persistence = { workspace = true, features = ["test-support"] }
+tokio = { workspace = true, features = ["rt", "macros"] }
+
 [lints]
 workspace = true

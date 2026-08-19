@@ -52,7 +52,11 @@ and a wrong `on conflict` clause, none of which the macros verify.
   `operations` is exercised by a test that talks to it.
 - `migrations/` is flat. A reader finds the owning schema in the file name and in the `create schema`
   statement at the top of each file.
-- The advisory lock `sqlx` takes during `run` still makes a rolling deployment safe.
+- The advisory lock `sqlx` takes during `run` still makes overlapping applications safe.
+  **Amended at milestone 9.** This line originally read "still makes a rolling deployment safe".
+  There is no rolling deployment: the target is one host with one process per role (ADR-0010).
+  The lock is kept, and re-founded on the case that does happen — a restart that overlaps the
+  previous process's grace window is two processes running `migrate` at once.
 
 ## Security and privacy
 

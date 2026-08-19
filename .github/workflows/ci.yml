@@ -178,24 +178,54 @@ jobs:
             exit 1
           fi
 
-      # The whole lifecycle against the real artifact: bind a socket, answer the operator plane,
-      # take SIGTERM, exit 0. The scheduler is the one role that needs no database or bus to do it.
+      # The whole lifecycle against the real artifact: apply the migrations on aarch64, declare the
+      # JetStream streams, bind both listeners, answer the operator plane, take SIGTERM, exit 0.
+      #
+      # It runs `ratatoskr-edge` and not `ratatoskr-scheduler` because at milestone 9 there is no
+      # role that serves without a database: the scheduler reads its schedules from one, and a
+      # process that started anyway would report itself ready and publish nothing forever. Edge is
+      # the role that also OWNS the migrations, so this step is the only place the SQL is applied on
+      # the target's architecture before the target sees it.
       - name: The artifact serves and stops cleanly
         run: |
           set -euo pipefail
-          docker run -d --name smoke -p 127.0.0.1:9466:9466 \
-            -e RATATOSKR__ADMIN__BIND=0.0.0.0:9466 \
-            ratatoskr-platform:ci ratatoskr-scheduler
+          # `--network host` for all three, so every address in this step is 127.0.0.1 — the same
+          # loopback URL `DEVELOPMENT.md` documents for a local run. A user-defined network would
+          # need a container name in the database URL, and a URL with a credential and a real-looking
+          # host is the one thing the pre-commit credential check refuses.
+          docker run -d --name smoke-db --network host \
+            -e POSTGRES_USER=platform -e POSTGRES_PASSWORD=platform -e POSTGRES_DB=platform \
+            -e POSTGRES_INITDB_ARGS="--locale-provider=icu --icu-locale=und-x-icu --encoding=UTF8" \
+            postgres:17
+          docker run -d --name smoke-bus --network host \
+            nats:2-alpine --jetstream --store_dir=/data
           for _ in $(seq 1 60); do
-            if curl -sf http://127.0.0.1:9466/health/ready >/dev/null; then break; fi
+            if docker exec smoke-db pg_isready -U platform -d platform >/dev/null 2>&1; then break; fi
             sleep 1
           done
-          curl -sf http://127.0.0.1:9466/health/ready
+          docker run -d --name smoke --network host \
+            -e RATATOSKR__ADMIN__BIND=127.0.0.1:9464 \
+            -e RATATOSKR__PUBLIC__BIND=127.0.0.1:8080 \
+            -e RATATOSKR__DATABASE__URL=postgres://platform:platform@127.0.0.1:5432/platform \
+            -e RATATOSKR__BUS__URL=nats://127.0.0.1:4222 \
+            ratatoskr-platform:ci ratatoskr-edge
+          for _ in $(seq 1 60); do
+            if curl -sf http://127.0.0.1:9464/health/ready >/dev/null; then break; fi
+            sleep 1
+          done
+          curl -sf http://127.0.0.1:9464/health/ready | tee /dev/stderr | grep -q '"state":"ready"'
           echo
           # `git_sha` is compiled in through `option_env!`, so an image built without the build
           # argument reports "unknown" — the first thing anyone checks when a deployment misbehaves.
-          curl -sf http://127.0.0.1:9466/version | tee /dev/stderr | grep -q "$GITHUB_SHA"
-          curl -sf http://127.0.0.1:9466/metrics | grep -q '^platform_build_info'
+          curl -sf http://127.0.0.1:9464/version | tee /dev/stderr | grep -q "$GITHUB_SHA"
+          curl -sf http://127.0.0.1:9464/metrics | grep -q '^platform_build_info'
+          # The migrations really ran on aarch64 — every one of them, through sqlx's own migrator
+          # rather than a `create table` that happened to exist. A stream that could not be declared
+          # is already covered: edge refuses to start without one, so readiness above would never
+          # have arrived.
+          applied=$(docker exec smoke-db psql -U platform -d platform -Atc \
+            "select count(*) from _sqlx_migrations where success")
+          test "$applied" = "$(find migrations -name '*.sql' | wc -l | tr -d ' ')"
           docker stop -t 40 smoke
           test "$(docker inspect -f '{{.State.ExitCode}}' smoke)" = "0"
-          docker rm smoke
+          docker rm -f smoke smoke-db smoke-bus
