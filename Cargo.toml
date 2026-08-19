@@ -37,14 +37,19 @@ ratatoskr-platform-http      = { version = "0.1.0", path = "crates/http" }
 # ---- ratatoskr-contracts ----------------------------------------------------------------------
 # The only sanctioned interim form (contracts/README.md, "Workspace integration"): a git dependency
 # pinned to a full commit SHA. A branch moves and a tag can be moved, so neither pins.
+# The transport is `https://` because ratatoskr-contracts is a PUBLIC repository, so an anonymous
+# fetch resolves it. An `ssh://` URL would need a deploy key, which is a long-lived private key in
+# CI that protects nothing readable (SECURITY.md: deny by default; THREAT_MODEL.md treats a CI
+# credential as an asset, and the cheapest way to secure an asset is not to hold it). If contracts
+# ever becomes private this reverts to `ssh://` and the key becomes real.
 # ONE rev for every contract crate, declared ONLY here. Two revs of the same git source are two
 # distinct packages, so `EntityRef` from one would not unify with `EntityRef` from the other and the
 # compiler error would be baffling.
 # Replaced by a version requirement when contracts milestone 10 publishes.
-ratatoskr-identifiers     = { git = "ssh://git@github.com/po4yka/ratatoskr-contracts.git", rev = "6b3ddd961a733af293a035931fed2ce3cc8599dd" }
-ratatoskr-error-contracts = { git = "ssh://git@github.com/po4yka/ratatoskr-contracts.git", rev = "6b3ddd961a733af293a035931fed2ce3cc8599dd" }
-ratatoskr-event-envelope  = { git = "ssh://git@github.com/po4yka/ratatoskr-contracts.git", rev = "6b3ddd961a733af293a035931fed2ce3cc8599dd" }
-ratatoskr-operation-contracts = { git = "ssh://git@github.com/po4yka/ratatoskr-contracts.git", rev = "6b3ddd961a733af293a035931fed2ce3cc8599dd" }
+ratatoskr-identifiers     = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "6b3ddd961a733af293a035931fed2ce3cc8599dd" }
+ratatoskr-error-contracts = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "6b3ddd961a733af293a035931fed2ce3cc8599dd" }
+ratatoskr-event-envelope  = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "6b3ddd961a733af293a035931fed2ce3cc8599dd" }
+ratatoskr-operation-contracts = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "6b3ddd961a733af293a035931fed2ce3cc8599dd" }
 
 # ---- persistence ----
 # `migrate` embeds migrations/ into the binary, so a deployment cannot drift from its schema.

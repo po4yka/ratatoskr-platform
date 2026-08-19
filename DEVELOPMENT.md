@@ -80,9 +80,16 @@ cargo build --workspace --locked --release
 This list and the step list in `.github/workflows/ci.yml` are the same list. If they drift, this
 document is wrong.
 
-`cargo fetch --locked` needs read access to `ratatoskr-contracts` over SSH; CI supplies it through
-the `CONTRACTS_DEPLOY_KEY` repository secret, and `.cargo/config.toml` makes a local checkout use the
-system git client and the SSH agent. That is a **build** credential, not a test credential.
+`cargo fetch --locked` resolves the `ratatoskr-contracts` git dependency over `https://`, and
+`ratatoskr-contracts` is a public repository, so it needs **no credential at all** — not locally and
+not in CI. The workflow holds no secret, and there is no `.cargo/config.toml`: Cargo's built-in git
+client reads an `https://` URL without help, which is why the `net.git-fetch-with-cli` workaround
+that an `ssh://` URL required is gone.
+
+If `ratatoskr-contracts` is ever made private, this reverses: the four URLs in `Cargo.toml` go back
+to `ssh://git@github.com/…`, `.cargo/config.toml` returns with `net.git-fetch-with-cli = true`, and
+CI needs a read-only deploy key. That is a **build** credential, not a test credential — and it is
+worth not holding one until the day it protects something.
 
 ### Test
 

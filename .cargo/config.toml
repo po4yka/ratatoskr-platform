@@ -1,5 +1,0 @@
-# The ratatoskr-contracts dependency is `ssh://git@github.com/…`. Cargo's built-in git client does
-# not read ~/.ssh/config and does not use the SSH agent, so a clean checkout fails to fetch without
-# this. It is also the first thing that breaks for a new contributor.
-[net]
-git-fetch-with-cli = true

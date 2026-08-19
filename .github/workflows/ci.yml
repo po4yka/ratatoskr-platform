@@ -1,10 +1,8 @@
 # The gate DEVELOPMENT.md documents, enforced. The command list here and the command list in
 # DEVELOPMENT.md are the same list; if they drift, DEVELOPMENT.md is wrong.
 #
-# PREREQUISITE: `secrets.CONTRACTS_DEPLOY_KEY` must be a read-only deploy key for
-# po4yka/ratatoskr-contracts. Without it `cargo fetch --locked` cannot resolve the git dependency.
-# This is the honest operational cost of the ssh:// pin and the most likely thing to block the first
-# pull request.
+# The contracts git dependency needs NO credential: ratatoskr-contracts is a public repository and
+# `https://` resolves it anonymously. This job therefore holds no secret at all.
 name: ci
 
 on:
@@ -50,19 +48,16 @@ jobs:
       PLATFORM_TEST_NATS_URL: nats://127.0.0.1:4222
 
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.3.0
-
-      - name: Authorise the contracts git dependency
-        # Pinned by commit: a moved tag on a third-party action that handles a private key is a
-        # supply-chain compromise, not an inconvenience (THREAT_MODEL.md, generator compromise).
-        uses: webfactory/ssh-agent@dc588b651fe13675774614f8e6a936a468676387 # v0.9.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ssh-private-key: ${{ secrets.CONTRACTS_DEPLOY_KEY }}
+          # The gate reads the tree and pushes nothing, so the checkout credential is left behind in
+          # .git/config for no reason. Deny by default applies to the token too.
+          persist-credentials: false
 
       - name: Show the pinned toolchain
         run: rustup show           # rust-toolchain.toml is the only supported toolchain
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.8.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       # NATS runs as an explicit container rather than a service, because a service container cannot
       # be given a command and `--jetstream` is not the image default. Without the flag every publish
