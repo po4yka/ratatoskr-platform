@@ -35,7 +35,12 @@ permissions:
 
 concurrency:
   group: zizmor-${{ github.ref }}
-  cancel-in-progress: true
+  # On a pull request the newest push is the only one whose answer matters, and cancelling the
+  # superseded run is what makes the queue keep up. On `main` it is the opposite: a cancelled run
+  # leaves that commit with no verdict at all, and `main` is the branch whose history is supposed to
+  # record whether each commit passed. Two pushes a minute apart would otherwise erase the first
+  # one's result permanently — the log is the only place it ever existed.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   audit:
