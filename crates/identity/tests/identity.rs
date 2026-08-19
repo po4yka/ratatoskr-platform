@@ -7,6 +7,7 @@
     reason = "assertions in a test binary"
 )]
 
+use platform_identity::NewSession;
 use platform_identity::session::RefreshFailure;
 use platform_identity::{
     AuditEvent, AuditOutcome, DeviceKind, IdentityProvider, RevocationReason, RevocationSubject,
@@ -89,12 +90,17 @@ async fn a_session_is_live_until_it_is_revoked_or_expires() {
         .expect("a user");
     let session = platform_identity::session::create_session(
         pool,
-        user.user_id,
-        SessionKind::Browser,
-        None,
-        "edge",
-        now(),
-        later(60),
+        &NewSession {
+            user_id: user.user_id,
+            kind: SessionKind::Browser,
+            device_id: None,
+            audience: "edge",
+            // These tests exercise the session lifecycle, not authentication; a session with no
+            // credential simply never authenticates, which is the safe default.
+            token: None,
+            issued_at: now(),
+            expires_at: later(60),
+        },
     )
     .await
     .expect("a session");
@@ -156,12 +162,17 @@ async fn revoking_a_device_revokes_its_sessions() {
     for _ in 0..3 {
         platform_identity::session::create_session(
             pool,
-            user.user_id,
-            SessionKind::Device,
-            Some(device.device_id),
-            "edge",
-            now(),
-            later(60),
+            &NewSession {
+                user_id: user.user_id,
+                kind: SessionKind::Device,
+                device_id: Some(device.device_id),
+                audience: "edge",
+                // These tests exercise the session lifecycle, not authentication; a session with no
+                // credential simply never authenticates, which is the safe default.
+                token: None,
+                issued_at: now(),
+                expires_at: later(60),
+            },
         )
         .await
         .expect("a device session");
@@ -240,12 +251,17 @@ async fn refresh_rotation_detects_a_replayed_token() {
         .expect("a user");
     let session = platform_identity::session::create_session(
         pool,
-        user.user_id,
-        SessionKind::Browser,
-        None,
-        "edge",
-        now(),
-        later(60),
+        &NewSession {
+            user_id: user.user_id,
+            kind: SessionKind::Browser,
+            device_id: None,
+            audience: "edge",
+            // These tests exercise the session lifecycle, not authentication; a session with no
+            // credential simply never authenticates, which is the safe default.
+            token: None,
+            issued_at: now(),
+            expires_at: later(60),
+        },
     )
     .await
     .expect("a session");
@@ -315,12 +331,17 @@ async fn rotation_is_refused_when_the_session_is_not_live() {
         .expect("a user");
     let session = platform_identity::session::create_session(
         pool,
-        user.user_id,
-        SessionKind::Browser,
-        None,
-        "edge",
-        now(),
-        later(60),
+        &NewSession {
+            user_id: user.user_id,
+            kind: SessionKind::Browser,
+            device_id: None,
+            audience: "edge",
+            // These tests exercise the session lifecycle, not authentication; a session with no
+            // credential simply never authenticates, which is the safe default.
+            token: None,
+            issued_at: now(),
+            expires_at: later(60),
+        },
     )
     .await
     .expect("a session");
@@ -365,12 +386,17 @@ async fn a_user_wide_revocation_ends_every_session_and_is_recorded() {
     for _ in 0..4 {
         platform_identity::session::create_session(
             pool,
-            user.user_id,
-            SessionKind::Browser,
-            None,
-            "edge",
-            now(),
-            later(60),
+            &NewSession {
+                user_id: user.user_id,
+                kind: SessionKind::Browser,
+                device_id: None,
+                audience: "edge",
+                // These tests exercise the session lifecycle, not authentication; a session with no
+                // credential simply never authenticates, which is the safe default.
+                token: None,
+                issued_at: now(),
+                expires_at: later(60),
+            },
         )
         .await
         .expect("a session");

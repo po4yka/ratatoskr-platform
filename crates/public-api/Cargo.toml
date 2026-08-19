@@ -1,0 +1,42 @@
+[package]
+name        = "ratatoskr-platform-public-api"
+description = "The versioned public routes: authenticated capture submission and operation reads."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+
+[lib]
+name = "platform_public_api"
+path = "src/lib.rs"
+
+[dependencies]
+ratatoskr-platform-core.workspace        = true
+ratatoskr-platform-persistence.workspace = true
+ratatoskr-platform-identity.workspace    = true
+ratatoskr-platform-operations.workspace  = true
+ratatoskr-platform-eventing.workspace    = true
+ratatoskr-platform-idempotency.workspace = true
+ratatoskr-platform-http.workspace        = true
+ratatoskr-platform-telemetry.workspace   = true
+ratatoskr-identifiers.workspace          = true
+axum.workspace       = true
+http.workspace       = true
+sha2.workspace       = true
+serde.workspace      = true
+serde_json.workspace = true
+uuid.workspace       = true
+jiff.workspace       = true
+tracing.workspace    = true
+url.workspace        = true
+
+[dev-dependencies]
+ratatoskr-platform-persistence = { workspace = true, features = ["test-support"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+tower = { version = "0.5.3", features = ["util"] }
+sqlx.workspace = true
+http-body-util.workspace = true
+
+[lints]
+workspace = true

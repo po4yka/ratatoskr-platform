@@ -32,7 +32,7 @@ pub mod user;
 
 pub use crate::audit::{AuditEvent, AuditOutcome};
 pub use crate::device::{Device, DeviceKind};
-pub use crate::session::{RefreshToken, Session, SessionKind};
+pub use crate::session::{NewSession, RefreshToken, Session, SessionKind};
 pub use crate::user::{ExternalIdentity, IdentityProvider, User, UserStatus};
 
 /// A 32-byte digest of a credential.

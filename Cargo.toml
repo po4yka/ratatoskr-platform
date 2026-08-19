@@ -7,6 +7,8 @@ members = [
     "crates/identity",
     "crates/operations",
     "crates/eventing",
+    "crates/idempotency",
+    "crates/public-api",
     "crates/http",
     "services/edge",
     "services/ingest",
@@ -28,6 +30,8 @@ ratatoskr-platform-persistence = { version = "0.1.0", path = "crates/persistence
 ratatoskr-platform-identity    = { version = "0.1.0", path = "crates/identity" }
 ratatoskr-platform-operations  = { version = "0.1.0", path = "crates/operations" }
 ratatoskr-platform-eventing    = { version = "0.1.0", path = "crates/eventing" }
+ratatoskr-platform-idempotency = { version = "0.1.0", path = "crates/idempotency" }
+ratatoskr-platform-public-api  = { version = "0.1.0", path = "crates/public-api" }
 ratatoskr-platform-http      = { version = "0.1.0", path = "crates/http" }
 
 # ---- ratatoskr-contracts ----------------------------------------------------------------------
@@ -91,6 +95,10 @@ jiff = { version = "0.2.15", default-features = false, features = ["std"] }
 # JetStream, not core NATS: ARCHITECTURE S8.2 assumes at-least-once delivery with redelivery and a
 # dead-letter path, and core NATS is at-most-once with no persistence at all.
 async-nats = "0.42.0"
+
+# ---- hashing ----
+# SHA-256 for the idempotency key and request fingerprint. Not a password hash and not used as one.
+sha2 = "0.10.9"
 
 # ---- serialization and errors ----
 serde      = { version = "1.0.229", features = ["derive"] }

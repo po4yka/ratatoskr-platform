@@ -1,11 +1,18 @@
 //! The two facts readiness is computed from at milestone 1, and the checks it reports.
 
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
 
 use platform_core::RuntimeRole;
 use platform_telemetry::metrics::PLATFORM_READINESS;
 
-/// The two facts readiness is computed from at milestone 1.
+/// No database is configured for this role.
+const DATABASE_ABSENT: u8 = 0;
+/// The last probe answered.
+const DATABASE_UP: u8 = 1;
+/// The last probe did not answer.
+const DATABASE_DOWN: u8 = 2;
+
+/// The facts readiness is computed from.
 ///
 /// Shared by the admin router, which reads it, and the shutdown sequence, which writes it.
 #[derive(Debug)]
@@ -16,6 +23,9 @@ pub struct RuntimeState {
     startup_complete: AtomicBool,
     /// A shutdown signal arrived.
     draining: AtomicBool,
+    /// The database: 0 not configured, 1 answering, 2 not answering. Three states rather than a
+    /// `bool`, because "no database" and "a database that is down" must not report the same thing.
+    database: AtomicU8,
 }
 
 impl RuntimeState {
@@ -26,6 +36,7 @@ impl RuntimeState {
             role,
             startup_complete: AtomicBool::new(false),
             draining: AtomicBool::new(false),
+            database: AtomicU8::new(DATABASE_ABSENT),
         };
         state.publish_readiness();
         state
@@ -40,6 +51,22 @@ impl RuntimeState {
     /// Every listener is bound and telemetry is up. Set exactly once.
     pub fn mark_startup_complete(&self) {
         self.startup_complete.store(true, Ordering::Release);
+        self.publish_readiness();
+    }
+
+    /// Record what the latest database probe found.
+    ///
+    /// Called by the prober, not by a request: a readiness probe must not open a connection, or a
+    /// saturated pool would make the kubelet the thing that finishes it off.
+    pub fn set_database_reachable(&self, reachable: bool) {
+        self.database.store(
+            if reachable {
+                DATABASE_UP
+            } else {
+                DATABASE_DOWN
+            },
+            Ordering::Release,
+        );
         self.publish_readiness();
     }
 
@@ -73,6 +100,19 @@ impl RuntimeState {
                 reason: (!started).then_some(CheckReason::StartupIncomplete),
             },
         ];
+
+        match self.database.load(Ordering::Acquire) {
+            DATABASE_ABSENT => {}
+            state => {
+                let up = state == DATABASE_UP;
+                checks.push(Check {
+                    name: CheckName::Database,
+                    state: CheckState::from_pass(up),
+                    reason: (!up).then_some(CheckReason::DependencyUnavailable),
+                });
+            }
+        }
+
         checks.sort_unstable_by_key(|check| check.name);
         checks
     }
@@ -112,6 +152,10 @@ pub enum CheckName {
     Drain,
     /// Configuration, telemetry and every configured listener are up.
     Startup,
+    /// The database answers. Present only when one is configured: a role with no database reports no
+    /// database check rather than a passing one, because a passing check for something that does not
+    /// exist is the readiness equivalent of an always-zero metric.
+    Database,
 }
 
 /// Whether one check passes.
@@ -141,6 +185,8 @@ pub enum CheckReason {
     StartupIncomplete,
     /// A shutdown signal arrived and this instance is draining.
     ShutdownRequested,
+    /// The last probe of the database did not answer.
+    DependencyUnavailable,
 }
 
 /// The state the one public-router middleware needs.

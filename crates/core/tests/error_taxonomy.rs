@@ -110,6 +110,46 @@ fn the_status_and_retryability_table_is_pinned() {
             true,
             "The request took too long and was abandoned.",
         ),
+        (
+            FailureKind::Unauthenticated,
+            StatusCode::UNAUTHORIZED,
+            "platform.auth.unauthenticated",
+            false,
+            "Authentication is required.",
+        ),
+        (
+            // The same status and the same words as RouteNotFound, and a different code. From
+            // outside they are indistinguishable, which is what S15 requires; from inside they are
+            // different facts, which is why the code differs.
+            FailureKind::NotFound,
+            StatusCode::NOT_FOUND,
+            "platform.resource.not_found",
+            false,
+            "No such resource.",
+        ),
+        (
+            FailureKind::InvalidRequest,
+            StatusCode::BAD_REQUEST,
+            "platform.request.invalid",
+            false,
+            "The request body is not valid for this endpoint.",
+        ),
+        (
+            FailureKind::MissingIdempotencyKey,
+            StatusCode::BAD_REQUEST,
+            "platform.request.idempotency_key_required",
+            false,
+            "This endpoint requires an Idempotency-Key header.",
+        ),
+        (
+            // Not retryable: repeating the identical request conflicts again. The client waits for
+            // the first attempt or sends a new key.
+            FailureKind::IdempotencyConflict,
+            StatusCode::CONFLICT,
+            "platform.request.idempotency_conflict",
+            false,
+            "That idempotency key is in use for a different request.",
+        ),
     ];
     assert_eq!(
         expected.len(),
@@ -144,12 +184,28 @@ fn the_status_and_retryability_table_is_pinned() {
 /// escape unenveloped.
 #[test]
 fn from_status_is_total_over_every_status_the_process_can_produce() {
-    for kind in FailureKind::ALL {
+    for kind in FailureKind::UNAUTHORED {
         let status = kind.fault().status;
         let recovered = PlatformError::from_status(status)
             .unwrap_or_else(|| panic!("{status} must map back to a failure"));
         assert!(matches!(recovered, PlatformError::Rejected(found) if found == kind));
         assert_eq!(recovered.status(), status);
+    }
+
+    // An AUTHORED failure is deliberately not recoverable from its status. 404 is both "no route
+    // matched" and "not yours"; 400 is both an invalid body and a missing idempotency key. A handler
+    // names its failure in a response extension instead, which is what keeps both readings possible
+    // while they look identical from outside.
+    for kind in FailureKind::ALL {
+        if FailureKind::UNAUTHORED.contains(&kind) {
+            continue;
+        }
+        let recovered = PlatformError::from_status(kind.fault().status);
+        assert!(
+            recovered.is_none()
+                || !matches!(recovered, Some(PlatformError::Rejected(found)) if found == kind),
+            "{kind:?} must not be recoverable from its status alone"
+        );
     }
 
     // 500 is deliberately unmapped: a caught panic is constructed as an internal failure with its

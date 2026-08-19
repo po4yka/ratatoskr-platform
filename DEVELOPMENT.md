@@ -1,6 +1,6 @@
 # Developing Ratatoskr Platform
 
-> Status: Implemented for milestones 1 through 4; milestones 5 through 10 are Proposed.  
+> Status: Implemented for milestones 1 through 5; milestones 6 through 10 are Proposed.  
 > Owner: `ratatoskr-platform`  
 > Last reviewed: 2026-08-18
 
@@ -20,6 +20,12 @@ PostgreSQL in `compose.yaml`, the `ratatoskr-platform-persistence` pool and embe
 `ratatoskr-platform-identity` and `ratatoskr-platform-operations` crates with their integration suites.
 No binary opens a pool yet — `database` is an optional configuration section that is validated but not
 yet consumed, and the first route that reads persisted data is milestone 5.
+
+Present since milestone 5: the versioned public API — `POST /v2/captures` and
+`GET /v2/operations/{id}` — session authentication, and the idempotency ledger. `ratatoskr-edge` now
+REQUIRES `RATATOSKR__DATABASE__URL` and refuses to start without it: every route it serves reads or
+writes the database, and a process that started anyway would report itself ready and then fail every
+request.
 
 Present since milestone 4: the transactional outbox and the inbox in `operations`, the NATS subject
 grammar, a `JetStream` publisher, and the pump that moves claimed rows onto the bus. No service binary
@@ -53,7 +59,7 @@ makes it real.
 | PostgreSQL | **real** | milestone 2 |
 | Migration | **real** | milestone 2 |
 | NATS | **real** | milestone 4 |
-| OpenAPI | **does not exist** | milestone 5 |
+| OpenAPI | **does not exist** | milestone 7 |
 
 ### Rust — also the CI gate, in this order
 
@@ -164,156 +170,13 @@ class prefix is the privilege boundary a NATS credential is granted over.
 No service binary runs the pump yet. `platform_eventing::pump::run_once` is one pass, driven by its
 caller; the first caller is the capture API at milestone 5.
 
-### OpenAPI — does not exist, milestone 5
+### OpenAPI — does not exist, milestone 7
 
-The public API has no versioned routes at milestone 1, so there is nothing to describe.
-`/health/live`, `/health/ready`, `/metrics` and `/version` are **admin-plane** endpoints and are
-deliberately excluded from the public OpenAPI document — they are not a client contract (`AGENTS.md`:
-"Keep admin and diagnostic endpoints separate from the public user surface"). The document and its
-drift check arrive with the capture API at milestone 5, gated on ADR-0006.
-
-## The runtime-dependency rule
-
-**The milestone that introduces a runtime dependency introduces, in the same pull request, its compose
-service, its command family in this document, and at least one test that fails if the dependency is
-absent or misconfigured. A dependency is never added to the local stack before code connects to it.**
-
-That is why milestone 1 ships no `compose.yaml`. A compose file nothing dials reports two services
-healthy while no binary can open a connection to either, which is the failure `AGENTS.md` forbids
-twice: do not assume infrastructure exists unless it is present in the checkout, and document
-implemented behavior separately from planned architecture. It also cannot be reviewed a milestone
-early — the image tag, the `initdb` grants, the schema list and the JetStream account, stream and
-subject model all depend on decisions milestones 2 and 4 produce, and the NATS half is reserved for
-an unwritten ADR-0003 amendment.
-
-The counter-argument is real: milestone 2's author must write the compose file before any SQL, so
-milestone 1 saved nothing. True — and it cost nothing, and it avoided committing a reviewed artifact
-full of guesses.
-
-## Configuration
-
-Sources, lowest precedence first:
-
-1. built-in defaults for the runtime role;
-2. `RATATOSKR__`-prefixed environment variables, with `__` separating nesting levels.
-
-There is no configuration file at milestone 1. `.env.example` is the single authoritative list of
-every variable and its built-in default; a test asserts that every variable named there really
-overrides its field, so it is executable documentation rather than prose that rots. There is no
-`dotenvy` dependency — load a local file with `set -a && . ./.env && set +a`.
-
-The naming scheme is settled today even though the file provider is not, because environment variable
-names are an operational contract and renaming them later breaks every deployment manifest.
-
-**A container deployment must set `RATATOSKR__ADMIN__BIND=0.0.0.0:<port>`**: the default is loopback,
-deny by default (`SECURITY.md`), and the kubelet probes the pod IP rather than loopback. The admin
-listener must never be published through an ingress — it serves `/metrics` and `/version`.
-
-The only secret at milestone 1 is the OTLP collector authorization header. It is held as a
-`secrecy::SecretString`: it has no `Display`, its `Debug` renders `[REDACTED]` at any nesting depth,
-and it is `skip_serializing`, so it cannot reach a log line, a defaults provider or a response body.
-Supply it from the orchestrator's secret store. Never put a real credential in `.env.example`.
-
-**A credential must never be embedded in `RATATOSKR__TELEMETRY__OTLP__ENDPOINT`.** Several OTLP
-vendors document `https://<token>@collector` or `?access_token=…`; `url::Url` is not a secret type
-and its `Debug` prints `username`, `password` and `query` as plain fields, so such a value would
-reach the effective-configuration line and `check-config`'s output in cleartext. Startup rule V10
-rejects it — put the credential in `telemetry.otlp.headers`, which cannot be printed.
-
-Startup order is strict: extract, validate, initialise telemetry, bind listeners, mark startup
-complete. Validation collects **every** semantic violation and reports them together on stderr,
-naming the dotted key, the environment variable and the rule — never the supplied value.
-
-| Exit code | Meaning |
-|---|---|
-| `0` | Clean start and clean shutdown |
-| `1` | Runtime startup failure: telemetry initialisation, or a listener that could not bind |
-| `78` | `EX_CONFIG` — the configuration is unreadable or invalid; nothing was bound |
-
-`78` is `EX_CONFIG` from `sysexits.h`. Kubernetes surfaces it in `lastState.terminated.exitCode`,
-which is what distinguishes "your configuration is wrong" from "the process crashed" in a
-restart-loop dashboard. `<binary> check-config` runs the same load and validation without binding
-anything and exits `0` or `78`, so a ConfigMap can be validated in CI or an init container.
-
-## Lifecycle and shutdown
-
-Liveness means *this process's runtime is scheduling tasks and the HTTP server can answer*. It
-consults nothing external, ever, and it answers 200 from the moment the admin listener binds until the
-process exits, **including throughout the drain**. Milestone 2 adds a PostgreSQL **readiness** check
-and nothing else: a liveness probe wired to a database converts one database blip into a rolling
-restart of the whole fleet.
-
-Readiness means *route new work to me*, and has two real checks at milestone 1: `startup` and `drain`.
-`checks` is a name-sorted array, so two consecutive probe bodies are byte-identical and `diff` is a
-usable tool at 03:00.
-
-On SIGTERM or SIGINT, in this order:
-
-1. open the `platform.shutdown` span and log at INFO;
-2. begin draining — **readiness returns 503 immediately and the listeners stay open**;
-   `platform_readiness` drops to 0;
-3. keep serving for `shutdown.drain_seconds`, the window in which the load balancer removes this
-   endpoint; skipping it is the direct cause of 502s on every deploy;
-4. stop accepting and let in-flight requests finish, bounded by `shutdown.grace_seconds`;
-5. if the grace window expires, log WARN with `in_flight_at_close` and continue anyway — a deploy is
-   never blocked by one stuck request;
-6. flush spans;
-7. exit `0`.
-
-A second signal skips straight to the flush. `/health/live` answers 200 throughout. What an operator
-should see: one INFO shutdown line, readiness 503 while requests still succeed, then the listener
-closing, with `drain_seconds` and `in_flight_at_close` on the `platform.shutdown` span.
-
-## Observability
-
-Three metrics, Prometheus pull on the admin listener. Metrics are not exported over OTLP: an OTLP
-metrics pipeline discards every recording when no collector is running, whereas
-`curl localhost:9464/metrics` shows the truth.
-
-| Metric | Type | Labels |
-|---|---|---|
-| `http_server_request_duration_seconds` | histogram | `role`, `method`, `route`, `status` |
-| `platform_readiness` | gauge, `0` or `1` | `role` |
-| `platform_build_info` | gauge, always `1` | `role`, `version`, `git_sha`, `rust_version` |
-
-The histogram's derived `_count` **is** the request count, so there is no separate counter and no
-second source of truth for one number. `route` is always the matched route template, never the request
-URI; an unmatched request is labelled `<unmatched>`. That one rule is the whole defence against a
-404-scanning cardinality bomb. Admin-plane requests are neither metered nor spanned, so a scheduler
-emits no `http_server_*` series at all — correct, it serves no requests — while still exporting
-`platform_build_info` and `platform_readiness`.
-
-Three spans:
-
-| Span | Fields |
-|---|---|
-| `platform.startup` | `role`, `version`, `git_sha`, `duration_ms` |
-| `http.server.request` | `role`, `http.request.method`, `http.route`, `http.response.status_code`, `correlation_id`, `trace_id`, `error.code` |
-| `platform.shutdown` | `role`, `drain_seconds`, `in_flight_at_close`, `graceful` |
-
-Never recorded, at any level: `url.full`, `url.query`, the raw URI, the raw method token, any
-request or response header at all, any body byte, any principal identifier. There is no header
-allowlist because no code path records a header; that is the stronger guarantee and the simpler one.
-
-Reserved span names, so later milestones do not invent competing ones: `db.query` (milestone 2),
-`platform.operation.transition` (milestone 3), `messaging.publish` and `messaging.process`
-(milestone 4, OpenTelemetry messaging semantic conventions).
-
-**Naming convention.** HTTP server metrics follow the Prometheus/OpenTelemetry `http_server_*`
-convention; every other Platform metric is `platform_<subsystem>_<measure>[_<unit>]`, and every
-numeric name carries one of the unit suffixes `contracts.toml [lint].required_numeric_suffixes`
-requires. Future metric names are deliberately not pre-registered: naming a signal whose shape does
-not exist yet is the same speculation as an empty crate.
-
-**Correlation.** Every request is given a correlation `EntityRef` minted server-side, returned in the
-`x-correlation-id` header on every response and present in every log line and every error body. There
-is no `X-Request-Id`: the correlation **is** the request ID until an operation exists at milestone 3.
-`AGENTS.md`'s "request ID; correlation ID" pair is satisfied by one value until then. See
-[ADR-0007](docs/adr/0007-correlation-identity-and-trace-context.md).
-
-**Rate limiting is deferred to milestone 5.** `docs/ARCHITECTURE.md` S14 and `docs/THREAT_MODEL.md`
-require per-actor limits, and a per-actor limit needs an authenticated principal, which arrives with
-the first authenticated route. The request body limit S14 also requires ships now.
+The routes are the contract until the document exists, which is why they are tested through the real
+public pipeline rather than in isolation. ADR-0006 fixes the direction: Platform generates the
+document FROM its routes, and `ratatoskr-contracts` owns the payload types the routes carry. It
+arrives with the capability endpoint at milestone 7, when there is enough surface for the machinery
+to be worth its weight.
 
 ### `docs/ARCHITECTURE.md` S16 coverage at milestone 1
 

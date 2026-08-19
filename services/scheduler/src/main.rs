@@ -19,5 +19,5 @@ async fn main() -> ExitCode {
     if std::env::args().nth(1).as_deref() == Some("check-config") {
         return platform_http::check_config(ROLE);
     }
-    platform_http::run(ROLE).await
+    platform_http::run(ROLE, platform_http::NoPublicRoutes).await
 }

@@ -1,0 +1,30 @@
+[package]
+name        = "ratatoskr-platform-idempotency"
+description = "The idempotency ledger: reserve a key, replay the original answer, reject a reused key with a different payload."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+
+[lib]
+name = "platform_idempotency"
+path = "src/lib.rs"
+
+[dependencies]
+ratatoskr-platform-core.workspace        = true
+ratatoskr-platform-persistence.workspace = true
+sqlx.workspace      = true
+uuid.workspace      = true
+time.workspace      = true
+jiff.workspace      = true
+sha2.workspace      = true
+thiserror.workspace = true
+tracing.workspace   = true
+
+[dev-dependencies]
+ratatoskr-platform-persistence = { workspace = true, features = ["test-support"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+
+[lints]
+workspace = true

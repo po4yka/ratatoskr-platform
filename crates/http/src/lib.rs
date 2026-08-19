@@ -23,26 +23,64 @@
 //! | `78` | `EX_CONFIG` — the configuration is unreadable or invalid; nothing was bound |
 
 mod admin;
-mod fault;
+pub mod fault;
 mod lifecycle;
-mod observe;
+pub mod observe;
 mod shutdown;
 
 use std::process::ExitCode;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use axum::Router;
 use platform_core::RuntimeRole;
 use platform_core::config::PlatformConfig;
+use platform_persistence::Database;
 use platform_telemetry::identity;
 use tokio::net::TcpListener;
 use tracing::field::Empty;
 
 pub use crate::admin::admin_router;
+pub use crate::fault::{AuthoredFailure, reject};
 pub use crate::lifecycle::{Check, CheckName, CheckReason, CheckState, HttpState, RuntimeState};
 pub use crate::observe::{RequestContext, public_router};
 pub use crate::shutdown::{Served, ShutdownOutcome, drain_and_close, serve};
+
+/// What a binary contributes to its public listener.
+///
+/// A trait rather than a `Router` argument, because the routes need the configuration this function
+/// loads — the database URL above all — and a binary cannot build them before `run` has read it.
+/// A trait rather than a closure, because the future must borrow the configuration and an
+/// `async` closure that does so is not expressible without naming the lifetime anyway.
+///
+/// `ratatoskr-ingest` and `ratatoskr-scheduler` use [`NoPublicRoutes`]: they bind no public listener
+/// at all, so their contribution is not "an empty router", it is "there is no router".
+pub trait PublicRoutes {
+    /// Build the routes, or explain why the process must not start.
+    ///
+    /// Returning an error here is a startup failure, not a request failure: a binary that cannot
+    /// reach the database it needs must refuse to report itself ready rather than serve 500s.
+    fn build(
+        self,
+        config: &PlatformConfig,
+    ) -> impl Future<Output = Result<(Router, Option<Database>), String>> + Send;
+}
+
+/// The contribution of a role that serves no public API.
+#[derive(Debug, Clone, Copy)]
+pub struct NoPublicRoutes;
+
+impl PublicRoutes for NoPublicRoutes {
+    async fn build(self, _config: &PlatformConfig) -> Result<(Router, Option<Database>), String> {
+        Ok((Router::new(), None))
+    }
+}
+
+/// How often the database prober asks whether the dependency is still there.
+///
+/// Five seconds: long enough that the probe is not itself load, short enough that a readiness state
+/// is never more than one kubelet interval stale.
+const DATABASE_PROBE_INTERVAL: Duration = Duration::from_secs(5);
 
 /// The whole process lifecycle for one runtime role. Each binary's `main` is this call and nothing
 /// else.
@@ -61,7 +99,7 @@ pub use crate::shutdown::{Served, ShutdownOutcome, drain_and_close, serve};
 /// 5. [`RuntimeState::mark_startup_complete`] — readiness flips to 200.
 /// 6. Serve both listeners until SIGTERM or SIGINT, then [`drain_and_close`].
 /// 7. `TelemetryGuard::shutdown()`; exit `0`.
-pub async fn run(role: RuntimeRole) -> ExitCode {
+pub async fn run<R: PublicRoutes>(role: RuntimeRole, routes: R) -> ExitCode {
     let config = match platform_core::config::load(role) {
         Ok(config) => config,
         Err(error) => {
@@ -109,11 +147,25 @@ pub async fn run(role: RuntimeRole) -> ExitCode {
         admin_router(Arc::clone(&runtime), move || metrics.render()),
     )];
 
+    let (public_routes, database) = match routes.build(&config).await {
+        Ok(built) => built,
+        Err(reason) => {
+            startup.in_scope(|| {
+                tracing::error!(%reason, "the public routes could not be built");
+            });
+            return ExitCode::FAILURE;
+        }
+    };
+
+    // The prober owns readiness for the dependency. A readiness handler that opened a connection
+    // would let a probe finish off a saturated pool.
+    let prober = start_database_prober(database.as_ref(), &runtime).await;
+
     if let Some(public) = config.public.as_ref() {
         match TcpListener::bind(public.bind).await {
             Ok(listener) => servers.push(serve(
                 listener,
-                public_router(Arc::clone(&http), public, Router::new()),
+                public_router(Arc::clone(&http), public, public_routes),
             )),
             Err(error) => {
                 startup.in_scope(|| {
@@ -144,6 +196,15 @@ pub async fn run(role: RuntimeRole) -> ExitCode {
         shutdown::signal(),
     )
     .await;
+
+    if let Some(prober) = prober {
+        prober.abort();
+    }
+    if let Some(database) = database {
+        // After the listener stopped accepting and the grace window closed, so an in-flight request
+        // kept its connection for its whole life.
+        database.close().await;
+    }
 
     guard.shutdown();
     ExitCode::SUCCESS
@@ -196,4 +257,31 @@ fn announce(role: RuntimeRole, config: &PlatformConfig) {
              nothing is exported",
         );
     }
+}
+
+/// Probe the database once, then keep probing until the process stops.
+///
+/// Split out of [`run`] to keep it inside the workspace's function-length lint, along the boundary
+/// that means something: this is the only thing in the process that decides whether the dependency
+/// is reachable.
+///
+/// The first probe happens BEFORE the listener opens, so a process never reports itself ready with
+/// an unverified dependency.
+async fn start_database_prober(
+    database: Option<&Database>,
+    runtime: &Arc<RuntimeState>,
+) -> Option<tokio::task::JoinHandle<()>> {
+    let database = database?;
+    runtime.set_database_reachable(database.ping().await.is_ok());
+
+    let database = database.clone();
+    let runtime = Arc::clone(runtime);
+    Some(tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(DATABASE_PROBE_INTERVAL);
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            ticker.tick().await;
+            runtime.set_database_reachable(database.ping().await.is_ok());
+        }
+    }))
 }

@@ -95,7 +95,7 @@ pub fn public_router(state: Arc<HttpState>, config: &PublicConfig, routes: Route
 ///    [`PlatformError::log`] chose.
 pub(crate) async fn observe(
     State(state): State<Arc<HttpState>>,
-    request: Request,
+    mut request: Request,
     next: Next,
 ) -> Response {
     let route = request.extensions().get::<MatchedPath>().map_or_else(
@@ -129,6 +129,11 @@ pub(crate) async fn observe(
         correlation_id,
         trace_id,
     };
+
+    // Handed to the handler through the request, so a route that needs the correlation — to stamp an
+    // operation or a command with it — uses the one this request already has. Minting a second would
+    // break ADR-0007's promise that one request carries one correlation for its whole life.
+    request.extensions_mut().insert(context.clone());
 
     let started = Instant::now();
     state.in_flight.fetch_add(1, Ordering::AcqRel);

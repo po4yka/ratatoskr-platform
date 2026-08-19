@@ -67,11 +67,17 @@ impl PlatformError {
     /// The failure that a response NO HANDLER AUTHORED represents — axum's own 404 and 405, a
     /// `tower-http` 413 or 504, a caught panic's 500.
     ///
-    /// `None` for a status Platform does not produce; the caller renders that as an internal
-    /// failure, because an unmapped status escaping the process is itself a defect.
+    /// Searches [`FailureKind::UNAUTHORED`], not every kind. A status alone cannot identify an
+    /// authored failure: 404 is both "no route matched" and "not yours", and 400 is both an invalid
+    /// body and a missing idempotency key. A handler therefore names its failure rather than
+    /// implying it through a status, and this function answers only the question it can answer —
+    /// what an UNAUTHORED response of this status means.
+    ///
+    /// `None` for a status Platform does not produce that way; the caller renders that as an
+    /// internal failure, because an unmapped status escaping the process is itself a defect.
     #[must_use]
     pub fn from_status(status: StatusCode) -> Option<Self> {
-        FailureKind::ALL
+        FailureKind::UNAUTHORED
             .into_iter()
             .find(|kind| kind.fault().status == status)
             .map(Self::Rejected)
@@ -165,12 +171,44 @@ pub enum FailureKind {
     PayloadTooLarge,
     /// Rejected by `TimeoutLayer`.
     RequestTimeout,
+    /// No credential, or one that does not authenticate. Deliberately one variant and not four: a
+    /// missing, malformed, revoked and expired credential must be indistinguishable to a caller, or
+    /// the difference is an oracle (`ARCHITECTURE.md` S15).
+    Unauthenticated,
+    /// The resource does not exist, or exists and is not this principal's. Also deliberately one
+    /// variant: S15 requires authorization before existence is disclosed, so "not yours" and "not
+    /// there" must read the same from outside.
+    NotFound,
+    /// The request body is not what the route accepts.
+    InvalidRequest,
+    /// A required header is absent. `INTERFACES.md` requires `Idempotency-Key` on a replayable
+    /// mutation, so its absence is a client error rather than a silently unprotected write.
+    MissingIdempotencyKey,
+    /// The same idempotency key was reused with a different payload, or its first attempt is still
+    /// in flight. `ARCHITECTURE.md` S8.1 rejects the first outright; the second would start the
+    /// duplicate work the key exists to prevent.
+    IdempotencyConflict,
 }
 
 impl FailureKind {
     /// Every kind, in status order. The array length is the documented count, so adding a variant
     /// without updating it does not compile.
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 9] = [
+        Self::RouteNotFound,
+        Self::MethodNotAllowed,
+        Self::PayloadTooLarge,
+        Self::RequestTimeout,
+        Self::Unauthenticated,
+        Self::NotFound,
+        Self::InvalidRequest,
+        Self::MissingIdempotencyKey,
+        Self::IdempotencyConflict,
+    ];
+
+    /// The kinds a response can arrive as with no handler involved: axum's own routing failures and
+    /// the transport limits `tower-http` enforces. Each has a distinct status, which is what lets
+    /// [`PlatformError::from_status`] be a function rather than a guess.
+    pub const UNAUTHORED: [Self; 4] = [
         Self::RouteNotFound,
         Self::MethodNotAllowed,
         Self::PayloadTooLarge,
@@ -185,6 +223,11 @@ impl FailureKind {
             Self::MethodNotAllowed => &METHOD_NOT_ALLOWED,
             Self::PayloadTooLarge => &PAYLOAD_TOO_LARGE,
             Self::RequestTimeout => &REQUEST_TIMEOUT,
+            Self::Unauthenticated => &UNAUTHENTICATED,
+            Self::NotFound => &NOT_FOUND,
+            Self::InvalidRequest => &INVALID_REQUEST,
+            Self::MissingIdempotencyKey => &MISSING_IDEMPOTENCY_KEY,
+            Self::IdempotencyConflict => &IDEMPOTENCY_CONFLICT,
         }
     }
 }
@@ -228,6 +271,60 @@ fn entry(status: StatusCode, code: &str, message: &str, retryable: bool) -> Publ
         retryable,
     }
 }
+
+/// `platform.auth.unauthenticated` — 401.
+static UNAUTHENTICATED: LazyLock<PublicFault> = LazyLock::new(|| {
+    entry(
+        StatusCode::UNAUTHORIZED,
+        "platform.auth.unauthenticated",
+        "Authentication is required.",
+        false,
+    )
+});
+
+/// `platform.resource.not_found` — 404. Distinct from `platform.route.not_found`, which means no
+/// route matched at all; this one means the route matched and the resource is not available to you.
+static NOT_FOUND: LazyLock<PublicFault> = LazyLock::new(|| {
+    entry(
+        StatusCode::NOT_FOUND,
+        "platform.resource.not_found",
+        "No such resource.",
+        false,
+    )
+});
+
+/// `platform.request.invalid` — 400.
+static INVALID_REQUEST: LazyLock<PublicFault> = LazyLock::new(|| {
+    entry(
+        StatusCode::BAD_REQUEST,
+        "platform.request.invalid",
+        "The request body is not valid for this endpoint.",
+        false,
+    )
+});
+
+/// `platform.request.idempotency_key_required` — 400.
+static MISSING_IDEMPOTENCY_KEY: LazyLock<PublicFault> = LazyLock::new(|| {
+    entry(
+        StatusCode::BAD_REQUEST,
+        "platform.request.idempotency_key_required",
+        "This endpoint requires an Idempotency-Key header.",
+        false,
+    )
+});
+
+/// `platform.request.idempotency_conflict` — 409.
+///
+/// Retryable is false on purpose: repeating the identical request will conflict again. The client
+/// must either wait for the first attempt or send a new key.
+static IDEMPOTENCY_CONFLICT: LazyLock<PublicFault> = LazyLock::new(|| {
+    entry(
+        StatusCode::CONFLICT,
+        "platform.request.idempotency_conflict",
+        "That idempotency key is in use for a different request.",
+        false,
+    )
+});
 
 /// `platform.route.not_found` — 404.
 static ROUTE_NOT_FOUND: LazyLock<PublicFault> = LazyLock::new(|| {

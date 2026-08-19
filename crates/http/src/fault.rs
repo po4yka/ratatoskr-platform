@@ -7,7 +7,7 @@ use axum::Json;
 use axum::body::Body;
 use axum::response::{IntoResponse as _, Response};
 use http::StatusCode;
-use platform_core::{PlatformError, Subsystem};
+use platform_core::{FailureKind, PlatformError, Subsystem};
 use ratatoskr_error_contracts::ErrorEnvelope;
 
 use crate::observe::RequestContext;
@@ -81,14 +81,38 @@ impl fmt::Display for UnmappedStatus {
 
 impl std::error::Error for UnmappedStatus {}
 
-/// The failure a response no handler authored represents.
+/// A failure a handler chose, carried to the one rendering site.
 ///
-/// A caught panic first, because it carries diagnostics the status alone cannot; then the static
-/// status table; then an internal failure, because an unmapped status escaping the process is a
-/// defect rather than a client-visible fact.
+/// A handler names its failure instead of implying it through a status, because a status is
+/// ambiguous: 404 is both "no route matched" and "not yours", and both must render differently while
+/// looking identical from outside. Carrying the kind rather than a rendered body is what keeps the
+/// single-construction-site rule (test F-1) true now that handlers exist.
+#[derive(Debug, Clone, Copy)]
+pub struct AuthoredFailure(pub FailureKind);
+
+/// Refuse a request with a named failure.
+///
+/// The body is empty on purpose: the middleware renders the envelope, so there is still exactly one
+/// place an `ErrorEnvelope` is constructed.
+#[must_use]
+pub fn reject(kind: FailureKind) -> Response {
+    let mut response = Response::new(Body::empty());
+    *response.status_mut() = kind.fault().status;
+    response.extensions_mut().insert(AuthoredFailure(kind));
+    response
+}
+
+/// The failure a response represents.
+///
+/// A caught panic first, because it carries diagnostics the status alone cannot; then a failure the
+/// handler named; then the static status table for an unauthored response; then an internal failure,
+/// because an unmapped status escaping the process is a defect rather than a client-visible fact.
 pub(crate) fn classify(response: &Response) -> PlatformError {
     if let Some(panic) = response.extensions().get::<CaughtPanic>() {
         return PlatformError::internal(Subsystem::Http, panic.clone());
+    }
+    if let Some(authored) = response.extensions().get::<AuthoredFailure>() {
+        return PlatformError::Rejected(authored.0);
     }
     PlatformError::from_status(response.status()).unwrap_or_else(|| {
         PlatformError::internal(Subsystem::Http, UnmappedStatus(response.status()))

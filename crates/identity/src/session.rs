@@ -128,6 +128,27 @@ pub enum RefreshFailure {
     SessionNotLive,
 }
 
+/// Everything a new session needs. A struct rather than eight parameters, because the members are
+/// not interchangeable and a caller that swaps two `&str` arguments would compile.
+#[derive(Debug, Clone)]
+pub struct NewSession<'a> {
+    /// Who it authenticates.
+    pub user_id: Uuid,
+    /// How it was established.
+    pub kind: SessionKind,
+    /// The device it is bound to, required for and only for a device session.
+    pub device_id: Option<Uuid>,
+    /// What it is valid for.
+    pub audience: &'a str,
+    /// The digest of the bearer credential the client will present. `None` mints a session that
+    /// cannot authenticate, which is only useful in a test.
+    pub token: Option<SecretDigest>,
+    /// When it was issued.
+    pub issued_at: jiff::Timestamp,
+    /// When it stops being valid on its own.
+    pub expires_at: jiff::Timestamp,
+}
+
 /// Open a session.
 ///
 /// # Errors
@@ -136,12 +157,7 @@ pub enum RefreshFailure {
 /// satisfy the schema's rule for the kind.
 pub async fn create_session<'e, E>(
     executor: E,
-    user_id: Uuid,
-    kind: SessionKind,
-    device_id: Option<Uuid>,
-    audience: &str,
-    issued_at: jiff::Timestamp,
-    expires_at: jiff::Timestamp,
+    new: &NewSession<'_>,
 ) -> Result<Session, PersistenceError>
 where
     E: PgExecutor<'e>,
@@ -149,30 +165,87 @@ where
     let session_id = Uuid::now_v7();
     sqlx::query(
         "insert into identity.sessions
-             (session_id, user_id, kind, device_id, audience, issued_at, expires_at, last_seen_at)
-         values ($1, $2, $3, $4, $5, $6, $7, $6)",
+             (session_id, user_id, kind, device_id, audience, issued_at, expires_at, last_seen_at,
+              token_hash)
+         values ($1, $2, $3, $4, $5, $6, $7, $6, $8)",
     )
     .bind(session_id)
-    .bind(user_id)
-    .bind(kind.as_str())
-    .bind(device_id)
-    .bind(audience)
-    .bind(to_offset(issued_at))
-    .bind(to_offset(expires_at))
+    .bind(new.user_id)
+    .bind(new.kind.as_str())
+    .bind(new.device_id)
+    .bind(new.audience)
+    .bind(to_offset(new.issued_at))
+    .bind(to_offset(new.expires_at))
+    .bind(new.token.map(|token| token.as_bytes().to_vec()))
     .execute(executor)
     .await
     .map_err(PersistenceError::Query)?;
 
     Ok(Session {
         session_id,
-        user_id,
-        kind,
-        device_id,
-        audience: audience.to_owned(),
-        issued_at,
-        expires_at,
+        user_id: new.user_id,
+        kind: new.kind,
+        device_id: new.device_id,
+        audience: new.audience.to_owned(),
+        issued_at: new.issued_at,
+        expires_at: new.expires_at,
         revoked_at: None,
     })
+}
+
+/// Authenticate a presented bearer credential.
+///
+/// Returns the session only when the credential matches AND the session is live at `now` AND the
+/// audience is the one this listener serves. All three in one query, because a caller that fetched
+/// the session and then checked liveness itself would eventually forget one of them.
+///
+/// A wrong credential, a revoked session, an expired session and a wrong audience are deliberately
+/// indistinguishable to the caller: `ARCHITECTURE.md` S15 requires authorization before existence is
+/// disclosed, and four different answers here would be an oracle.
+///
+/// # Errors
+///
+/// [`PersistenceError::Query`] if the statement fails.
+pub async fn authenticate<'e, E>(
+    executor: E,
+    presented: SecretDigest,
+    audience: &str,
+    now: jiff::Timestamp,
+) -> Result<Option<Session>, PersistenceError>
+where
+    E: PgExecutor<'e>,
+{
+    let row = sqlx::query(
+        "select session_id, user_id, kind, device_id, audience, issued_at, expires_at, revoked_at
+           from identity.sessions
+          where token_hash = $1
+            and audience = $2
+            and revoked_at is null
+            and expires_at > $3",
+    )
+    .bind(presented.as_bytes().as_slice())
+    .bind(audience)
+    .bind(to_offset(now))
+    .fetch_optional(executor)
+    .await
+    .map_err(PersistenceError::Query)?;
+
+    row.map(|row| {
+        let kind: String = row.try_get("kind").map_err(PersistenceError::Query)?;
+        let revoked_at: Option<time::OffsetDateTime> =
+            row.try_get("revoked_at").map_err(PersistenceError::Query)?;
+        Ok(Session {
+            session_id: row.try_get("session_id").map_err(PersistenceError::Query)?,
+            user_id: row.try_get("user_id").map_err(PersistenceError::Query)?,
+            kind: SessionKind::from_str_opt(&kind).unwrap_or(SessionKind::Service),
+            device_id: row.try_get("device_id").map_err(PersistenceError::Query)?,
+            audience: row.try_get("audience").map_err(PersistenceError::Query)?,
+            issued_at: from_offset(row.try_get("issued_at").map_err(PersistenceError::Query)?),
+            expires_at: from_offset(row.try_get("expires_at").map_err(PersistenceError::Query)?),
+            revoked_at: revoked_at.map(from_offset),
+        })
+    })
+    .transpose()
 }
 
 /// Read a session by identity.

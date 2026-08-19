@@ -37,13 +37,17 @@ const POLL_INTERVAL: Duration = Duration::from_millis(50);
 /// point — those ports are the ones `DEVELOPMENT.md` tells an operator to use.
 #[test]
 fn each_role_boots_on_its_documented_configuration_and_reports_ready() {
-    // `DEVELOPMENT.md`, "Local run": edge, with a public listener.
+    // `DEVELOPMENT.md`, "Local run": edge, with a public listener AND a database. Since milestone 5
+    // every route edge serves reads or writes one, so it refuses to start without it — a process
+    // that reported itself ready and then failed every request would be worse than one that did not
+    // start. The refusal itself is asserted separately below.
     boots(
         "ratatoskr-edge",
         &[
             ("RATATOSKR__PUBLIC__BIND", "127.0.0.1:8080"),
             ("RATATOSKR__ADMIN__BIND", "127.0.0.1:9464"),
             ("RATATOSKR__TELEMETRY__LOG_FORMAT", "pretty"),
+            ("RATATOSKR__DATABASE__URL", &database_url()),
         ],
         9464,
     );
@@ -52,6 +56,48 @@ fn each_role_boots_on_its_documented_configuration_and_reports_ready() {
     // all. Their admin ports differ per role precisely so that this works.
     boots("ratatoskr-ingest", &[], 9465);
     boots("ratatoskr-scheduler", &[], 9466);
+}
+
+/// Where edge's database is. Matches `compose.yaml`, so `docker compose up -d` then `cargo test`
+/// works with no further setup.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the workspace bans direct environment reads so configuration has one loader. This is \
+              a test binary choosing which database to point a child process at."
+)]
+fn database_url() -> String {
+    std::env::var("PLATFORM_TEST_DATABASE_URL")
+        .unwrap_or_else(|_| "postgres://platform:platform@127.0.0.1:5432/platform".to_owned())
+}
+
+/// B-4. Edge refuses to start without a database, loudly and at startup.
+///
+/// The alternative — starting and failing every request — is the failure mode `ARCHITECTURE.md` S16
+/// calls a dependency that is unavailable, and reporting ready in that state makes a rollout
+/// succeed into an outage.
+#[test]
+fn edge_refuses_to_start_without_a_database() {
+    let path = built_binary("ratatoskr-edge");
+    let output = Command::new(&path)
+        .env("RATATOSKR__ADMIN__BIND", "127.0.0.1:9467")
+        .env("RATATOSKR__PUBLIC__BIND", "127.0.0.1:8081")
+        .env_remove("RATATOSKR__DATABASE__URL")
+        .output()
+        .unwrap_or_else(|error| panic!("{} could not be spawned: {error}", path.display()));
+
+    assert!(
+        !output.status.success(),
+        "edge must not start without a database"
+    );
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        text.contains("RATATOSKR__DATABASE__URL"),
+        "the refusal must name the variable that is missing\n{text}"
+    );
 }
 
 /// Spawns `binary` with `env`, waits for readiness on `admin_port`, sends `SIGTERM`, and asserts a

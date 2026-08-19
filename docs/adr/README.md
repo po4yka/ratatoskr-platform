@@ -12,6 +12,6 @@ Initial backlog:
   amendment at milestone 4.
 - ADR-0004: Idempotency scope and retention. *(not written)*
 - ADR-0005: Capability discovery contract. *(not written)*
-- ADR-0006: REST/SSE versioning and generated OpenAPI policy. *(not written)*
+- ADR-0006: REST versioning and generated OpenAPI policy. *(accepted; SSE versioning arrives with milestone 6)*
 - [ADR-0007](0007-correlation-identity-and-trace-context.md): Correlation identity and trace context.
   **Accepted.**
