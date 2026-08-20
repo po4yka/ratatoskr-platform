@@ -1,6 +1,6 @@
 # The checks every Ratatoskr repository can answer, whether or not it contains code yet.
 #
-# This file is identical in all sixteen repositories. It deliberately installs nothing and uses one
+# This file is identical in all seventeen repositories. It deliberately installs nothing and uses one
 # action, so it has no supply-chain surface beyond the checkout and it cannot fail for a reason that
 # has nothing to do with the tree.
 #
@@ -58,6 +58,7 @@ jobs:
             .gitignore .gitattributes .editorconfig \
             README.md AGENTS.md DEVELOPMENT.md SECURITY.md LICENSE \
             .githooks/pre-commit .github/workflows/zizmor.yml \
+            .github/workflows/openspec.yml openspec/config.yaml \
             docs/ARCHITECTURE.md docs/REQUIREMENTS.md docs/THREAT_MODEL.md \
             docs/TESTING.md docs/adr/README.md
           do
@@ -179,14 +180,32 @@ jobs:
           manifests=$(git ls-files -- Cargo.toml package.json pyproject.toml Package.swift 'build.gradle*' 'settings.gradle*' go.mod)
           if [ -z "$manifests" ]; then
             echo "no manifest, so there is nothing to gate yet"
-          elif [ -f .github/workflows/ci.yml ]; then
-            echo "this repository has code and its own ci.yml"
-          else
+            exit 0
+          fi
+          if [ ! -f .github/workflows/ci.yml ]; then
             echo "::error::this repository has a manifest and no .github/workflows/ci.yml"
             printf '%s\n' "$manifests" | sed 's/^/  /'
             echo "The commit that adds code adds its gate. Copy ci.yml from ratatoskr-platform."
             exit 1
           fi
+          # And that gate has to run the tests. A gate that formats and lints and never runs a test
+          # is a gate for everything except the thing the tests are for, and every openspec/config.yaml
+          # in this fleet tells an agent to write the failing test first — a rule with nothing behind
+          # it in CI is a rule that decays. Measured across the three repositories that hold code:
+          # ratatoskr-contracts and ratatoskr-platform run `cargo test --workspace --locked`,
+          # ratatoskr-web runs `npm run test`, so this exits 0 in all three today and would exit 1 on
+          # a first code commit that shipped without tests.
+          #
+          # The ceiling is the same as the two assertions around it, and is stated rather than left to
+          # be discovered: this reads for an invocation, not for a passing test and not for a useful
+          # one. The pull request that adds the tests is where they are read.
+          if ! grep -qE '(cargo|swift) test|npm (run )?test|pytest|gradlew? .*test' .github/workflows/ci.yml; then
+            echo "::error::this repository has a ci.yml that never runs its tests"
+            printf '%s\n' "$manifests" | sed 's/^/  /'
+            echo "The commit that adds code adds the tests that gate it, and the line that runs them."
+            exit 1
+          fi
+          echo "this repository has code, its own ci.yml, and that gate runs its tests"
 
       - name: Code cannot land without its size limits
         # The same shape of assertion as the step above, for the other thing a first code commit is

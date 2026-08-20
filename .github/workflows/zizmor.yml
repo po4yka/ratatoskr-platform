@@ -1,7 +1,7 @@
 # Static analysis of this repository's own GitHub Actions. Nothing else in the fleet reads a workflow
 # as code, and a workflow is the one file here that runs with a token.
 #
-# This file is identical in all sixteen repositories, and it is deliberately NOT a job inside
+# This file is identical in all seventeen repositories, and it is deliberately NOT a job inside
 # fleet.yml. fleet.yml installs nothing and uses one action, so it cannot fail for a reason that has
 # nothing to do with the tree; zizmor pulls a container image and queries the GitHub API, so a failure
 # here can mean the network. Keeping them apart keeps that difference readable from the check name.

@@ -1,0 +1,92 @@
+# The gate on this repository's OpenSpec artifacts: the specs that say what the system does, and the
+# changes that are in motion against them.
+#
+# This file is identical in all seventeen repositories, and it is deliberately NOT a job inside
+# fleet.yml. fleet.yml installs nothing and uses one action, so it cannot fail for a reason that has
+# nothing to do with the tree. `openspec` is an npm package and needs Node, so a failure here can mean
+# the network. That is the same reason zizmor.yml is its own file, and keeping them apart keeps the
+# difference readable from the check name: a network fault reddens `specs`, never `invariants`.
+#
+# WHY IT RUNS IN THE FOURTEEN REPOSITORIES THAT HOLD NO SPECS YET. Measured against an OpenSpec root
+# with no specs and no changes: `openspec validate --all --strict` prints "No items found to validate"
+# and exits 0, and `openspec validate --archived` prints "No archived changes found" and exits 0. So
+# one identical file answers correctly everywhere, and the repository that writes its first spec is
+# gated from that commit on rather than from a later one that remembers to add this workflow.
+#
+# WHY THE VERSION IS PINNED, like zizmor 1.29.0 and rust-toolchain.toml. Dependabot moves an action
+# SHA; it does not move this input. A new OpenSpec release therefore cannot turn seventeen
+# repositories red overnight. Stores, which this fleet uses, are a beta feature whose flags and file
+# formats may change between releases — that makes the pin load-bearing rather than tidy. Raising it
+# is one commit in seventeen repositories, and the drift check is what says so.
+name: openspec
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# SECURITY.md: deny by default. This job reads the tree and downloads one npm package. It writes
+# nothing back and needs no token.
+permissions:
+  contents: read
+
+concurrency:
+  group: openspec-${{ github.ref }}
+  # On a pull request the newest push is the only one whose answer matters, and cancelling the
+  # superseded run is what makes the queue keep up. On `main` it is the opposite: a cancelled run
+  # leaves that commit with no verdict at all, and `main` is the branch whose history is supposed to
+  # record whether each commit passed.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  specs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    env:
+      # OpenSpec disables telemetry in CI on its own. This says so in the file, because a reader
+      # should not have to trust that behaviour to know what leaves the runner.
+      DO_NOT_TRACK: "1"
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # This job pushes nothing, so leaving the token in .git/config keeps a credential for no
+          # reason. zizmor reports the same thing about any checkout that omits this — `artipacked`.
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          # OpenSpec requires Node 20.19.0 or later. 22 is the active LTS line. No `cache:` key: npm
+          # caching keys off a lockfile, and fourteen of these repositories have no manifest at all.
+          node-version: "22"
+
+      - name: Install the pinned OpenSpec CLI
+        # zizmor reports `adhoc-packages` here at low severity, and this gate runs at
+        # `min-severity: low`, so the suppression is deliberate and carries its reason rather than
+        # being a raised threshold. The audit asks for a lockfile. The only way to have one is a
+        # package.json in the repository, and a tracked package.json makes fleet.yml demand an
+        # eslint.config.* that fourteen of these repositories have no code to lint. The property the
+        # audit protects is that what runs here is a known version, and `@1.10.0` is exactly that —
+        # the same pin, in the same form, as `version: 1.29.0` in zizmor.yml.
+        run: npm install --global @fission-ai/openspec@1.10.0 # zizmor: ignore[adhoc-packages]
+
+      - name: Every spec and every change is well formed
+        # `--strict` is the stronger reading: it turns a warning into a failure. A change with no spec
+        # delta also fails here unless its .openspec.yaml declares `skip_specs: true`, which is the
+        # escape for a refactor that changes no behaviour.
+        run: openspec validate --all --strict
+
+      - name: No change was archived with work left undone
+        # This is the one mechanically checkable part of the test-first discipline, and it is the
+        # reason this job exists beyond checking markup. `tasks.md` in every change is a pair per
+        # behaviour — a task that adds a failing test, then a task that makes it pass — and archiving
+        # is the act that folds a change into the specs. A change archived with an unticked task is a
+        # spec claiming behaviour that nothing proved. This step reads the archive and exits non-zero
+        # on the first one it finds.
+        #
+        # What no check can see is the ORDER: whether the failing test was really written before the
+        # implementation. A gate reads the tree, not the hour each line was typed.
+        # ratatoskr-workspace/docs/QUALITY_GATES.md states that limit rather than implying it is
+        # covered.
+        run: openspec validate --archived
