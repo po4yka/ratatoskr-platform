@@ -119,6 +119,33 @@ the step in `fleet.yml` that fails when a repository holds a manifest and a `ci.
 a test. `ratatoskr-workspace/docs/QUALITY_GATES.md` states that limit rather than implying it is
 covered.
 
+## The Rust skill catalogue
+
+`.agents/skills/` holds eighteen Rust skills, and `.claude/skills/` symlinks to them, so Claude Code
+and Codex read one copy. Each is a reference sheet rather than a tutorial: the commands, flags,
+thresholds and triage tables for one Rust concern. Your assistant reads the descriptions and opens a
+skill only when the task matches one, so the set costs almost nothing until it is needed.
+
+`rust-tdd` is the Rust form of the task pair above. `rust-lints` owns `clippy.toml`, which is where
+this repository's size limits live. `rust-security` answers a `RUSTSEC` advisory.
+`rust-async-internals` covers `tokio::select!` cancel safety and shutdown. `rust-database` covers
+pool budgets and transaction ownership. `rust-compiler-errors` is the entry point when the build
+fails and the cause is not obvious.
+
+`rust-database` also carries a section on deploying migrations in compatible phases. The Development
+status above overrides it: while that status holds, this product has no migrations at all. Read the
+rest of that skill and skip that section.
+
+The eighteen are identical in every Ratatoskr repository whose stack is Rust, and
+`ratatoskr-workspace/.github/workflows/drift.yml` fails when one copy stops matching the others. Do
+not edit a file under `.agents/skills/`. A correction belongs upstream in `po4yka/rust-skills` and
+reaches this repository through `npx skills update`.
+
+The catalogue holds forty-four skills and eighteen are vendored here.
+`ratatoskr-workspace/docs/QUALITY_GATES.md` records which were left out and why. They are vendored
+under BSD-3-Clause, (c) 2026 Nikita Pochaev, who also owns this repository; each `SKILL.md` keeps its
+`license` field, and the full text is in that repository's `LICENSE`.
+
 ## Sources of truth
 
 Use this order:
