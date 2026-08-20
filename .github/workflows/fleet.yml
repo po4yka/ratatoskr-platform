@@ -187,3 +187,43 @@ jobs:
             echo "The commit that adds code adds its gate. Copy ci.yml from ratatoskr-platform."
             exit 1
           fi
+
+      - name: Code cannot land without its size limits
+        # The same shape of assertion as the step above, for the other thing a first code commit is
+        # required to bring. `ratatoskr-workspace/docs/QUALITY_GATES.md` carries the numbers — how
+        # long a function may be, how many arguments it may take, how deep a block may nest, how long
+        # a file may be — and the measurement behind each one. This step cannot read those numbers
+        # and does not try. It asserts that the file which carries them exists, and the pull request
+        # that adds that file is where the numbers are read.
+        #
+        # That distinction is the whole reason this step is worth its ten lines. Thirteen of the
+        # repositories in this fleet have no code at all, so a limit written only in a document is a
+        # limit nothing applies. For them this IS the mechanism: the commit that brings the first
+        # `Cargo.toml` brings `clippy.toml` with it, or it does not land.
+        #
+        # Two languages, because two are decided. Rust and Node are the ones with a chosen linter and
+        # a measured number today. `pyproject.toml`, `Package.swift` and `build.gradle` are named in
+        # the step above and deliberately absent here: choosing `ruff`, `swiftlint` or `detekt` for a
+        # repository that has not started is the configuration-for-an-unstarted-milestone that this
+        # project refuses elsewhere. The gap is real, it is recorded in QUALITY_GATES.md, and it
+        # closes in the pull request that brings the first Kotlin, Swift or Python file.
+        run: |
+          set -euo pipefail
+          has() { [ -n "$(git ls-files -- "$@")" ]; }
+          fail=0
+          if has Cargo.toml && ! has clippy.toml .clippy.toml; then
+            echo "::error::this repository has a Cargo.toml and no tracked clippy.toml"
+            echo "  clippy.toml is where the size limits live. Copy the block from"
+            echo "  ratatoskr-platform/clippy.toml and measure this tree before choosing the numbers."
+            fail=1
+          fi
+          if has package.json && ! has 'eslint.config.*'; then
+            echo "::error::this repository has a package.json and no tracked eslint.config.*"
+            echo "  eslint.config.js is where the size limits live. Copy the block from"
+            echo "  ratatoskr-web/eslint.config.js and measure this tree before choosing the numbers."
+            fail=1
+          fi
+          if [ "$fail" -eq 0 ]; then
+            echo "every manifest here has the lint configuration that carries its size limits"
+          fi
+          exit "$fail"

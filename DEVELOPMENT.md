@@ -101,6 +101,7 @@ cargo fetch --locked
 cargo deny check
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
+git ls-files -z "*.rs" | xargs -0 -r wc -l | awk '$2 != "total" && $1 > 850 { print; bad = 1 } END { exit bad }'
 cargo build --workspace --locked
 cargo test --workspace --locked
 cargo build --workspace --locked --release
@@ -450,3 +451,11 @@ answer stays attached to the question.
 Production code may not `unwrap`, `expect` or `panic!`, and every public item is documented; test
 bodies may assert with `unwrap` and `expect`. `unsafe_code` is forbidden workspace-wide. Do not add a
 crate, a directory or a configuration field for a milestone that has not started.
+
+The size limits are in `clippy.toml`, each with the measurement behind it written beside it: 100
+lines in a function, 7 arguments in a signature, 5 levels of block nesting. The fourth limit is in
+`ci.yml` instead, because no Rust lint counts the lines in a file: 850 lines in a tracked `.rs` file.
+Every number is the worst case this workspace already has, so the gate fails on a regression and not
+on work that has not been done yet. Do not raise one to make a build pass. Take
+`#[expect(clippy::too_many_lines, reason = "...")]` at the site that needs it — `expect` and not
+`allow`, so the exemption reports itself as unfulfilled and is deleted once the item shrinks.

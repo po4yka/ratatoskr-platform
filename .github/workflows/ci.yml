@@ -102,6 +102,18 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
+      # The one size limit clippy cannot express. `clippy.toml` bounds a function, a signature and a
+      # block; no Rust lint counts the lines in a file, and a module can pass every one of those and
+      # still be a god-module. `crates/operations/src/lib.rs` is the reason this is not theoretical
+      # here: 716 lines, fourteen top-level functions, longest 77 — under every clippy threshold in
+      # the repository.
+      #
+      # 850 is the worst file across both Rust repositories plus a margin: 817 lines in
+      # `ratatoskr-contracts` `tools/contractsc/src/compat.rs`, 716 here. A ratchet, not a target.
+      # `*.rs` only, so `Cargo.lock`, `openapi/openapi.json` and `schema.sql` need no exclusion list —
+      # an exclusion list is a second source of truth that goes stale in silence.
+      - run: git ls-files -z "*.rs" | xargs -0 -r wc -l | awk '$2 != "total" && $1 > 850 { print; bad = 1 } END { exit bad }'
+
       # Before the tests, not after: services/edge/tests/boot.rs executes ratatoskr-ingest and
       # ratatoskr-scheduler as child processes, and `cargo test` builds the binary of the package
       # under test only — a sibling package's plain binary is never produced by it. Without this step

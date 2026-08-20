@@ -17,3 +17,42 @@ disallowed-methods = [
   { path = "std::env::var",    reason = "configuration is read only by platform_core::config" },
   { path = "std::env::var_os", reason = "configuration is read only by platform_core::config" },
 ]
+
+# ---- Size limits ----
+#
+# Three numbers, and only one of them is a new gate. `too_many_lines` arrives with `pedantic` and
+# `too_many_arguments` is warn-by-default in `clippy::complexity`, so `-D warnings` in CI already
+# makes both fatal. Their thresholds are written down at clippy's current defaults so that a
+# toolchain bump raising a default cannot loosen this tree without a commit that says so.
+# `excessive-nesting-threshold` is the behavioural change: its default is 0, and 0 disables the lint.
+#
+# Each number is the worst case measured in this workspace on 2026-08-20, not an ambition. Clippy
+# fires when the count EXCEEDS the threshold, so an item sitting exactly on a number is silent and
+# the next line, argument or block is the failure. `--all-targets` measures test bodies too, and the
+# `allow-*-in-tests` settings above cover none of these three lints.
+#
+# An exception is taken at the site, as `#[expect(clippy::too_many_lines, reason = "...")]`, and
+# never by raising a number here — a raised number applies to code nobody has written yet. `expect`
+# and not `allow`: `expect` reports `unfulfilled_lint_expectations` once the item drops back under
+# the limit, so the exemption deletes itself instead of outliving its reason.
+
+# Longest function: 98 lines, `accept` in `crates/public-api/src/captures.rs`. Blank and comment-only
+# lines do not count, so that is 98 lines of code and two of headroom. The function was left alone on
+# purpose. Its length is forced rather than sprawling — six sequential fallible steps in one
+# transaction, each with an explicit early-return arm because this workspace denies `unwrap`,
+# `expect` and `panic` — and splitting it would spread one transaction across several functions.
+# Read it before shortening it.
+too-many-lines-threshold = 100
+
+# Three functions take exactly seven arguments: `crates/operations/src/lib.rs:258` and `:456`, and
+# `crates/identity/src/relay.rs:48`. There is no headroom at all. The eighth argument fails CI, and
+# the answer to that failure is a parameter struct rather than a larger number here. `self` counts.
+too-many-arguments-threshold = 7
+
+# The default is 0, and 0 disables the lint, so this line is what turns `excessive_nesting` on.
+# Five is the deepest block in the workspace and nine blocks sit exactly there:
+# `crates/operations/src/transition.rs` (five of them), `crates/eventing/tests/outbox.rs:384`,
+# `crates/operations/tests/projection.rs:219` and `services/edge/tests/boot.rs:293`. Blocks are
+# counted, not `if`s — an `impl` and an inline `mod` each add one before the function body opens,
+# which is why four would cost those nine sites today. Take four once they are flat, not before.
+excessive-nesting-threshold = 5
