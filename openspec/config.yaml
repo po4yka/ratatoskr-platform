@@ -1,0 +1,46 @@
+schema: spec-driven
+
+references:
+  - { id: ratatoskr-workspace, remote: "git@github.com:po4yka/ratatoskr-workspace.git" }
+
+context: |
+  `ratatoskr-platform` — The public control plane: identity, authentication, the Edge API, long-running operation tracking, generic ingestion entrypoints and deterministic scheduling.
+
+  Stack: Rust, edition 2024, toolchain pinned by rust-toolchain.toml. A Cargo workspace of sixteen members: twelve crates, three services and tools/openapic. Axum, Tokio, figment, PostgreSQL, NATS JetStream.
+
+  Tests: `cargo test --workspace --locked`, against a real PostgreSQL and a NATS server with JetStream. The workspace debug build must run first: services/edge/tests/boot.rs starts ratatoskr-ingest and ratatoskr-scheduler as child processes, and `cargo test` does not build a sibling package's binary.
+
+  The gate command list is the fenced block in DEVELOPMENT.md. That list and .github/workflows/ci.yml are one list, and a step in ci.yml fails when they differ, so change both or neither.
+
+  Development status, binding and overriding anything that plans otherwise: one version only — no v2, no version negotiation, no deprecation window; no database migrations — a schema change edits the schema definition in place; the product is Ratatoskr and never "Ratatoskr Next". Only the repository owner changes this status.
+
+  Behaviour visible to more than one repository belongs in the ratatoskr-workspace store, not here.
+
+  Artefacts are written in English.
+
+rules:
+  specs:
+    - Every scenario must be executable as a test. If you cannot name the test it becomes, the
+      scenario is too vague to accept.
+    - Scenarios use WHEN and THEN. State the observable outcome, never the implementation that
+      produces it.
+  tasks:
+    - A task that changes behaviour is a pair. The first task adds a test that fails. The second
+      makes it pass. Never one task that does both.
+    - The failing-test task names the file, the test name, and the assertion that must fail.
+    - A refactor task comes only after the tests are green. It adds no test and changes no behaviour.
+    - A task that cannot start from a failing test states why in one line. Configuration,
+      documentation and generated files are the usual reasons.
+
+operations:
+  apply:
+    guidance:
+      - Run the new test before you write the implementation. Confirm it fails for the reason the
+        task states, and not for a compile error or a typo.
+      - Run the command list in this repository's DEVELOPMENT.md before the change is complete. That
+        list and .github/workflows/ci.yml are one list, and a step in ci.yml fails when they differ.
+      - Do not tick a task whose test has not been run.
+  archive:
+    guidance:
+      - Do not archive while any task is unticked. The openspec workflow fails on that in CI, and
+        finding it there costs a round trip.

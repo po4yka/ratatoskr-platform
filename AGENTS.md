@@ -81,6 +81,44 @@ Stop assuming:
 Admin listeners (`/health/*`, `/metrics`, `/version`), PostgreSQL and NATS are never reachable from outside the host. `cloudflared` is the only public path and it reaches the public listeners only; operators reach everything else over Tailscale. A public listener may trust no inbound header it did not itself mint: the tunnel terminates TLS and rewrites headers, so the arriving set is attacker-influenced.
 
 
+## How a change starts
+
+Every non-trivial change begins as an OpenSpec change rather than as an edit. In your assistant that
+is `/opsx:propose <what you want to build>`, or `/opsx:explore` first when the shape is not clear
+yet. The command writes `openspec/changes/<id>/` holding a proposal, the spec deltas, a design and a
+task list, and you read that plan before any code is written. `/opsx:apply` builds it and
+`/opsx:archive` folds the deltas into `openspec/specs/`.
+
+`openspec/specs/` holds the behaviour that is true today, and it starts empty on purpose. A spec here
+grows from a change that needed it. Do NOT convert `docs/REQUIREMENTS.md`, `docs/INTERFACES.md`,
+`docs/DOMAIN.md` or `docs/DATA_MODEL.md` into specs in bulk. Those documents stay where they are, as
+material an exploration reads. A spec set produced by bulk conversion is large, stale on the day it
+lands, and trusted by nobody.
+
+Behaviour that more than one repository can see — the shape of a contract, the meaning of a field, the
+order in which repositories must receive a change — belongs in the `ratatoskr-workspace` store, not
+here. `openspec/config.yaml` references it, so `openspec instructions` in this repository lists the
+store's specs with the exact command that fetches one. Cite that spec from a local proposal instead
+of restating it.
+
+### Tests come first
+
+The task list carries one pair per behaviour. The first task adds a test that fails. The second makes
+it pass. Never one task that does both.
+
+- Run the new test before you write the implementation, and confirm it fails for the reason the task
+  states — not for a compile error or a typo.
+- A refactor task comes after the tests are green. It adds no test and changes no behaviour.
+- A task that cannot start from a failing test says why in one line. Configuration, documentation and
+  generated files are the usual reasons.
+- Do not tick a task whose test has not been run.
+
+Nothing can check the order in which the two were written. What CI does check is
+`openspec validate --archived`, which fails when a change was archived with a task left unticked, and
+the step in `fleet.yml` that fails when a repository holds a manifest and a `ci.yml` that never runs
+a test. `ratatoskr-workspace/docs/QUALITY_GATES.md` states that limit rather than implying it is
+covered.
+
 ## Sources of truth
 
 Use this order:
