@@ -10,7 +10,7 @@ Required suites:
 - OAuth callback and Telegram assertion validation.
 - REST/OpenAPI/generated-client compatibility.
 - Rate/body/upload limits, audit, health, and readiness.
-- Database migrations with old/new binary compatibility.
+- `schema.sql` applied to a fresh database, and a second apply that changes nothing.
 - Workspace capture flow through one real domain service.
 
 Tests use synthetic identities and local dependencies; no production provider tokens.

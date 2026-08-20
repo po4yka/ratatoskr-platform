@@ -1,9 +1,9 @@
 //! The `operations` schema: the durable record of user-visible asynchronous work.
 //!
-//! Milestone 3. This crate owns exactly the tables in `migrations/0002_operations.sql`.
+//! Milestone 3. This crate owns exactly the `operations` tables of `schema.sql`.
 //!
 //! The lifecycle rule lives in [`status`] and is enforced twice on purpose: here, so a caller gets a
-//! typed refusal, and by a trigger in the migration, so an `UPDATE` from anywhere else is refused
+//! typed refusal, and by a trigger in `schema.sql`, so an `UPDATE` from anywhere else is refused
 //! too. A test asserts the two agree.
 //!
 //! [`snapshot`] projects a stored operation onto `ratatoskr_operation_contracts::OperationSnapshot`

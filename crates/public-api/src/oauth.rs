@@ -94,7 +94,7 @@ const MAX_STATE: usize = 512;
 const MAX_CODE: usize = 2048;
 const MAX_ERROR: usize = 200;
 
-/// `GET /v2/oauth/{provider}/callback`.
+/// `GET /v1/oauth/{provider}/callback`.
 ///
 /// Records the callback and sends the browser to the configured completion page. It does not
 /// exchange anything, and it deliberately reports the same page whether the provider returned a code
@@ -167,7 +167,7 @@ pub async fn callback(
     )
 }
 
-/// `POST /v2/oauth/relays/{relay_id}`.
+/// `POST /v1/oauth/relays/{relay_id}`.
 ///
 /// The protected internal flow `AGENTS.md` requires for transferring a credential to the owning
 /// service. It returns the code once and destroys it in the same statement.
@@ -306,7 +306,7 @@ fn bounded(query: &Callback) -> Option<CallbackOutcome<'_>> {
 /// How the callback route is described in the generated `OpenAPI` document.
 pub const CALLBACK_DOC: RouteDoc = RouteDoc {
     method: Method::Get,
-    path: "/v2/oauth/{provider}/callback",
+    path: "/v1/oauth/{provider}/callback",
     operation_id: "receiveOauthCallback",
     summary: "Receive a provider's OAuth redirect",
     description: "\
@@ -375,7 +375,7 @@ is finished here either way.",
 /// How the claim route is described in the generated `OpenAPI` document.
 pub const CLAIM_DOC: RouteDoc = RouteDoc {
     method: Method::Post,
-    path: "/v2/oauth/relays/{relay_id}",
+    path: "/v1/oauth/relays/{relay_id}",
     operation_id: "claimOauthRelay",
     summary: "Claim a relayed callback",
     description: "\

@@ -1,7 +1,7 @@
 //! What Platform will hand on as an address.
 //!
 //! One implementation, in the crate both serving crates already depend on, and deliberately not
-//! duplicated beside each route. `POST /v2/captures` and `POST /v2/ingest/webhooks/{id}` produce
+//! duplicated beside each route. `POST /v1/captures` and `POST /v1/ingest/webhooks/{id}` produce
 //! the same command for the same consumer, so they must accept the same addresses: if one of them
 //! tightened its policy and the other did not, the looser door would be a way to submit something
 //! the other refuses, which is a privilege difference nobody chose.

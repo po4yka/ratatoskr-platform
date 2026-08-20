@@ -13,7 +13,7 @@ Documentation=https://github.com/po4yka/ratatoskr-platform/blob/main/deploy/READ
 After=network-online.target docker.service ratatoskr-edge.service
 Wants=network-online.target
 
-# `Wants=`, never `Requires=`. Ordering matters — only `ratatoskr-edge` applies the migrations, and
+# `Wants=`, never `Requires=`. Ordering matters — only `ratatoskr-edge` applies `schema.sql`, and
 # this process refuses to start without the schema — but a later edge failure must NOT stop this
 # one: it writes commands into the transactional outbox, which is the durable half, and edge
 # publishes them when it returns. `Requires=` would turn a publisher outage into an ingress outage.
@@ -21,7 +21,7 @@ Wants=ratatoskr-edge.service
 
 # Restart forever. There is no orchestrator on this host to notice a unit in `failed`, and every
 # reason this process refuses to start — the database is not up yet, the schema has not been
-# migrated yet, the nkey seed is not in place yet — is transient on a first boot. A start limit
+# applied yet, the nkey seed is not in place yet — is transient on a first boot. A start limit
 # would latch the unit into `failed` with nothing to retry it, which
 # `ratatoskr-workspace/docs/DEPLOYMENT_TARGET.md` names as a live failure on this host.
 StartLimitIntervalSec=0

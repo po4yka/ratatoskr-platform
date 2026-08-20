@@ -31,7 +31,7 @@ fn now() -> jiff::Timestamp {
 
 /// An `ApiState` with a healthy database and a configured bus.
 ///
-/// The two facts `GET /v2/capabilities` reads. Every test here exercises a route that needs both,
+/// The two facts `GET /v1/capabilities` reads. Every test here exercises a route that needs both,
 /// so the default is "the deployment is whole"; the capability tests are where the other
 /// combinations live.
 fn state(harness: &TestDatabase) -> ApiState {
@@ -83,7 +83,7 @@ async fn seed(pool: &sqlx::PgPool, credential: &str, audience: &str) -> Uuid {
 fn submit(credential: Option<&str>, key: Option<&str>, body: &str) -> Request<Body> {
     let mut request = Request::builder()
         .method("POST")
-        .uri("/v2/captures")
+        .uri("/v1/captures")
         .header("content-type", "application/json");
     if let Some(credential) = credential {
         request = request.header("authorization", format!("Bearer {credential}"));
@@ -312,7 +312,7 @@ async fn an_operation_is_readable_only_by_its_owner() {
         let app = app.clone();
         async move {
             let request = Request::builder()
-                .uri(format!("/v2/operations/{id}"))
+                .uri(format!("/v1/operations/{id}"))
                 .header("authorization", format!("Bearer {credential}"))
                 .body(Body::empty())
                 .expect("a request");
@@ -361,7 +361,7 @@ async fn a_malformed_path_parameter_is_a_client_error() {
 
     let request = Request::builder()
         .method("GET")
-        .uri("/v2/operations/not-a-uuid")
+        .uri("/v1/operations/not-a-uuid")
         .header("authorization", format!("Bearer {credential}"))
         .body(Body::empty())
         .expect("a request");

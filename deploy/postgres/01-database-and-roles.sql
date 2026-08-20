@@ -2,16 +2,15 @@
 --
 --     sudo -u postgres psql -f deploy/postgres/01-database-and-roles.sql
 --
--- There are two files because a migration creates the schemas. `grant usage on schema identity`
--- cannot be written before `identity` exists, and `identity` is created by `migrations/0001` — which
--- runs as `ratatoskr_edge`, from inside `ratatoskr-edge`, after this file has given it the
--- `create` privilege on the database. So: this file, then the first edge start, then
--- `02-grants.sql`.
+-- There are two files because `schema.sql` creates the schemas. `grant usage on schema identity`
+-- cannot be written before `identity` exists, and `identity` is created by `schema.sql` — which runs
+-- as `ratatoskr_edge`, from inside `ratatoskr-edge`, after this file has given it the `create`
+-- privilege on the database. So: this file, then the first edge start, then `02-grants.sql`.
 --
 -- By hand and not by a container entry point: `docker-entrypoint-initdb.d` never runs again against
 -- a non-empty data directory, and the target's cluster is not empty
--- (`ratatoskr-workspace/docs/DEPLOYMENT_TARGET.md`). By hand and not by a migration: a role that can
--- create roles is not a least-privilege role.
+-- (`ratatoskr-workspace/docs/DEPLOYMENT_TARGET.md`). By hand and not from `schema.sql`: a role that
+-- can create roles is not a least-privilege role.
 --
 -- Re-runnable, apart from `create database`, which reports that the database exists and is skipped.
 -- It carries no password: set them separately, so this file can be read by anyone and pasted into a
@@ -71,8 +70,8 @@ create database ratatoskr
 revoke all on database ratatoskr from public;
 grant connect on database ratatoskr to ratatoskr_edge, ratatoskr_ingest, ratatoskr_scheduler;
 
--- `create` on the DATABASE is what lets `ratatoskr_edge` run `create schema` from a migration. It is
--- granted to that role and to no other: only one process migrates (ADR-0010).
+-- `create` on the DATABASE is what lets `ratatoskr_edge` run the `create schema` statements in
+-- `schema.sql`. It is granted to that role and to no other: only one process applies it (ADR-0010).
 grant create on database ratatoskr to ratatoskr_edge;
 
 \connect ratatoskr

@@ -51,7 +51,7 @@ pub const PLATFORM_SCHEDULER_OCCURRENCES_TOTAL: &str = "platform_scheduler_occur
 /// `platform_capability_available{capability}` — gauge, `0` or `1`. `ARCHITECTURE.md` S16 item 9,
 /// the capability half.
 ///
-/// Published on a timer rather than from the `GET /v2/capabilities` handler. A capability is a pure
+/// Published on a timer rather than from the `GET /v1/capabilities` handler. A capability is a pure
 /// function of the deployment's own state (ADR-0008), so its value is knowable whether or not a
 /// client asks — and a gauge that only moves when somebody asks reports the state of the last
 /// question, not the state of the deployment. The one input that changes at run time is the

@@ -28,9 +28,9 @@ It accepts work, routes it to the owning bounded context, and reports progress. 
 
 ## Current phase
 
-Every milestone of `docs/IMPLEMENTATION_PLAN.md` is implemented, and the system has run on the deployment target. Do not assume Rust crates, binaries, migrations, API routes, NATS streams, or CI commands exist unless they are present in the checkout.
+Every milestone of `docs/IMPLEMENTATION_PLAN.md` is implemented, and the system has run on the deployment target. Do not assume Rust crates, binaries, schema objects, API routes, NATS streams, or CI commands exist unless they are present in the checkout.
 
-What now exists: the three binaries; the libraries under `crates/`; the `identity`, `operations` and `platform_ingest` schemas in `migrations/`; the versioned public routes on `ratatoskr-edge` and the webhook adapter on `ratatoskr-ingest`; the transactional outbox, the inbox and the `JetStream` publisher and consumer; periodic command publication on `ratatoskr-scheduler`; the single-host deployment profile in `deploy/`, installed and running on the target; the generated `openapi/openapi.json`; and the CI gate in `.github/workflows/ci.yml`. Registered-device credentials, rate limiting, stale-operation reconciliation and backup remain absent, and the instruction above still applies to them in full. `DEVELOPMENT.md` states what is present and what is absent, command family by command family.
+What now exists: the three binaries; the libraries under `crates/`; the `identity`, `operations` and `platform_ingest` schemas in `schema.sql`; the versioned public routes on `ratatoskr-edge` and the webhook adapter on `ratatoskr-ingest`; the transactional outbox, the inbox and the `JetStream` publisher and consumer; periodic command publication on `ratatoskr-scheduler`; the single-host deployment profile in `deploy/`, installed and running on the target; the generated `openapi/openapi.json`; and the CI gate in `.github/workflows/ci.yml`. Registered-device credentials, rate limiting, stale-operation reconciliation and backup remain absent, and the instruction above still applies to them in full. `DEVELOPMENT.md` states what is present and what is absent, command family by command family.
 
 The word is `ingest` wherever it is an identifier — schema, crate, library, binary, database role and path prefix — and "ingress" only in prose, where it names the activity (ADR-0009).
 
@@ -40,6 +40,23 @@ When creating initial scaffolding:
 - share only narrow platform primitives;
 - avoid a global application service that imports every domain client;
 - document implemented behavior separately from planned architecture.
+
+### Development status
+
+Ratatoskr is in development. No database holds data that has to survive a schema change. While this
+status holds, these rules are binding, and they override anything else in this repository that
+plans otherwise, including the rest of this file:
+
+- **One version only.** The API, the database, and the contracts keep their first version. Do not
+  add a `v2` or a later major version, and do not add version negotiation, deprecation windows, or
+  parallel-major routing.
+- **No database migrations.** Do not add a migration file, and do not add migration tooling. A
+  schema change edits the current schema definition in place, and a test database is created from
+  that definition.
+- **The product is `Ratatoskr`.** It is not "Ratatoskr Next". Do not write that name in code,
+  documentation, identifiers, comments, or commit messages.
+
+Only the repository owner changes this status. Ask before you write anything these rules forbid.
 
 ## Deployment target
 
@@ -54,7 +71,7 @@ You may assume:
 
 Stop assuming:
 
-- **a second instance.** Never answer a load or availability problem by adding one. The migration advisory lock, the outbox claim lease, the scheduler lease, the idempotency ledger and inbox deduplication STAY — they are what makes a restart and a redelivery safe, and both happen with one process. Do not remove them as speculative scale machinery (ADR-0010).
+- **a second instance.** Never answer a load or availability problem by adding one. The schema advisory lock, the outbox claim lease, the scheduler lease, the idempotency ledger and inbox deduplication STAY — they are what makes a restart and a redelivery safe, and both happen with one process. Do not remove them as speculative scale machinery (ADR-0010).
 - **a rolling deployment.** An upgrade is a full stop-start. Its outage window is drain plus grace plus startup, and nothing is behind it. The compatibility that matters is client-side: a client must survive a connection reset and retry, and an SSE consumer must resume with `Last-Event-ID`.
 - **spare memory or CPU.** The host runs other services, there is no disk swap, and a default sized from `num_cpus` is a bug on four cores. Every queue, cache, batch, connection pool and worker pool carries an explicit bound.
 - **the boot device.** New durable state gets an absolute path under `/mnt/nvme`, named in the deployment unit. A named Docker volume is not a location.
@@ -71,7 +88,7 @@ Use this order:
 1. active task/changeset and accepted ADRs;
 2. `README.md`;
 3. public and internal contracts from `ratatoskr-contracts`;
-4. repository code and migrations;
+4. repository code and `schema.sql`;
 5. client assumptions only after they are confirmed by the public contract.
 
 Do not change public behavior solely to satisfy an undocumented client dependency. Update the contract and affected clients through a coordinated changeset.
@@ -111,7 +128,7 @@ Never solve a missing integration by reading or writing another service's schema
 5. **Errors are stable and actionable.** Return contract error codes; keep provider diagnostics in authorized internal records.
 6. **Capabilities replace frontend assumptions.** Expose supported features and minimum compatible client versions.
 7. **Pagination, filtering, and ordering are explicit.** Do not expose unbounded list endpoints.
-8. **Public contracts are versioned.** Breaking changes require a new API/contract version and coordinated migration.
+8. **Public contracts are versioned.** A breaking change requires a new API/contract version and a coordinated client migration. While the development status above holds, there is no second version: a breaking change edits the first one, and the affected clients change with it.
 9. **Authorization is resource-based.** Never rely only on route-level authentication when the object has an owner.
 10. **No provider secrets cross the public boundary.** OAuth tokens remain in provider services.
 
@@ -228,13 +245,13 @@ The receiving service owns execution, concurrency, retries, and provider-specifi
 
 Never log bearer tokens, authorization codes, cookies, raw Mini App `initData`, or secret headers.
 
-## Data access and migrations
+## Data access and schema changes
 
 - Platform writes only its owned schemas.
 - Cross-schema foreign keys and cross-schema writes are forbidden.
-- Migrations are forward-safe and independently deployable.
+- `schema.sql` applies to a fresh database in one batch, and a second apply to the same database changes nothing.
 - Public request acceptance must remain compatible across a full stop-start upgrade: a client must survive a connection reset and retry, and an SSE consumer must resume with `Last-Event-ID`. There is no rolling deployment on this target.
-- Destructive schema contraction follows expand/migrate/contract.
+- A destructive schema change still needs care. Edit `schema.sql`, state in the change what data is lost, and recreate the database: `ratatoskr-edge` applies the file only when the `identity` schema is absent, so an edit never reaches a database that already has the schema.
 - Audit/event records required for security or idempotency are not deleted as incidental cleanup.
 - The milestone that introduces a runtime dependency introduces, in the same pull request, its development service in `compose.yaml`, its unit or service in `deploy/`, its command family in `DEVELOPMENT.md`, and at least one test that fails if the dependency is absent or misconfigured. A dependency is never added to the local stack before code connects to it, and never added to `compose.yaml` alone — `compose.yaml` says of itself that it is not a deployment artifact, which is how the event bus reached milestone 7 fully depended upon and absent from the target host.
 
@@ -308,7 +325,7 @@ The changeset must list producers, consumers, compatible rollout order, and roll
 - Avoid combining public API changes with unrelated infrastructure refactors.
 - Document all new endpoints, permissions, commands, and operation states.
 - State whether the change is backward compatible.
-- Include migration and rollout notes for persistence or contract changes.
+- Include schema and rollout notes for persistence or contract changes.
 - Do not merge a producer-only breaking contract change before consumers can handle it.
 - Do not commit secrets, local endpoints, or temporary cross-repository path overrides.
 
@@ -322,7 +339,7 @@ A task is complete only when:
 - idempotency and operation-state behavior are defined;
 - ownership and authorization tests cover the new surface;
 - outbox/inbox and retry semantics remain safe;
-- migrations are independently deployable;
+- a schema change edits `schema.sql`, and a fresh database gets it in one apply;
 - telemetry contains correlation without secrets;
 - repository-local checks pass;
 - affected clients and services are validated through the workspace changeset.

@@ -44,7 +44,7 @@ pub struct ApiState {
     pub audience: String,
     /// How long an idempotency key is honoured.
     pub idempotency_ttl: jiff::SignedDuration,
-    /// The readiness facts, shared with `/health/ready`. `GET /v2/capabilities` reports whether a
+    /// The readiness facts, shared with `/health/ready`. `GET /v1/capabilities` reports whether a
     /// capability's dependency is healthy, and it must be the SAME fact readiness reports or one of
     /// the two answers is wrong (ADR-0008).
     pub health: Arc<RuntimeState>,
@@ -131,9 +131,9 @@ struct Endpoint {
 
 /// Every route `ratatoskr-edge` serves.
 ///
-/// Every path carries its major version. `ARCHITECTURE.md` S5.3: versioned `/v2` resource-oriented
-/// routes. The version is 2 because Ratatoskr Next is the second system to serve this surface, and
-/// starting at `/v1` would collide with the retired one in any client that ever spoke to both.
+/// Every path carries its major version. `ARCHITECTURE.md` S5.3: versioned `/v1` resource-oriented
+/// routes. The version is 1, and it stays 1 while the project is in development: one system serves
+/// this surface, and there is no second major to serve beside it.
 fn table() -> Vec<Endpoint> {
     vec![
         Endpoint {

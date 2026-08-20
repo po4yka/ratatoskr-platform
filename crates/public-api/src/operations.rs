@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 use crate::{ApiState, Principal};
 
-/// `GET /v2/operations/{operation_id}`.
+/// `GET /v1/operations/{operation_id}`.
 ///
 /// Returns the contract `OperationSnapshot`, which is the same shape every other consumer of an
 /// operation sees. Platform does not define a second, API-only projection: `INTERFACES.md` requires
@@ -54,14 +54,14 @@ pub async fn read(
 /// How this route is described in the generated `OpenAPI` document.
 pub const DOC: RouteDoc = RouteDoc {
     method: Method::Get,
-    path: "/v2/operations/{operation_id}",
+    path: "/v1/operations/{operation_id}",
     operation_id: "readOperation",
     summary: "The current state of one operation",
     description: "\
 Returns the operation as a snapshot: its status, the stage it is in, its progress, and its result \
 or its errors once it has one. The same shape every consumer of an operation sees; there is no \
 second, API-only projection to keep in step.\n\n\
-Poll this, or subscribe to `GET /v2/operations/{operation_id}/events` to be told instead of \
+Poll this, or subscribe to `GET /v1/operations/{operation_id}/events` to be told instead of \
 asking. An operation you do not own and an operation that does not exist both answer 404, so this \
 route cannot be used to discover which identifiers are real.",
     tag: "operations",

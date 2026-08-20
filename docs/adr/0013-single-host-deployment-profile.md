@@ -90,7 +90,7 @@ CHECK. Both are weaker than a per-role subject allowlist would have been, and th
 ### 4. Three database roles, two files, in that order
 
 `ratatoskr_edge` owns the three schemas and is the only role with `create` on the database, because
-it is the only process that migrates. `ratatoskr_ingest` reaches `platform_ingest` and `operations`;
+it is the only process that applies `schema.sql`. `ratatoskr_ingest` reaches `platform_ingest` and `operations`;
 `ratatoskr_scheduler` reaches `operations` only. **Neither can READ `identity`** — verified, not
 asserted — which means the process with the largest unauthenticated attack surface in the system
 cannot reach a session credential hash, an OAuth relay or a user's provider identity.
@@ -104,7 +104,7 @@ second audit table in `operations`, or a webhook adapter absent from the audit t
 credential presented at another source's URL is an attributable security decision, and the trail
 that omits the most exposed process is the one an incident needs.
 
-There are two SQL files because a migration creates the schemas: `grant usage on schema identity`
+There are two SQL files because `schema.sql` creates the schemas: `grant usage on schema identity`
 cannot be written before `identity` exists. So: `01-database-and-roles.sql`, then the first edge
 start, then `02-grants.sql`.
 
@@ -149,7 +149,7 @@ broker, which `deploy/nats/README.md` spells out.
 - `ratatoskr-scheduler` requires `RATATOSKR__DATABASE__URL` and refuses to start without it, exactly
   as edge and ingest do. There is now no role that serves without a database, so the CI artifact
   smoke test runs `ratatoskr-edge` against a real PostgreSQL and NATS — which also makes it the first
-  place the migrations are applied on `aarch64`.
+  place `schema.sql` is applied on `aarch64`.
 - `journalctl -u ratatoskr-<role>` shows systemd's lines and not the service's. The output is in
   `/mnt/nvme/ratatoskr/logs/`, rotated with `copytruncate`, which is safe only because
   `StandardOutput=append:` opens with `O_APPEND`.

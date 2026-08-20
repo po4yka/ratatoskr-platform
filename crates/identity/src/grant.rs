@@ -9,7 +9,7 @@
 //! service talking to the public API holds a session with the same audience as every person does.
 //! Binding a relay to an audience would therefore have bound it to nothing. A grant is the
 //! mechanism that already exists for "this actor, this capability", and the vocabulary is open on
-//! purpose (`migrations/0001_identity.sql`), so `oauth.claim.github` needs no schema change to
+//! purpose (the `identity.grants` table of `schema.sql`), so `oauth.claim.github` needs no change to
 //! exist.
 
 use sqlx::PgExecutor;
@@ -20,7 +20,7 @@ use crate::PersistenceError;
 /// Whether `user_id` currently holds `capability`.
 ///
 /// Live means granted, not revoked, and either never expiring or not yet expired — the same
-/// three-part liveness the partial unique index in `migrations/0001_identity.sql` is built around.
+/// three-part liveness the partial unique index in `schema.sql` is built around.
 /// Evaluated in SQL rather than by reading the row and deciding here, so a caller cannot forget one
 /// of the three.
 ///

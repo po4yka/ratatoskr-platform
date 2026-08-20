@@ -189,15 +189,15 @@ fn the_document_discloses_no_internal_detail() {
 ///
 /// An ABSENT `security` key inherits the document default, so a route that forgot to declare one
 /// would read as whatever the document says later. An EMPTY array is `OpenAPI`'s way of saying "no
-/// security applies here", and the two public routes emit it deliberately: `POST /v2/sessions/telegram`
-/// is how a caller becomes authenticated, and `GET /v2/oauth/{provider}/callback` is reached by a
+/// security applies here", and the two public routes emit it deliberately: `POST /v1/sessions/telegram`
+/// is how a caller becomes authenticated, and `GET /v1/oauth/{provider}/callback` is reached by a
 /// browser a provider redirected, which carries no credential of ours. Every other route names a
 /// scheme, and the two schemes are never conflated.
 #[test]
 fn every_route_names_its_credential() {
     // The routes that are public, named rather than derived: a route becoming public by accident
     // must fail here, and a list is the only thing a diff shows.
-    const PUBLIC: [&str; 2] = ["/v2/sessions/telegram", "/v2/oauth/{provider}/callback"];
+    const PUBLIC: [&str; 2] = ["/v1/sessions/telegram", "/v1/oauth/{provider}/callback"];
 
     let document = generated();
     let schemes: BTreeSet<String> = document["components"]["securitySchemes"]
@@ -231,7 +231,7 @@ fn every_route_names_its_credential() {
             let scheme = named.keys().next().expect("a scheme");
             assert!(schemes.contains(scheme), "{method} {path} names {scheme}");
 
-            let expected = if path.starts_with("/v2/ingest/") {
+            let expected = if path.starts_with("/v1/ingest/") {
                 "sourceBearer"
             } else {
                 "sessionBearer"

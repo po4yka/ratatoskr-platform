@@ -15,7 +15,7 @@ Scheduler state contains definitions and dispatch checkpoints only, and it lives
 - Idempotency uniqueness includes principal and operation type.
 - Terminal operation transitions are immutable except approved annotation.
 - Cross-schema foreign keys/writes are forbidden.
-- Migrations ship with verification, backfill, compatibility, and rollback/forward-fix plans.
+- A schema change edits `schema.sql` in place, and it ships with a test that applies the file to a fresh database.
 
 Retention separates security audit, session expiry, operation history, uploaded staging blobs, and idempotency windows.
 

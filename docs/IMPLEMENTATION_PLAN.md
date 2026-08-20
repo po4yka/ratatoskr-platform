@@ -5,7 +5,7 @@
 > capture submitted through the public API became an operation, a durable outbox row and a command on
 > `JetStream` — alongside the same command from the webhook adapter and one from the scheduler.
 >
-> Item 5 is where the earlier ones meet: `ratatoskr-edge` opens a pool, applies the migrations,
+> Item 5 is where the earlier ones meet: `ratatoskr-edge` opens a pool, applies `schema.sql`,
 > authenticates a session, and writes the idempotency reservation, the operation and the outbox
 > command in one transaction. Item 6 closes the loop — the publisher and the event consumer run in
 > the process, and progress streams over SSE — so a capture now travels from a request to the bus
@@ -50,4 +50,4 @@ than a host process; and one database grant was written from reading a request h
 everything the handler calls. None of those is visible from a developer's machine, and item 10 as
 first written would have passed on one.
 
-Definition of Done: requirements, persistence constraints, auth, retries, tests, telemetry, OpenAPI drift, migrations, and workspace integration pass — and, from item 10 onward, the `linux/arm64` artifact builds and its boot tests pass on the deployment target. Deferred: broad automation, direct domain queries, and multi-tenant SaaS controls.
+Definition of Done: requirements, persistence constraints, auth, retries, tests, telemetry, OpenAPI drift, schema apply, and workspace integration pass — and, from item 10 onward, the `linux/arm64` artifact builds and its boot tests pass on the deployment target. Deferred: broad automation, direct domain queries, and multi-tenant SaaS controls.

@@ -183,13 +183,13 @@ jobs:
             exit 1
           fi
 
-      # The whole lifecycle against the real artifact: apply the migrations on aarch64, declare the
+      # The whole lifecycle against the real artifact: apply `schema.sql` on aarch64, declare the
       # JetStream streams, bind both listeners, answer the operator plane, take SIGTERM, exit 0.
       #
       # It runs `ratatoskr-edge` and not `ratatoskr-scheduler` because at milestone 9 there is no
       # role that serves without a database: the scheduler reads its schedules from one, and a
       # process that started anyway would report itself ready and publish nothing forever. Edge is
-      # the role that also OWNS the migrations, so this step is the only place the SQL is applied on
+      # the role that also OWNS the schema, so this step is the only place the SQL is applied on
       # the target's architecture before the target sees it.
       - name: The artifact serves and stops cleanly
         run: |
@@ -224,13 +224,22 @@ jobs:
           # argument reports "unknown" — the first thing anyone checks when a deployment misbehaves.
           curl -sf http://127.0.0.1:9464/version | tee /dev/stderr | grep -q "$GITHUB_SHA"
           curl -sf http://127.0.0.1:9464/metrics | grep -q '^platform_build_info'
-          # The migrations really ran on aarch64 — every one of them, through sqlx's own migrator
-          # rather than a `create table` that happened to exist. A stream that could not be declared
-          # is already covered: edge refuses to start without one, so readiness above would never
-          # have arrived.
-          applied=$(docker exec smoke-db psql -U platform -d platform -Atc \
-            "select count(*) from _sqlx_migrations where success")
-          test "$applied" = "$(find migrations -name '*.sql' | wc -l | tr -d ' ')"
+          # `schema.sql` really ran on aarch64. One table from each of the three schemas it creates,
+          # which is what the row count against `_sqlx_migrations` used to prove and what there is no
+          # ledger to prove any more. Three and not one because the three schemas are what the three
+          # database roles of S18 are granted on, and a `create schema` that succeeded while the
+          # tables under it did not is the shape of failure worth naming — `apply_schema` runs the
+          # file in ONE transaction, so it cannot happen, and this is the assertion that says so. A
+          # stream that could not be declared is already covered: edge refuses to start without one,
+          # so readiness above would never have arrived.
+          for relation in identity.users operations.operations platform_ingest.webhook_sources; do
+            present=$(docker exec smoke-db psql -U platform -d platform -Atc \
+              "select to_regclass('$relation') is not null")
+            if [ "$present" != "t" ]; then
+              echo "::error::$relation is absent after ratatoskr-edge reported itself ready"
+              exit 1
+            fi
+          done
           docker stop -t 40 smoke
           test "$(docker inspect -f '{{.State.ExitCode}}' smoke)" = "0"
           docker rm -f smoke smoke-db smoke-bus

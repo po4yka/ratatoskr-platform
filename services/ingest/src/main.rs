@@ -6,9 +6,9 @@
 //!
 //! # Two things it deliberately does not do
 //!
-//! **It does not migrate.** S18 gives ingest its own least-privilege database role, and a role that
-//! may create a schema is not one. `ratatoskr-edge` owns the migrations; this process checks that
-//! they have been applied and refuses to start if they have not, so the failure is one sentence at
+//! **It does not create the schema.** S18 gives ingest its own least-privilege database role, and a
+//! role that may create a schema is not one. `ratatoskr-edge` owns `schema.sql`; this process checks
+//! that it has been applied and refuses to start if it has not, so the failure is one sentence at
 //! startup rather than a Postgres error on the first inbound signal.
 //!
 //! **It does not publish.** It writes commands into the transactional outbox and stops there; the
@@ -55,8 +55,8 @@ impl platform_http::PublicRoutes for IngestRoutes {
             .map_err(|error| format!("the schema could not be inspected: {error}"))?;
         if !present {
             return Err(
-                "the platform_ingest schema is absent; ratatoskr-edge applies the \
-                        migrations and must have run at least once against this database"
+                "the platform_ingest schema is absent; ratatoskr-edge applies \
+                        schema.sql and must have run at least once against this database"
                     .to_owned(),
             );
         }

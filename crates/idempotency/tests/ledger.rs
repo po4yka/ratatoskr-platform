@@ -11,7 +11,7 @@ use platform_idempotency::{Digest, Reservation, complete, reserve};
 use platform_persistence::test_support::TestDatabase;
 use uuid::Uuid;
 
-const ROUTE: &str = "/v2/captures";
+const ROUTE: &str = "/v1/captures";
 const KIND: &str = "content.capture.submit";
 
 fn now() -> jiff::Timestamp {
@@ -198,7 +198,7 @@ async fn a_key_is_only_taken_inside_its_own_scope() {
 
     for (other_owner, route, kind) in [
         (Uuid::now_v7(), ROUTE, KIND),
-        (owner, "/v2/imports", KIND),
+        (owner, "/v1/imports", KIND),
         (owner, ROUTE, "social.source.sync"),
     ] {
         let outcome = reserve(

@@ -32,7 +32,7 @@ fn now() -> jiff::Timestamp {
 }
 
 /// An `ApiState` with a healthy database and a configured bus — the two facts
-/// `GET /v2/capabilities` reads. Every route exercised here needs both.
+/// `GET /v1/capabilities` reads. Every route exercised here needs both.
 fn state(harness: &TestDatabase) -> ApiState {
     let health = Arc::new(platform_http::RuntimeState::new(RuntimeRole::Edge));
     health.set_database_reachable(true);
@@ -126,7 +126,7 @@ fn stream_request(
     last_event_id: Option<&str>,
 ) -> Request<Body> {
     let mut request = Request::builder()
-        .uri(format!("/v2/operations/{operation_id}/events"))
+        .uri(format!("/v1/operations/{operation_id}/events"))
         .header("authorization", format!("Bearer {credential}"));
     if let Some(id) = last_event_id {
         request = request.header("last-event-id", id);
@@ -241,7 +241,7 @@ async fn the_stream_is_readable_only_by_the_owner() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri(format!("/v2/operations/{operation_id}/events"))
+                .uri(format!("/v1/operations/{operation_id}/events"))
                 .body(Body::empty())
                 .expect("a request"),
         )

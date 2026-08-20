@@ -3,7 +3,7 @@
 //! ADR-0006 decided the direction: **Platform owns the public `OpenAPI` document and generates it
 //! from its own routes**, while `ratatoskr-contracts` owns the payload types those routes carry.
 //! Contracts says what an `OperationSnapshot` is; this document says that
-//! `GET /v2/operations/{id}` returns one, under which authentication, with which failures.
+//! `GET /v1/operations/{id}` returns one, under which authentication, with which failures.
 //!
 //! # Why a crate rather than a `utoipa` annotation
 //!
@@ -300,10 +300,10 @@ pub fn document(api_version: &str, surfaces: &[ApiSurface]) -> Result<Value, Doc
 const DOCUMENT_DESCRIPTION: &str = "\
 Generated from the route tables of `ratatoskr-platform`; never hand-edited (ADR-0006). \
 The major version is in the path and a new major is a new prefix served alongside the old one, \
-never a change in place. It starts at 2 because Ratatoskr Next is the second system to serve this \
-surface.\n\n\
-Two listeners serve the paths below and they are not the same address: `/v2/captures`, \
-`/v2/operations/*` and `/v2/capabilities` are served by `ratatoskr-edge`, and `/v2/ingest/*` by \
+never a change in place. This document describes the first version. The project is in development, \
+so no second major exists.\n\n\
+Two listeners serve the paths below and they are not the same address: `/v1/captures`, \
+`/v1/operations/*` and `/v1/capabilities` are served by `ratatoskr-edge`, and `/v1/ingest/*` by \
 `ratatoskr-ingest`. Which host each is published on is deployment topology and is deliberately \
 absent from this document, so no `servers` block is emitted.\n\n\
 Every non-2xx response carries a contract `ErrorEnvelope`, built at exactly one place in the \

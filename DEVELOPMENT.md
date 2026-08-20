@@ -17,43 +17,43 @@ configuration with secret-aware values; the internal error type and its public p
 `tracing` subscriber with optional OTLP span export; liveness, readiness, Prometheus metrics and
 version on an operator listener; SIGTERM draining; and the CI gate in `.github/workflows/ci.yml`.
 
-Present since milestone 2 and 3: the `identity` and `operations` schemas in `migrations/`, a local
-PostgreSQL in `compose.yaml`, the `ratatoskr-platform-persistence` pool and embedded migrator, and the
+Present since milestone 2 and 3: the `identity` and `operations` schemas in `schema.sql`, a local
+PostgreSQL in `compose.yaml`, the `ratatoskr-platform-persistence` pool and embedded schema, and the
 `ratatoskr-platform-identity` and `ratatoskr-platform-operations` crates with their integration suites.
 
 Present since milestone 9: periodic command publication. `ratatoskr-scheduler` reads
 `operations.schedules`, mints a deterministic occurrence identifier for each due time, and writes
 the occurrence, an operation and an outbox command in ONE transaction. It requires
-`RATATOSKR__DATABASE__URL`, applies no migrations, and reads no `RATATOSKR__BUS__*` variable at
+`RATATOSKR__DATABASE__URL`, applies no schema, and reads no `RATATOSKR__BUS__*` variable at
 all: it publishes into the outbox and `ratatoskr-edge` runs the only pump (ADR-0013). The
 single-host deployment profile is in `deploy/` — three systemd units, two PostgreSQL role files,
 the NATS server configuration with its one nkey identity, a logrotate file and a scrape fragment —
 and `services/edge/tests/deployment_profile.rs` compares the parts of it a binary could
 contradict.
 
-Present since milestone 8: `POST /v2/sessions/telegram`, which exchanges a `ratatoskr-telegram`
+Present since milestone 8: `POST /v1/sessions/telegram`, which exchanges a `ratatoskr-telegram`
 identity assertion for a session (ADR-0011 — Platform holds only the issuer's Ed25519 PUBLIC key, so
 it can verify an assertion and cannot issue one); the OAuth callback facade at
-`GET /v2/oauth/{provider}/callback` and `POST /v2/oauth/relays/{relay_id}` (ADR-0012 — the
+`GET /v1/oauth/{provider}/callback` and `POST /v1/oauth/relays/{relay_id}` (ADR-0012 — the
 authorization code reaches the owning service through a one-time record and appears in no command,
 no log and no redirect); `identity.grants` finally has a reader, and it is what authorizes a claim;
 and `identity.audit_events` finally has a writer, for both the grants and the denials.
 
-Present since milestone 7: `GET /v2/capabilities`; the `platform_ingest` schema and the generic
-webhook adapter at `POST /v2/ingest/webhooks/{source_id}`, served by `ratatoskr-ingest` on a public
+Present since milestone 7: `GET /v1/capabilities`; the `platform_ingest` schema and the generic
+webhook adapter at `POST /v1/ingest/webhooks/{source_id}`, served by `ratatoskr-ingest` on a public
 listener of its own; and the generated public `OpenAPI` document in `openapi/openapi.json`, written
 and drift-checked by `cargo run -p openapic`. `ratatoskr-ingest` now REQUIRES
-`RATATOSKR__DATABASE__URL` and a public listener, applies no migrations, and refuses to start against
-a database `ratatoskr-edge` has not migrated.
+`RATATOSKR__DATABASE__URL` and a public listener, applies no schema, and refuses to start against a
+database `ratatoskr-edge` has not prepared.
 
 Present since milestone 6: the outbox publisher and the operation-event consumer run inside
-`ratatoskr-edge`, and `GET /v2/operations/{id}/events` streams progress as Server-Sent Events with
-`Last-Event-ID` replay. The bus is optional — a developer polling `/v2/operations` needs no broker —
+`ratatoskr-edge`, and `GET /v1/operations/{id}/events` streams progress as Server-Sent Events with
+`Last-Event-ID` replay. The bus is optional — a developer polling `/v1/operations` needs no broker —
 but a deployment without one accumulates commands nobody publishes, which the process warns about at
-startup, and `GET /v2/capabilities` reports `content.submit` as unavailable in it.
+startup, and `GET /v1/capabilities` reports `content.submit` as unavailable in it.
 
-Present since milestone 5: the versioned public API — `POST /v2/captures` and
-`GET /v2/operations/{id}` — session authentication, and the idempotency ledger. `ratatoskr-edge` now
+Present since milestone 5: the versioned public API — `POST /v1/captures` and
+`GET /v1/operations/{id}` — session authentication, and the idempotency ledger. `ratatoskr-edge` now
 REQUIRES `RATATOSKR__DATABASE__URL` and refuses to start without it: every route it serves reads or
 writes the database, and a process that started anyway would report itself ready and then fail every
 request.
@@ -78,7 +78,7 @@ supported one, and every command is run with `--locked` against the committed `C
 
 ## Command families
 
-The first scaffold pull request must **document** exact Rust, PostgreSQL, NATS, migration, test,
+The first scaffold pull request must **document** exact Rust, PostgreSQL, NATS, schema, test,
 OpenAPI, and local-run commands. It does not make all seven runnable: three of them describe
 milestones 2, 4 and 5. Each family below therefore carries a truthful status and the milestone that
 makes it real.
@@ -89,7 +89,7 @@ makes it real.
 | Test | **real** | — |
 | Local run | **real** | — |
 | PostgreSQL | **real** | milestone 2 |
-| Migration | **real** | milestone 2 |
+| Schema | **real** | milestone 2 |
 | NATS | **real** | milestone 4 |
 | `OpenAPI` | **real** | milestone 7 |
 | Artifact | **real** | — |
@@ -244,29 +244,34 @@ database per test and drops it afterwards; a test that panics deliberately leave
 so the failure can be inspected.
 
 `ratatoskr-edge` and `ratatoskr-ingest` both require `RATATOSKR__DATABASE__URL` and refuse to start
-without it. Edge owns the migrations and applies them at startup; ingest applies none — S18 gives it a
+without it. Edge owns `schema.sql` and applies it at startup; ingest applies none — S18 gives it a
 least-privilege role, and a role that may create a schema is not one — so it checks that the schema is
 there and says so in one sentence if it is not.
 
-### Migration — real
+### Schema — real
 
 ```bash
-# Migrations are embedded in the binary by `sqlx::migrate!`, so there is no separate apply step in a
-# deployment: `ratatoskr-edge` applies them at startup, under a PostgreSQL advisory lock, which is
+# `schema.sql` is embedded in the binary by `include_str!`, so there is no separate apply step in a
+# deployment: `ratatoskr-edge` applies it at startup, under a PostgreSQL advisory lock, which is
 # what makes a restart overlapping the previous process's grace window safe.
-docker exec -i ratatoskr-platform-postgres psql -U platform -d platform < migrations/0001_identity.sql
+# This raw form is for a database that has no schema yet. The file opens each schema with a bare
+# `create schema`, so a second run of THIS command fails on the first one that already exists. That
+# is not the path a service takes; see below.
+docker exec -i ratatoskr-platform-postgres psql -U platform -d platform < schema.sql
 ```
 
-**A committed migration is immutable, comments included.** `sqlx` checksums the file, so a corrected
-comment in an applied migration stops every database that already ran it, with a message that names
-no file. Correct it in the next migration's header instead. Adding a migration is safe: `build.rs`
-in `crates/persistence` tracks the directory, and test M-1 fails if the binary and the repository
-disagree about which migrations exist — without both, a new file is silently absent from the
-artifact and `migrate` reports success one migration short.
+**A schema change edits `schema.sql` in place.** There are no migrations, no migration tooling and no
+`_sqlx_migrations` ledger: no database holds data that has to survive a schema change. A wrong
+comment is corrected where it is wrong. `Database::apply_schema` asks whether `identity` exists
+before it applies, under the lock, so calling it twice is a no-op — which is what makes every
+restart after the first one work. The idempotence is that check, not a property of the file.
 
-`migrations/` is one flat directory rather than the two `docs/ARCHITECTURE.md` S3 draws, and the
-queries are checked at run time rather than by the `sqlx::query!` macros. Both choices, and the
-reasons, are ADR-0004.
+The other side of that check: it also means an edited `schema.sql` never reaches a database that
+already has a schema. To pick up a change, drop the database and let the next start create it.
+
+One file rather than the two directories `docs/ARCHITECTURE.md` S3 once drew, and the queries are
+checked at run time rather than by the `sqlx::query!` macros. Both choices, and the reasons, are
+ADR-0004.
 
 ### NATS — real
 
@@ -304,7 +309,7 @@ class prefix is the privilege boundary a NATS credential is granted over.
 
 `ratatoskr-edge` REQUIRES `RATATOSKR__BUS__URL` and refuses to start without it, exactly as it
 refuses without a database. It was a warning until milestone 7's survey pointed out what that bought:
-edge came up healthy, reported `content.submit` unavailable through `/v2/capabilities`, and piled
+edge came up healthy, reported `content.submit` unavailable through `/v1/capabilities`, and piled
 every accepted capture into `operations.outbox` with no publisher and no alert — a service that
 passes its own readiness check while doing nothing.
 
@@ -401,7 +406,7 @@ happens. A property of a SET — a queue depth, an operation age, whether a capa
 is not knowable from any single write, so it is sampled on a timer by `ratatoskr-edge`'s observer
 every fifteen seconds, which is the scrape interval. Publishing a set property from a write path
 would put a full scan on a request to keep a gauge fresh between scrapes; publishing it from the
-handler that happens to report it — `GET /v2/capabilities` — would produce a gauge that reports the
+handler that happens to report it — `GET /v1/capabilities` — would produce a gauge that reports the
 state of the last question rather than the state of the deployment.
 
 **Every label comes from a closed set, and mostly by type.** `capability` is `Capability::ALL`;
@@ -430,7 +435,7 @@ answer stays attached to the question.
 | # | Question | Blocks |
 |---|---|---|
 | Q1 | `README.md` listed `crates/{identity, operations, api-contracts, ingress, platform-infrastructure}`; `docs/ARCHITECTURE.md` S3 lists a different set sharing only `identity` and `operations`. Milestone 1 treats S3 as normative and deleted the README tree. If README's list was intended, S3 must change instead. | milestone 2, which creates the first crate whose name appears in one list and not the other |
-| ~~Q2~~ | ~~**Ingress schema spelling.**~~ **Closed by [ADR-0009](docs/adr/0009-one-spelling-for-generic-ingest.md) at milestone 7.** The word is `ingest` wherever it is an identifier: the schema, the crate, the library, the binary, the S18 database role and the `/v2/ingest` path prefix. `README.md` is corrected; `AGENTS.md` turned out to use "ingress" only in prose and needed no change. | — |
+| ~~Q2~~ | ~~**Ingress schema spelling.**~~ **Closed by [ADR-0009](docs/adr/0009-one-spelling-for-generic-ingest.md) at milestone 7.** The word is `ingest` wherever it is an identifier: the schema, the crate, the library, the binary, the S18 database role and the `/v1/ingest` path prefix. `README.md` is corrected; `AGENTS.md` turned out to use "ingress" only in prose and needed no change. | — |
 | Q3 | **Event family mismatch.** `README.md` names `platform.operation.accepted.v1`, `.completed.v1` and `.failed.v1`, but `ratatoskr-contracts` ships only `platform.operation.progressed.v1`, whose payload is a state-carried `OperationSnapshot` covering every transition. Either Platform emits one event type or contracts gains three. Contracts made the choice; README looks stale. | milestone 4 |
 | Q4 | **`correlation` is not in `contracts.toml [entity_kinds].known`.** `EntityKind` is open on the wire, so nothing breaks at milestones 1 through 3, but a Platform event fixture carrying `correlation:` fails `cargo contracts check`. The fix is a one-line contracts changeset. See [ADR-0007](docs/adr/0007-correlation-identity-and-trace-context.md). | milestone 4, **hard** |
 | Q5 | Contracts pins `serde_json = "=1.0.151"` and `schemars = "=1.2.2"` exactly. Those are graph-wide constraints: Platform cannot move past them while depending on this contracts commit, including for a security advisory. The remedy is a contracts bump, and it is worth knowing before an advisory rather than during one. | any milestone, on the day it happens |

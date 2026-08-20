@@ -113,7 +113,7 @@ async fn send(
 fn callback(provider: &str, query: &str) -> Request<Body> {
     Request::builder()
         .method("GET")
-        .uri(format!("/v2/oauth/{provider}/callback?{query}"))
+        .uri(format!("/v1/oauth/{provider}/callback?{query}"))
         .body(Body::empty())
         .expect("a request")
 }
@@ -121,7 +121,7 @@ fn callback(provider: &str, query: &str) -> Request<Body> {
 fn claim(relay_id: Uuid, credential: &str) -> Request<Body> {
     Request::builder()
         .method("POST")
-        .uri(format!("/v2/oauth/relays/{relay_id}"))
+        .uri(format!("/v1/oauth/relays/{relay_id}"))
         .header("authorization", format!("Bearer {credential}"))
         .body(Body::empty())
         .expect("a request")

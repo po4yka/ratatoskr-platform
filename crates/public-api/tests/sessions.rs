@@ -1,4 +1,4 @@
-//! `POST /v2/sessions/telegram` — tests X-1 … X-6.
+//! `POST /v1/sessions/telegram` — tests X-1 … X-6.
 //!
 //! The route is how a caller becomes authenticated, so it is unauthenticated itself and everything
 //! about it has to hold on that basis. ADR-0011 is the design; these are its consequences.
@@ -76,7 +76,7 @@ fn app(state: ApiState) -> Router {
 fn exchange(token: &str) -> Request<Body> {
     Request::builder()
         .method("POST")
-        .uri("/v2/sessions/telegram")
+        .uri("/v1/sessions/telegram")
         .header("content-type", "application/json")
         .body(Body::from(
             serde_json::json!({ "assertion": token }).to_string(),
@@ -113,7 +113,7 @@ async fn the_minted_credential_authenticates() {
     // The proof: use it on a route that authenticates.
     let request = Request::builder()
         .method("GET")
-        .uri("/v2/capabilities")
+        .uri("/v1/capabilities")
         .header("authorization", format!("Bearer {credential}"))
         .body(Body::empty())
         .expect("a request");
@@ -231,7 +231,7 @@ async fn without_a_key_the_route_refuses_and_the_capability_is_absent() {
 
     let request = Request::builder()
         .method("GET")
-        .uri("/v2/capabilities")
+        .uri("/v1/capabilities")
         .header("authorization", format!("Bearer {credential}"))
         .body(Body::empty())
         .expect("a request");

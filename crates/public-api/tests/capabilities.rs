@@ -1,4 +1,4 @@
-//! `GET /v2/capabilities` — tests P-1 … P-6.
+//! `GET /v1/capabilities` — tests P-1 … P-6.
 //!
 //! ADR-0008 says a capability is reported when its deployment requirement is configured, the
 //! components that requirement names are healthy, and the caller is authorized for it. These tests
@@ -78,7 +78,7 @@ async fn seed(pool: &sqlx::PgPool, credential: &str) {
 }
 
 fn ask(credential: Option<&str>) -> Request<Body> {
-    let mut request = Request::builder().method("GET").uri("/v2/capabilities");
+    let mut request = Request::builder().method("GET").uri("/v1/capabilities");
     if let Some(credential) = credential {
         request = request.header("authorization", format!("Bearer {credential}"));
     }
@@ -129,9 +129,9 @@ async fn the_document_is_the_shape_s12_fixes_and_nothing_more() {
         ["api_version", "capabilities", "minimum_client_versions"],
         "S12 fixes these three members: {body}"
     );
-    assert_eq!(body["api_version"], "2.0");
-    assert_eq!(body["minimum_client_versions"]["web"], "2.0");
-    assert_eq!(body["minimum_client_versions"]["mobile"], "2.0");
+    assert_eq!(body["api_version"], "1.0");
+    assert_eq!(body["minimum_client_versions"]["web"], "1.0");
+    assert_eq!(body["minimum_client_versions"]["mobile"], "1.0");
 }
 
 /// P-2. A whole deployment reports the capability it can honour.
@@ -168,7 +168,7 @@ async fn without_a_bus_the_capability_is_absent_even_though_the_route_answers() 
     // to describe: the request is accepted, the work will not happen.
     let capture = Request::builder()
         .method("POST")
-        .uri("/v2/captures")
+        .uri("/v1/captures")
         .header("authorization", format!("Bearer {CREDENTIAL}"))
         .header("idempotency-key", "p3")
         .header("content-type", "application/json")
@@ -204,7 +204,7 @@ async fn an_unreachable_database_removes_the_capability() {
     assert!(names(&after).is_empty(), "{after}");
 }
 
-/// P-5. The route authenticates like every other `/v2` route, and refuses identically.
+/// P-5. The route authenticates like every other `/v1` route, and refuses identically.
 #[tokio::test]
 async fn the_route_is_authenticated() {
     let harness = TestDatabase::create().await.expect("a test database");
@@ -237,8 +237,8 @@ fn every_capability_names_a_route_this_build_serves() {
 
     for capability in Capability::ALL {
         let required = match capability {
-            Capability::ContentSubmit => "/v2/captures",
-            Capability::TelegramMiniApp => "/v2/sessions/telegram",
+            Capability::ContentSubmit => "/v1/captures",
+            Capability::TelegramMiniApp => "/v1/sessions/telegram",
             // A new variant arrives here and fails until somebody names the route it promises,
             // which is the point: the vocabulary may not grow ahead of the route tree.
             _ => panic!("{capability} names no route in this test; add the one it promises"),

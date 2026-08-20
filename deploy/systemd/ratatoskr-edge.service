@@ -15,7 +15,7 @@ Wants=network-online.target
 
 # Restart forever. There is no orchestrator on this host to notice a unit in `failed`, and every
 # reason this process refuses to start — the database is not up yet, the schema has not been
-# migrated yet, the nkey seed is not in place yet — is transient on a first boot. A start limit
+# applied yet, the nkey seed is not in place yet — is transient on a first boot. A start limit
 # would latch the unit into `failed` with nothing to retry it, which
 # `ratatoskr-workspace/docs/DEPLOYMENT_TARGET.md` names as a live failure on this host.
 StartLimitIntervalSec=0

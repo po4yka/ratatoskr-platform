@@ -56,7 +56,7 @@ pub struct SessionMinted {
 /// attacker-chosen.
 const MAX_ASSERTION: usize = 4096;
 
-/// `POST /v2/sessions/telegram`.
+/// `POST /v1/sessions/telegram`.
 ///
 /// Verify, resolve the person, mint. The resolution and the minting are ONE transaction with the
 /// nonce record, so a crash between them cannot leave a session minted with its nonce unrecorded —
@@ -77,7 +77,7 @@ pub async fn exchange_telegram(
         return platform_http::reject(FailureKind::InvalidRequest);
     };
 
-    // No key, no exchange. `GET /v2/capabilities` reports `telegram.mini_app` as unavailable in this
+    // No key, no exchange. `GET /v1/capabilities` reports `telegram.mini_app` as unavailable in this
     // deployment, so a client can tell before it tries — which is what that endpoint is for.
     let Some(key) = state.assertion_key.as_ref() else {
         tracing::warn!(
@@ -290,7 +290,7 @@ async fn refuse(state: &ApiState, correlation: &str, reason: &'static str) -> Re
 /// How this route is described in the generated `OpenAPI` document.
 pub const DOC: RouteDoc = RouteDoc {
     method: Method::Post,
-    path: "/v2/sessions/telegram",
+    path: "/v1/sessions/telegram",
     operation_id: "exchangeTelegramAssertion",
     summary: "Exchange a Telegram identity assertion for a session",
     description: "\

@@ -445,11 +445,11 @@ pub async fn collect_occurrences_before(
     Ok(done.rows_affected())
 }
 
-/// Whether the migrations that own these tables have been applied.
+/// Whether the schema that owns these tables has been applied.
 ///
-/// `ratatoskr-scheduler` does not migrate: `ARCHITECTURE.md` S18 gives it its own least-privilege
-/// database role, and a role that may create a table is not one. `ratatoskr-edge` owns the
-/// migrations, so this is the check that turns "edge has never run here" into one sentence at
+/// `ratatoskr-scheduler` does not create it: `ARCHITECTURE.md` S18 gives it its own least-privilege
+/// database role, and a role that may create a table is not one. `ratatoskr-edge` owns
+/// `schema.sql`, so this is the check that turns "edge has never run here" into one sentence at
 /// startup instead of a Postgres error on the first tick.
 ///
 /// # Errors

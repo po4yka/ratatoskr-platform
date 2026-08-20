@@ -90,7 +90,7 @@ async fn seed(pool: &sqlx::PgPool, token: &str) -> (Uuid, Uuid) {
 fn push(source: Uuid, token: Option<&str>, key: Option<&str>, body: &str) -> Request<Body> {
     let mut request = Request::builder()
         .method("POST")
-        .uri(format!("/v2/ingest/webhooks/{source}"))
+        .uri(format!("/v1/ingest/webhooks/{source}"))
         .header("content-type", "application/json");
     if let Some(token) = token {
         request = request.header("authorization", format!("Bearer {token}"));

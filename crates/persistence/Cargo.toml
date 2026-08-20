@@ -1,13 +1,11 @@
 [package]
 name        = "ratatoskr-platform-persistence"
-description = "The PostgreSQL pool, the embedded migrator, and the readiness probe for both."
+description = "The PostgreSQL pool, the embedded schema, and the readiness probe for both."
 version.workspace      = true
 edition.workspace      = true
 rust-version.workspace = true
 license.workspace      = true
 repository.workspace   = true
-# Rebuilds this crate when a migration is ADDED; `sqlx::migrate!` tracks files, not the directory.
-build = "build.rs"
 
 [lib]
 name = "platform_persistence"

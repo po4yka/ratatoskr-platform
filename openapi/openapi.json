@@ -41,7 +41,7 @@
         "description": "What a client gets back.\n\n`ARCHITECTURE.md` S5.1: the API acknowledges durable ACCEPTANCE, not completion. The body\ntherefore carries an operation to poll and nothing that could be mistaken for a result.",
         "properties": {
           "operation_id": {
-            "description": "The operation to poll at `/v2/operations/{id}`.",
+            "description": "The operation to poll at `/v1/operations/{id}`.",
             "format": "uuid",
             "type": "string"
           },
@@ -502,7 +502,7 @@
         "description": "What a source gets back.",
         "properties": {
           "operation_id": {
-            "description": "The operation created for this signal. The owner of the source can read it at\n`GET /v2/operations/{operation_id}`; the source itself cannot, because it has no session.",
+            "description": "The operation created for this signal. The owner of the source can read it at\n`GET /v1/operations/{operation_id}`; the source itself cannot, because it has no session.",
             "format": "uuid",
             "type": "string"
           },
@@ -619,7 +619,7 @@
     }
   },
   "info": {
-    "description": "Generated from the route tables of `ratatoskr-platform`; never hand-edited (ADR-0006). The major version is in the path and a new major is a new prefix served alongside the old one, never a change in place. It starts at 2 because Ratatoskr Next is the second system to serve this surface.\n\nTwo listeners serve the paths below and they are not the same address: `/v2/captures`, `/v2/operations/*` and `/v2/capabilities` are served by `ratatoskr-edge`, and `/v2/ingest/*` by `ratatoskr-ingest`. Which host each is published on is deployment topology and is deliberately absent from this document, so no `servers` block is emitted.\n\nEvery non-2xx response carries a contract `ErrorEnvelope`, built at exactly one place in the implementation. Its `code` is a closed vocabulary; its `message` is safe to display; it never carries a provider diagnostic.\n\nAny route may answer `503 platform.limit.overloaded`. It is not listed per route because it is not a property of any route: the listener bounds how many requests it holds at once and sheds the rest immediately rather than queueing them, so the answer arrives before routing has happened. It is retryable, and the condition clears as work drains. `429 platform.limit.rate_exceeded` IS listed per route, because it belongs to the caller rather than to the service and only routes that identify a caller can produce it.",
+    "description": "Generated from the route tables of `ratatoskr-platform`; never hand-edited (ADR-0006). The major version is in the path and a new major is a new prefix served alongside the old one, never a change in place. This document describes the first version. The project is in development, so no second major exists.\n\nTwo listeners serve the paths below and they are not the same address: `/v1/captures`, `/v1/operations/*` and `/v1/capabilities` are served by `ratatoskr-edge`, and `/v1/ingest/*` by `ratatoskr-ingest`. Which host each is published on is deployment topology and is deliberately absent from this document, so no `servers` block is emitted.\n\nEvery non-2xx response carries a contract `ErrorEnvelope`, built at exactly one place in the implementation. Its `code` is a closed vocabulary; its `message` is safe to display; it never carries a provider diagnostic.\n\nAny route may answer `503 platform.limit.overloaded`. It is not listed per route because it is not a property of any route: the listener bounds how many requests it holds at once and sheds the rest immediately rather than queueing them, so the answer arrives before routing has happened. It is retryable, and the condition clears as work drains. `429 platform.limit.rate_exceeded` IS listed per route, because it belongs to the caller rather than to the service and only routes that identify a caller can produce it.",
     "license": {
       "name": "BSD-3-Clause"
     },
@@ -630,7 +630,7 @@
   "jsonSchemaDialect": "https://json-schema.org/draft/2020-12/schema",
   "openapi": "3.1.0",
   "paths": {
-    "/v2/capabilities": {
+    "/v1/capabilities": {
       "get": {
         "description": "Returns the API version, the client-version floors, and the capabilities available to the caller.\n\nA capability is a stable name a client gates a feature on. It appears when this deployment has the components that capability needs, those components answered their last health probe, and the caller is authorized for it. It disappears the moment any of the three stops holding, so a client must read this on every session rather than caching it across deployments.\n\nThe array is sorted and its vocabulary is closed: a name that is absent is a name this deployment cannot honour, never a name it forgot to mention. Treat an unfamiliar name as a feature this client does not implement, and a familiar name that is absent as a feature to hide.",
         "operationId": "readCapabilities",
@@ -677,9 +677,9 @@
         ]
       }
     },
-    "/v2/captures": {
+    "/v1/captures": {
       "post": {
-        "description": "Accepts the address durably and returns the operation that tracks it. It does NOT return a result: the work happens elsewhere, and `GET /v2/operations/{operation_id}` is where its outcome appears.\n\n`Idempotency-Key` is required, not optional. A capture is a replayable mutation, and a retry without a key is a second operation that looks like the first. Retrying with the same key and the same body returns the ORIGINAL operation; the same key with a different body is refused, because honouring it would silently replace the meaning of a request already sent.\n\nThe address is checked only for a usable scheme and host. Fetching it, following its redirects and bounding what it returns belong to the service that opens the connection, not to this one.",
+        "description": "Accepts the address durably and returns the operation that tracks it. It does NOT return a result: the work happens elsewhere, and `GET /v1/operations/{operation_id}` is where its outcome appears.\n\n`Idempotency-Key` is required, not optional. A capture is a replayable mutation, and a retry without a key is a second operation that looks like the first. Retrying with the same key and the same body returns the ORIGINAL operation; the same key with a different body is refused, because honouring it would silently replace the meaning of a request already sent.\n\nThe address is checked only for a usable scheme and host. Fetching it, following its redirects and bounding what it returns belong to the service that opens the connection, not to this one.",
         "operationId": "submitCapture",
         "parameters": [
           {
@@ -775,7 +775,7 @@
         ]
       }
     },
-    "/v2/ingest/webhooks/{source_id}": {
+    "/v1/ingest/webhooks/{source_id}": {
       "post": {
         "description": "Accepts one signal from a registered webhook source and turns it into a durable operation for the user who owns that source. It is not a client route: the credential authenticates a machine, and the operation it creates is readable by the source's owner rather than by the source.\n\n`Idempotency-Key` carries the source's OWN identifier for the event — a delivery id, a message id, whatever the sender already uses to recognise a redelivery. It is required. Delivering the same identifier with the same body again returns the operation the first delivery created, which is what stops an at-least-once webhook becoming duplicate work; the same identifier with a different body is refused. Identifiers are scoped per source, so two sources need not coordinate.\n\nThe body shape is fixed by this API, not by the sender: a source that cannot emit it needs a shim in front, because parsing a provider's own format is provider-specific work that belongs in a provider's own service.",
         "operationId": "receiveWebhookSignal",
@@ -883,7 +883,7 @@
         ]
       }
     },
-    "/v2/oauth/relays/{relay_id}": {
+    "/v1/oauth/relays/{relay_id}": {
       "post": {
         "description": "For the service that owns the provider, and for nobody else. Returns the authorization code once and destroys it in the same statement, so a second claim returns nothing and no copy remains.\n\nRequires a SERVICE session whose principal holds the claim capability for that provider, for example `oauth.claim.github`. A person's session is refused as if the relay did not exist. So is an unknown relay, an expired one, one already claimed, and one whose capability the caller does not hold — one answer for all five, because which relays exist and what each needs is not a caller's business.",
         "operationId": "claimOauthRelay",
@@ -962,7 +962,7 @@
         ]
       }
     },
-    "/v2/oauth/{provider}/callback": {
+    "/v1/oauth/{provider}/callback": {
       "get": {
         "description": "The public endpoint a provider redirects a browser back to. It records the callback for the service that owns the provider and sends the browser to this deployment's completion page.\n\nPlatform does not exchange the authorization code, does not validate the `state`, and holds no client secret — all three belong to the owning service, which is the only party that can tell a real callback from a forged one. The code is handed to that service over an authenticated route and appears in no command, no log and no redirect.\n\nUnauthenticated by construction: a browser arriving from a provider carries no credential of ours. The same completion page is returned whether the provider authorized or refused, because the person is finished here either way.",
         "operationId": "receiveOauthCallback",
@@ -1036,9 +1036,9 @@
         ]
       }
     },
-    "/v2/operations/{operation_id}": {
+    "/v1/operations/{operation_id}": {
       "get": {
-        "description": "Returns the operation as a snapshot: its status, the stage it is in, its progress, and its result or its errors once it has one. The same shape every consumer of an operation sees; there is no second, API-only projection to keep in step.\n\nPoll this, or subscribe to `GET /v2/operations/{operation_id}/events` to be told instead of asking. An operation you do not own and an operation that does not exist both answer 404, so this route cannot be used to discover which identifiers are real.",
+        "description": "Returns the operation as a snapshot: its status, the stage it is in, its progress, and its result or its errors once it has one. The same shape every consumer of an operation sees; there is no second, API-only projection to keep in step.\n\nPoll this, or subscribe to `GET /v1/operations/{operation_id}/events` to be told instead of asking. An operation you do not own and an operation that does not exist both answer 404, so this route cannot be used to discover which identifiers are real.",
         "operationId": "readOperation",
         "parameters": [
           {
@@ -1115,7 +1115,7 @@
         ]
       }
     },
-    "/v2/operations/{operation_id}/events": {
+    "/v1/operations/{operation_id}/events": {
       "get": {
         "description": "A `text/event-stream` of the operation's recorded progress. Each frame carries `event: progress`, an `id` that is the progress entry's identifier, and a JSON `data` object with the status, the stage, the percentage and the instant the entry was observed.\n\nReconnect with `Last-Event-ID` set to the last `id` you received and the stream resumes after that entry, so a dropped connection loses nothing. The stream ends when the operation reaches a terminal status, because no further entry can arrive; a client that sees the stream close should read the operation once to learn the outcome. A comment frame every fifteen seconds keeps an idle connection open through a proxy.\n\nDisconnecting does not affect the operation. This route reads persisted state only — no client connection reaches the event bus, and nothing appears here that was not durably recorded first.",
         "operationId": "streamOperationEvents",
@@ -1194,7 +1194,7 @@
         ]
       }
     },
-    "/v2/sessions/telegram": {
+    "/v1/sessions/telegram": {
       "post": {
         "description": "Takes a short-lived assertion issued by `ratatoskr-telegram` — which is the service that owns the bot token and validates the raw Mini App `initData` — and returns a Platform session credential.\n\nThe credential is returned ONCE. Only its digest is stored, so it cannot be recovered afterwards; a client that loses it exchanges a new assertion.\n\nAn assertion is single-use. Presenting the same one twice mints one session, and the second attempt is refused exactly as an invalid one is. Every refusal is the same 401: a missing key, a bad signature, a wrong audience, an expired assertion and a replayed one are indistinguishable from outside, because the difference is a fact about the verification and not about the caller.\n\nThe internal user is independent of the Telegram account. Signing in for the first time creates one.",
         "operationId": "exchangeTelegramAssertion",

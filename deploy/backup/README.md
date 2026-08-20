@@ -49,7 +49,7 @@ sudo systemctl start ratatoskr-backup.service   # once, now, rather than waiting
 
 ## The rehearsal
 
-Run this after installing, and again after any migration that changes a constraint. It restores into
+Run this after installing, and again after any schema change that changes a constraint. It restores into
 a scratch database on the same cluster, so it needs no second machine and touches nothing live.
 
 PostgreSQL is a container on this host, so every command below enters it. `--jobs` is deliberately

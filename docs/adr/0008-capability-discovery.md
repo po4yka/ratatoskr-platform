@@ -66,7 +66,7 @@ and true. A longer answer would only be longer.
 
 ### The endpoint is authenticated
 
-Every other `/v2` route is. Three reasons this one stays with them:
+Every other `/v1` route is. Three reasons this one stays with them:
 
 1. The "authorized" input is per-principal by definition, and an anonymous caller has no principal.
 2. The "healthy" input is derived from operational state. `content.submit` disappearing tells the
@@ -88,7 +88,7 @@ the API's behaviour and the operator does not decide that.
 
 ## Consequences
 
-- `GET /v2/capabilities` returns exactly S12's three members, and the `capabilities` array is
+- `GET /v1/capabilities` returns exactly S12's three members, and the `capabilities` array is
   sorted, so two consecutive responses from an unchanged deployment are byte-identical.
 - A capability that is enabled and healthy for one principal is enabled and healthy for all of them
   today. When the first grant-gated capability lands, the response becomes per-principal and the
@@ -109,7 +109,8 @@ unavailable — is why the route is not anonymous.
 
 Adding a variant adds an array element, which every client must already tolerate, because the point
 of the endpoint is that the array changes. Removing one is a breaking change for any client that
-gates on it and is therefore a `/v3` concern.
+gates on it. No second major exists while the project is in development, so a variant is not
+removed.
 
 ## Validation
 

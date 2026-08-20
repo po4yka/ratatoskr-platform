@@ -14,7 +14,7 @@ services:
     # Pinned to the major version the deployment target runs, which is 17
     # (`ratatoskr-workspace/docs/DEPLOYMENT_TARGET.md`). ADR-0004 chose runtime-checked queries, so
     # this container is the ONLY verification the SQL gets — against a different major it verifies
-    # the wrong thing. A major upgrade is a migration exercise, not a tag bump.
+    # the wrong thing. A major upgrade is a data-migration exercise, not a tag bump.
     image: postgres:17
     container_name: ratatoskr-platform-postgres
     environment:
@@ -27,7 +27,7 @@ services:
       - "127.0.0.1:5432:5432"
     healthcheck:
       # `pg_isready` returns success while the server is still replaying WAL, so the check also runs a
-      # trivial query. A migration that starts too early fails with a confusing connection error.
+      # trivial query. A schema apply that starts too early fails with a confusing connection error.
       test: ["CMD-SHELL", "pg_isready -U platform -d platform && psql -U platform -d platform -c 'select 1' > /dev/null"]
       interval: 1s
       timeout: 5s

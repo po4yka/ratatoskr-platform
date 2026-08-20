@@ -11,7 +11,7 @@ surface with no routes is a guess. Milestone 5 adds the first two, so it is due.
 
 Two questions, and the second is a genuine contradiction in the documents rather than an open choice.
 
-`ARCHITECTURE.md` S5.3 requires "versioned `/v2` resource-oriented routes" and names OpenAPI "the
+`ARCHITECTURE.md` S5.3 requires "versioned `/v1` resource-oriented routes" and names OpenAPI "the
 public client contract". `INTERFACES.md` says "public routes use generated OpenAPI contracts".
 `README.md` line 168 says APIs are "generated from the public OpenAPI contract" — generated FROM it,
 the opposite direction.
@@ -45,7 +45,7 @@ ownership and one disclaiming it.
 `ratatoskr-contracts` owns the types those routes carry and does not describe the HTTP surface.**
 
 The split is: contracts says what an `OperationSnapshot` is; Platform says that
-`GET /v2/operations/{id}` returns one, under which authentication, with which failures. Neither can
+`GET /v1/operations/{id}` returns one, under which authentication, with which failures. Neither can
 state the other's half, so neither can contradict it.
 
 `README.md` line 168 is wrong and is corrected by this ADR: routes are the source, the document is
@@ -56,16 +56,22 @@ silently.
 
 ### Versioning
 
-The major version is in the path: `/v2/captures`, `/v2/operations/{id}`. Not a header, and not
+The major version is in the path: `/v1/captures`, `/v1/operations/{id}`. Not a header, and not
 content negotiation: a path is visible in a log, in a proxy rule and in a NATS-free curl command, and
 `ARCHITECTURE.md` S5.3 already fixed the form.
 
-It starts at **2**, not 1. Ratatoskr Next is the second system to serve this surface; a client that
-ever spoke to the retired backend would otherwise find two different `/v1` meanings.
+It starts at **1**. There is one version of this surface and it is the first.
+**Amended when the project recorded its in-development status.** These two lines originally read
+"It starts at **2**, not 1", and gave a retired predecessor system as the reason. That reason is
+not void — the retired backend did serve a published `/v1` surface — but it no longer decides this
+one. The owner has recorded that the project is in development, and that rule says the API keeps its
+first version. A path served by a retired system is not a claim on the number this one starts at. No
+second major is added while the project is in development.
 
 A new major is a new path prefix served alongside the old one, never a change in place. The
-idempotency ledger stores the route with its version for the same reason: a key reserved against
-`/v2/captures` must not be honoured against `/v3/captures`, because the two accept different bodies.
+idempotency ledger stores the route with its version for the same reason: a key reserved against one
+major must not be honoured against another, because the two accept different bodies. There is one
+major, so every stored route carries `/v1`.
 
 ## Consequences
 

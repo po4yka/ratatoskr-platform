@@ -21,7 +21,7 @@ use platform_identity::audit::{self, AuditEvent, AuditOutcome};
 use crate::{ApiState, Principal};
 
 /// The route, as stored in the idempotency ledger.
-const ROUTE: &str = "/v2/captures";
+const ROUTE: &str = "/v1/captures";
 
 /// What the submitted work is. Present tense: a kind names an activity, not a completed fact.
 const OPERATION_KIND: &str = "content.capture.submit";
@@ -45,13 +45,13 @@ pub struct SubmitCapture {
 /// therefore carries an operation to poll and nothing that could be mistaken for a result.
 #[derive(Debug, serde::Serialize, schemars::JsonSchema)]
 pub struct CaptureAccepted {
-    /// The operation to poll at `/v2/operations/{id}`.
+    /// The operation to poll at `/v1/operations/{id}`.
     pub operation_id: Uuid,
     /// Always `accepted` here. Present so a client never has to infer it from the status code.
     pub status: &'static str,
 }
 
-/// `POST /v2/captures`.
+/// `POST /v1/captures`.
 ///
 /// Refuses rather than guesses: no `Idempotency-Key` is a client error, because a replayable
 /// mutation without one is an unprotected write that only looks safe.
@@ -264,7 +264,7 @@ pub const DOC: RouteDoc = RouteDoc {
     summary: "Submit an address for capture",
     description: "\
 Accepts the address durably and returns the operation that tracks it. It does NOT return a result: \
-the work happens elsewhere, and `GET /v2/operations/{operation_id}` is where its outcome appears.\n\n\
+the work happens elsewhere, and `GET /v1/operations/{operation_id}` is where its outcome appears.\n\n\
 `Idempotency-Key` is required, not optional. A capture is a replayable mutation, and a retry \
 without a key is a second operation that looks like the first. Retrying with the same key and the \
 same body returns the ORIGINAL operation; the same key with a different body is refused, because \

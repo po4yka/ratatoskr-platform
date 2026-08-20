@@ -10,7 +10,7 @@
 //!   must satisfy before it binds anything.
 //! - [`error`] — [`PlatformError`] and the closed public failure taxonomy the HTTP boundary
 //!   projects onto a contract `ErrorEnvelope`.
-//! - [`capability`] — [`Capability`], the closed vocabulary `GET /v2/capabilities` reports from.
+//! - [`capability`] — [`Capability`], the closed vocabulary `GET /v1/capabilities` reports from.
 //! - [`address`] — the one bound both routes that accept an address apply.
 
 pub mod address;

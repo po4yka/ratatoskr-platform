@@ -59,11 +59,13 @@ ratatoskr-event-envelope  = { git = "https://github.com/po4yka/ratatoskr-contrac
 ratatoskr-operation-contracts = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "6b3ddd961a733af293a035931fed2ce3cc8599dd" }
 
 # ---- persistence ----
-# `migrate` embeds migrations/ into the binary, so a deployment cannot drift from its schema.
+# No `migrate` feature: the schema is one file, `include_str!`d into the binary by
+# `ratatoskr-platform-persistence`, so a deployment cannot drift from its schema and there is no
+# ledger to record.
 # `time` rather than `chrono`: contracts uses jiff on the wire, neither is a native sqlx type, and
 # `time::OffsetDateTime` converts to a jiff::Timestamp through unix nanoseconds without a calendar.
 sqlx = { version = "0.8.6", default-features = false, features = [
-    "runtime-tokio", "tls-rustls-ring", "postgres", "uuid", "time", "macros", "migrate",
+    "runtime-tokio", "tls-rustls-ring", "postgres", "uuid", "time", "macros",
 ] }
 
 # ---- async runtime and HTTP ----

@@ -3,9 +3,9 @@
 //! Milestones 1 to 7: typed configuration, telemetry, the operator listener, the public API, the
 //! outbox publisher, the operation-event consumer and the capability document.
 //!
-//! It also owns the migrations. `ratatoskr-ingest` reads two of the schemas and applies none of
+//! It also owns the schema. `ratatoskr-ingest` reads two of the schemas and applies none of
 //! them (`ARCHITECTURE.md` S18: separate, least-privilege database roles), so this is the one
-//! process that brings a database up to date.
+//! process that prepares a database.
 
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -83,7 +83,7 @@ const BUS_PROBE_INTERVAL: Duration = Duration::from_secs(5);
 struct EdgeRoutes;
 
 impl platform_http::PublicRoutes for EdgeRoutes {
-    /// Connect, migrate, build the routes, and start the two background loops.
+    /// Connect, apply the schema, build the routes, and start the two background loops.
     ///
     /// Refusing to start without a database is deliberate: every route this binary serves reads or
     /// writes one, and a process that started anyway would report itself ready and then fail every
@@ -106,13 +106,13 @@ impl platform_http::PublicRoutes for EdgeRoutes {
             .await
             .map_err(|error| format!("the database could not be reached: {error}"))?;
         database
-            .migrate()
+            .apply_schema()
             .await
-            .map_err(|error| format!("the schema could not be brought up to date: {error}"))?;
+            .map_err(|error| format!("the schema could not be applied: {error}"))?;
 
         // A missing bus is fatal, exactly as a missing database is. It was a warning until
         // milestone 7's survey pointed out what that bought: edge came up healthy, reported
-        // `content.submit` unavailable through `/v2/capabilities`, and piled every accepted capture
+        // `content.submit` unavailable through `/v1/capabilities`, and piled every accepted capture
         // into `operations.outbox` forever with no publisher and no alert — a silently useless
         // service that passes its own readiness check. Refusing to start is the same answer this
         // file already gives to a missing database twenty lines above, and for the same reason.
@@ -162,7 +162,7 @@ impl platform_http::PublicRoutes for EdgeRoutes {
             // Always true now that a bus is required to start. Kept as a parameter rather than
             // folded away because `ApiState` is also built by tests that exercise the
             // bus-less capability document, and because it is the honest shape of the question
-            // `GET /v2/capabilities` asks.
+            // `GET /v1/capabilities` asks.
             true,
         );
         // Decoded once, here, rather than on every request. Rule V14 already refused a key that is
@@ -293,7 +293,7 @@ fn spawn_observer(
 /// **`operations.operations` is deliberately untouched.** Everything this removes is a record the
 /// SYSTEM wrote for its own correctness — a deduplication marker, a delivered message, a security
 /// decision, an occurrence — and removing one changes nothing a person can see. Operation history
-/// is the opposite: it is what a user reads at `GET /v2/operations/{id}`, so how long it is kept is
+/// is the opposite: it is what a user reads at `GET /v1/operations/{id}`, so how long it is kept is
 /// a product decision with somebody on the other end of it, and no milestone owns that decision.
 /// `DEVELOPMENT.md` records it as open rather than leaving it to be discovered.
 ///

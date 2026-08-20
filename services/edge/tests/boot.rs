@@ -54,10 +54,10 @@ fn each_role_boots_on_its_documented_configuration_and_reports_ready() {
         9464,
     );
 
-    // Ingest, since milestone 7: a public listener of its own and a database it does not migrate.
-    // It runs AFTER edge on purpose — edge owns the migrations, so this order is the ownership
-    // relation, executed. Reversing the two makes ingest refuse to start, which is the behaviour
-    // `ingest_refuses_to_start_against_an_unmigrated_database` asserts deliberately.
+    // Ingest, since milestone 7: a public listener of its own and a database whose schema it does
+    // not create. It runs AFTER edge on purpose — edge owns `schema.sql`, so this order is the
+    // ownership relation, executed. Reversing the two makes ingest refuse to start, which is the
+    // behaviour `ingest_refuses_to_start_against_an_unprepared_database` asserts deliberately.
     boots(
         "ratatoskr-ingest",
         &[
@@ -71,7 +71,7 @@ fn each_role_boots_on_its_documented_configuration_and_reports_ready() {
 
     // The scheduler, since milestone 9: it reads its schedules from a database and refuses to start
     // without one, so there is now NO role that serves without a database. Like ingest it runs after
-    // edge, and for the same reason — edge owns the migrations.
+    // edge, and for the same reason — edge owns `schema.sql`.
     boots(
         "ratatoskr-scheduler",
         &[("RATATOSKR__DATABASE__URL", &database_url())],
@@ -133,7 +133,7 @@ fn edge_refuses_to_start_without_a_database() {
 /// B-4b. Edge refuses to start without a bus, for the same reason it refuses without a database.
 ///
 /// Until milestone 7's survey this was a WARNING, and what that bought was worse than a crash: edge
-/// came up healthy, reported `content.submit` unavailable through `/v2/capabilities`, and piled
+/// came up healthy, reported `content.submit` unavailable through `/v1/capabilities`, and piled
 /// every accepted capture into `operations.outbox` with no publisher and no alert. A service that
 /// passes its own readiness check while doing nothing is the hardest kind of failure to notice.
 #[test]
@@ -170,25 +170,25 @@ fn ingest_refuses_to_start_without_a_database() {
     );
 }
 
-/// B-6. Ingest refuses to start against a database nobody migrated, and says who does.
+/// B-6. Ingest refuses to start against a database nobody prepared, and says who does.
 ///
 /// `docs/ARCHITECTURE.md` S18 gives ingest a least-privilege database role, and a role that may
-/// create a schema is not least-privilege — so ingest applies no migrations and `ratatoskr-edge`
-/// owns them. Without this check the failure would arrive as a Postgres error on the first inbound
-/// signal, hours later, in a log nobody is reading.
+/// create a schema is not least-privilege — so ingest applies no schema and `ratatoskr-edge` owns
+/// `schema.sql`. Without this check the failure would arrive as a Postgres error on the first
+/// inbound signal, hours later, in a log nobody is reading.
 ///
 /// The `postgres` maintenance database is the target because it is guaranteed to exist on the same
-/// server, is reachable with the same credential, and has never had a Platform migration applied to
+/// server, is reachable with the same credential, and has never had the Platform schema applied to
 /// it. No fixture, no cleanup, and nothing to leave behind.
 #[test]
-fn ingest_refuses_to_start_against_an_unmigrated_database() {
-    let unmigrated = maintenance_database_url();
+fn ingest_refuses_to_start_against_an_unprepared_database() {
+    let unprepared = maintenance_database_url();
     let text = refuses_to_start(
         "ratatoskr-ingest",
         &[
             ("RATATOSKR__ADMIN__BIND", "127.0.0.1:9469"),
             ("RATATOSKR__PUBLIC__BIND", "127.0.0.1:8092"),
-            ("RATATOSKR__DATABASE__URL", &unmigrated),
+            ("RATATOSKR__DATABASE__URL", &unprepared),
         ],
     );
     assert!(
@@ -197,7 +197,7 @@ fn ingest_refuses_to_start_against_an_unmigrated_database() {
     );
     assert!(
         text.contains("ratatoskr-edge"),
-        "the refusal must name the process that applies the migrations\n{text}"
+        "the refusal must name the process that applies the schema\n{text}"
     );
 }
 
@@ -358,10 +358,10 @@ fn a_listener_that_cannot_bind_exits_one() {
     let taken = std::net::TcpListener::bind("127.0.0.1:0").expect("a port must be available");
     let port = taken.local_addr().expect("the port is known").port();
 
-    // Its own migrated database, not the shared one. `platform_http::run` builds the routes BEFORE
+    // Its own prepared database, not the shared one. `platform_http::run` builds the routes BEFORE
     // it binds, so a scheduler without a schema exits 1 for the wrong reason — and this test would
     // then pass on the exit code while asserting nothing about the listener. Sharing the database
-    // B-1 migrates would make that depend on which test the harness scheduled first.
+    // B-1 prepares would make that depend on which test the harness scheduled first.
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()

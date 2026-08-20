@@ -67,9 +67,7 @@ ratatoskr-platform/
 │   ├── edge/            (m1)
 │   ├── ingest/          (m1)
 │   └── scheduler/       (m1)
-├── migrations/
-│   ├── identity/
-│   └── operations/
+├── schema.sql
 ├── tests/
 │   ├── contract/
 │   └── integration/
@@ -168,7 +166,7 @@ Business handlers receive validated actor, tenant, and request context. They nev
 
 ### 5.3. Public API principles
 
-- versioned `/v2` resource-oriented routes;
+- versioned `/v1` resource-oriented routes;
 - OpenAPI as the public client contract;
 - `Idempotency-Key` on retriable mutations;
 - `202 Accepted` for asynchronous work;
@@ -390,10 +388,10 @@ The capabilities endpoint decouples clients from deployment composition.
 
 ```json
 {
-  "api_version": "2.0",
+  "api_version": "1.0",
   "minimum_client_versions": {
-    "web": "2.0",
-    "mobile": "2.0"
+    "web": "1.0",
+    "mobile": "1.0"
   },
   "capabilities": [
     "content.submit",
@@ -417,7 +415,7 @@ Platform uses SQLx and explicit queries. Transactions group:
 - audit metadata;
 - outbox insert.
 
-Migrations are forward-only in normal deployment and owned by this repository. Destructive changes use expand/migrate/contract and workspace-coordinated rollouts.
+This repository owns `schema.sql`, and `ratatoskr-edge` applies it at startup to a database that does not have it yet. A schema change edits the file in place, and a destructive change reaches an existing database only when that database is recreated (ADR-0004).
 
 No database transaction spans a network call.
 
@@ -473,7 +471,7 @@ Trace context propagates through commands and events via correlation and causati
 
 ### Integration
 
-- PostgreSQL transactions and migrations;
+- PostgreSQL transactions and the schema;
 - outbox publisher and inbox deduplication;
 - NATS command/event flow;
 - session rotation and revocation;
@@ -502,7 +500,7 @@ The three binaries use separate runtime roles and least-privilege credentials ev
 ```text
 edge:
   public network
-  owns identity + operations + platform_ingest, and applies the migrations
+  owns identity + operations + platform_ingest, and applies schema.sql
   the one NATS identity: publish cmd.>, JetStream API, consume through its own inbox
 
 ingest:
@@ -550,7 +548,7 @@ disagree. Kept because the ordering below still reads as the intended arc.
 
 1. Identity, session, operation, idempotency, and error foundations.
 2. Transactional outbox/inbox and NATS integration.
-3. `POST /v2/captures`, operation polling, and SSE.
+3. `POST /v1/captures`, operation polling, and SSE.
 4. Capabilities endpoint and generated public client.
 5. GitHub and Extractor command vertical slices.
 6. Registered-device auth for mobile, extension, and export agent.

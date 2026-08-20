@@ -43,13 +43,13 @@ pub fn admin_url() -> String {
 /// A database that drops itself.
 #[derive(Debug)]
 pub struct TestDatabase {
-    /// The connected pool, migrated and ready.
+    /// The connected pool, with the schema applied and ready.
     pub database: Database,
     name: String,
 }
 
 impl TestDatabase {
-    /// Create a fresh database, apply every embedded migration, and connect to it.
+    /// Create a fresh database, apply the embedded schema, and connect to it.
     ///
     /// # Errors
     ///
@@ -98,7 +98,7 @@ impl TestDatabase {
             .await
             .map_err(PersistenceError::Connect)?;
         let database = Database { pool };
-        database.migrate().await?;
+        database.apply_schema().await?;
 
         Ok(Self { database, name })
     }
@@ -112,7 +112,7 @@ impl TestDatabase {
     /// The connection URL of this database, for a test that starts a real process against it.
     ///
     /// [`admin_url`] with the database name replaced. A test that needs this is testing a BINARY
-    /// rather than a query, and it needs a migrated database that no other test is writing to —
+    /// rather than a query, and it needs a prepared database that no other test is writing to —
     /// which is exactly what this type already produces.
     #[must_use]
     pub fn url(&self) -> String {

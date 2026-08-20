@@ -23,15 +23,15 @@ use crate::{ApiState, Principal};
 ///
 /// A build constant, not configuration: it states what this binary serves, and an operator does not
 /// decide that.
-const API_VERSION: &str = "2.0";
+const API_VERSION: &str = "1.0";
 
 /// The oldest client release this surface still answers correctly.
 ///
 /// Constants for the same reason [`API_VERSION`] is one. Raising a floor is a decision about the
 /// API's behaviour — a removed field, a narrowed accept — and it is made in the pull request that
 /// makes that change, not in a `ConfigMap`.
-const MINIMUM_WEB: &str = "2.0";
-const MINIMUM_MOBILE: &str = "2.0";
+const MINIMUM_WEB: &str = "1.0";
+const MINIMUM_MOBILE: &str = "1.0";
 
 /// What a client is told it may do.
 #[derive(Debug, serde::Serialize, schemars::JsonSchema)]
@@ -80,9 +80,9 @@ pub fn sample(state: &ApiState) {
     }
 }
 
-/// `GET /v2/capabilities`.
+/// `GET /v1/capabilities`.
 ///
-/// Authenticated, like every other `/v2` route, for the three reasons ADR-0008 records: the
+/// Authenticated, like every other `/v1` route, for the three reasons ADR-0008 records: the
 /// authorization input is per-principal by definition, the health input is operational state that
 /// `ARCHITECTURE.md` S15 keeps off an anonymous surface, and an authenticated route can be opened
 /// to anonymous callers later while the reverse breaks every client.
@@ -120,7 +120,7 @@ pub async fn read(
 /// How this route is described in the generated `OpenAPI` document.
 pub const DOC: RouteDoc = RouteDoc {
     method: Method::Get,
-    path: "/v2/capabilities",
+    path: "/v1/capabilities",
     operation_id: "readCapabilities",
     summary: "What this deployment can do for you",
     description: "\

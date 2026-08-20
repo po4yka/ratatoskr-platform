@@ -9,7 +9,7 @@
 //!    column selects from;
 //! 5. **command publication** — the same transactional outbox every other command goes through;
 //! 6. **receipt status projection** — the operation the signal created, readable at
-//!    `GET /v2/operations/{id}` by the user who owns the source.
+//!    `GET /v1/operations/{id}` by the user who owns the source.
 //!
 //! What it deliberately does not do, from the same section: fetch article bodies, run browsers,
 //! summarize content, or hold a provider credential that belongs to a dedicated service. A signal
@@ -74,7 +74,7 @@ impl IngestState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Target {
-    /// Submit an address for capture — the same work `POST /v2/captures` requests, reaching the
+    /// Submit an address for capture — the same work `POST /v1/captures` requests, reaching the
     /// same consumer through the same command type. A webhook is a second door into one room, not
     /// a second room.
     ContentCapture,
@@ -159,10 +159,10 @@ pub fn surface() -> ApiSurface {
 
 /// Whether the schema this crate reads has been applied.
 ///
-/// `ratatoskr-ingest` deliberately does NOT run the migrations. `ARCHITECTURE.md` S18 gives it its
-/// own least-privilege database role, and a role that may create a schema is not least-privilege;
-/// the owner of the migrations is `ratatoskr-edge`, which applies them at startup. This check turns
-/// "somebody started ingest against a database nobody migrated" into one sentence at startup rather
+/// `ratatoskr-ingest` deliberately does NOT create it. `ARCHITECTURE.md` S18 gives it its own
+/// least-privilege database role, and a role that may create a schema is not least-privilege; the
+/// owner of `schema.sql` is `ratatoskr-edge`, which applies it at startup. This check turns
+/// "somebody started ingest against an unprepared database" into one sentence at startup rather
 /// than into a Postgres error on the first inbound signal, hours later, in somebody else's log.
 ///
 /// # Errors

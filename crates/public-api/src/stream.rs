@@ -35,7 +35,7 @@ const POLL_INTERVAL: Duration = Duration::from_millis(500);
 /// cannot make one connection read unboundedly.
 const PAGE: i64 = 256;
 
-/// `GET /v2/operations/{operation_id}/events`.
+/// `GET /v1/operations/{operation_id}/events`.
 ///
 /// Replays from `Last-Event-ID` when the client reconnects, then follows. The stream ends when the
 /// operation reaches a terminal status, because there will never be another entry: leaving it open
@@ -158,7 +158,7 @@ fn progress_stream(
 /// How this route is described in the generated `OpenAPI` document.
 pub const DOC: RouteDoc = RouteDoc {
     method: Method::Get,
-    path: "/v2/operations/{operation_id}/events",
+    path: "/v1/operations/{operation_id}/events",
     operation_id: "streamOperationEvents",
     summary: "Follow one operation's progress",
     description: "\

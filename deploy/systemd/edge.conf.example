@@ -27,8 +27,8 @@ RATATOSKR__BUS__URL=nats://127.0.0.1:4222
 RATATOSKR__BUS__NKEY_SEED_PATH=/etc/ratatoskr/edge.nkey
 
 # The Ed25519 PUBLIC key of `ratatoskr-telegram`, base64 with padding (ADR-0011). Platform holds
-# only the public half, so this is not a secret. Absent means `/v2/sessions/telegram` refuses and
-# `GET /v2/capabilities` reports `telegram.mini_app` unavailable.
+# only the public half, so this is not a secret. Absent means `/v1/sessions/telegram` refuses and
+# `GET /v1/capabilities` reports `telegram.mini_app` unavailable.
 #RATATOSKR__IDENTITY__ASSERTION_KEY=
 
 # Where a browser is sent after a provider callback has been relayed. Configured, never taken from

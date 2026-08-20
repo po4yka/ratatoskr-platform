@@ -17,11 +17,11 @@ Four sentences in this repository justify a control by appealing to horizontal s
 - `docs/ARCHITECTURE.md` S18: "Horizontal Edge instances are stateless apart from PostgreSQL and the
   event bus. Scheduler uses leases or advisory locks so only one occurrence is emitted per schedule."
 - `AGENTS.md`: "Public request acceptance must remain compatible during rolling deployment."
-- `docs/adr/0004-migration-layout-and-query-checking.md`: the migration advisory lock, justified by
+- `docs/adr/0004-migration-layout-and-query-checking.md`: the schema advisory lock, justified by
   "a rolling deployment of several replicas".
-- `DEVELOPMENT.md`: the same, for `Database::migrate`.
+- `DEVELOPMENT.md`: the same, for the method that applies the schema.
 
-The controls those sentences justify are built and shipping: the sqlx migration advisory lock, the
+The controls those sentences justify are built and shipping: the schema advisory lock, the
 outbox claim lease, the idempotency ledger, the inbox, and `Nats-Msg-Id` deduplication. Delete the
 justification without replacing it and every one of them reads as speculative machinery for a scale
 that will never arrive — which is exactly the shape a cleanup pass removes.
@@ -46,7 +46,7 @@ that will never arrive — which is exactly the shape a cleanup pass removes.
 
 ## Decision
 
-**Platform is deployed as exactly one process per role on one host. The migration advisory lock, the
+**Platform is deployed as exactly one process per role on one host. The schema advisory lock, the
 outbox claim lease, the scheduler lease, the idempotency ledger, the inbox and `Nats-Msg-Id`
 deduplication are retained as RESTART- and REDELIVERY-correctness controls, and may not be removed on
 the grounds that there is only one instance.**
@@ -55,7 +55,7 @@ Each is correct for a reason that has nothing to do with replica count:
 
 | Control | Why it is still needed with one process |
 |---|---|
-| Migration advisory lock | A restart overlapping the previous process's grace window runs `migrate` while the old process still holds connections |
+| Schema advisory lock | A restart overlapping the previous process's grace window runs `apply_schema` while the old process still holds connections |
 | Outbox claim lease | A publisher killed mid-batch cannot release its rows; the lease expiring is what returns them |
 | Scheduler lease | A restart overlapping a drain can otherwise emit one occurrence twice |
 | Idempotency ledger | A client retry is a client behaviour, not a topology |
@@ -69,9 +69,12 @@ A capacity problem is answered by bounding work — a smaller batch, a longer in
 
 - `docs/ARCHITECTURE.md` S18's horizontal sentence is replaced; the other three are re-founded on
   restart overlap rather than replica count.
-- One caveat, so this ADR does not overclaim: the migration advisory lock is not code this repository
-  could delete. It is sqlx's own behaviour inside `Migrator::run`, which `crates/persistence/src/lib.rs`
-  only documents. What this ADR protects there is the *documentation* of why it matters.
+- The schema advisory lock is now code this repository owns. It was sqlx's own behaviour inside
+  `Migrator::run`, which `crates/persistence/src/lib.rs` only documented; since the migration ledger
+  became one `schema.sql`, `Database::apply_schema` takes `pg_advisory_xact_lock` itself, in the same
+  transaction as the presence check and the apply. **Amended when the ledger became one schema
+  file.** This line used to add a caveat so the ADR did not overclaim — that the lock was not code
+  this repository could delete. It is now, and this ADR is what forbids deleting it.
 - The single-node profile — stream retention, consumer configuration, the NATS credential and the
   database roles — is explicitly NOT decided here. It belongs to milestone 9, as
   [ADR-0005](0005-nats-subjects-and-delivery.md) already reserved.

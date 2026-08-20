@@ -2,7 +2,7 @@
 //!
 //! `ARCHITECTURE.md` S5.3 fixes what a command carries: "Commands include principal, operation,
 //! correlation, causation, idempotency, and schema version" (`INTERFACES.md` repeats it). Two route
-//! families now emit commands — `POST /v2/captures` and the webhook adapter of milestone 7 — and a
+//! families now emit commands — `POST /v1/captures` and the webhook adapter of milestone 7 — and a
 //! consumer must not be able to tell which one produced the message it is reading.
 //!
 //! That is why this lives in `ratatoskr-eventing` rather than beside either route: the envelope is

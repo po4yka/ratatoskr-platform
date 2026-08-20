@@ -36,7 +36,7 @@ pub struct PlatformConfig {
     pub database: Option<DatabaseConfig>,
 
     /// The event bus. Optional: milestones 1 to 5 ran without one, and a developer polling
-    /// `/v2/operations` needs no broker. A deployment without it accumulates commands nobody
+    /// `/v1/operations` needs no broker. A deployment without it accumulates commands nobody
     /// publishes, which the process warns about at startup rather than discovering later.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bus: Option<BusConfig>,
@@ -282,7 +282,7 @@ pub struct IdentityConfig {
     /// internet yields the ability to check signatures, which is worth nothing.
     ///
     /// Absent means the Telegram exchange is not served: the route refuses, and
-    /// `GET /v2/capabilities` reports `telegram.mini_app` as unavailable so a client can tell before
+    /// `GET /v1/capabilities` reports `telegram.mini_app` as unavailable so a client can tell before
     /// it tries.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assertion_key: Option<String>,

@@ -1,6 +1,6 @@
 //! The `identity` schema: who a principal is, and what still authenticates them.
 //!
-//! Milestone 2. This crate owns exactly the tables in `migrations/0001_identity.sql` and reaches no
+//! Milestone 2. This crate owns exactly the `identity` tables of `schema.sql` and reaches no
 //! other schema (`ARCHITECTURE.md` S19 invariant 6).
 //!
 //! Two rules shape every signature here.

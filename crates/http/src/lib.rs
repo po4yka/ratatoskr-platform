@@ -64,7 +64,7 @@ pub trait PublicRoutes {
     /// reach the database it needs must refuse to report itself ready rather than serve 500s.
     ///
     /// `health` is the same [`RuntimeState`] the readiness probe reads. It is passed rather than
-    /// rebuilt because `GET /v2/capabilities` reports whether a dependency is healthy (ADR-0008),
+    /// rebuilt because `GET /v1/capabilities` reports whether a dependency is healthy (ADR-0008),
     /// and a second source for that fact could disagree with the first.
     fn build(
         self,

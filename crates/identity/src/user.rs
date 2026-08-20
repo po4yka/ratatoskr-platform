@@ -172,7 +172,7 @@ where
         Ok(User {
             user_id: row.try_get("user_id").map_err(PersistenceError::Query)?,
             // The CHECK constraint makes an unknown token unreachable; treating it as `Deleted`
-            // rather than erroring keeps a read path alive if one is ever added by a migration this
+            // rather than erroring keeps a read path alive if one is ever added by a schema change this
             // binary predates, and `Deleted` is the choice that denies rather than grants.
             status: UserStatus::from_str_opt(&status).unwrap_or(UserStatus::Deleted),
             created_at: from_offset(row.try_get("created_at").map_err(PersistenceError::Query)?),
@@ -210,7 +210,7 @@ where
 
 /// Attach a provider identity to a user, or return the existing mapping.
 ///
-/// Idempotent on `(provider, external_id)`, which is the unique index the migration creates: the
+/// Idempotent on `(provider, external_id)`, which is the unique index `schema.sql` creates: the
 /// same provider identity always resolves to the same internal user, and a second attempt from a
 /// retried request does not create a second user.
 ///

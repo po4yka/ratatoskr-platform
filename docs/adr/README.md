@@ -15,7 +15,7 @@ request that writes it.
   progress semantics. **Accepted.**
 - [ADR-0003](0003-service-identity-and-producer-name.md): Service identity and the wire producer
   name. **Accepted.**
-- [ADR-0004](0004-migration-layout-and-query-checking.md): Migration layout and query checking.
+- [ADR-0004](0004-migration-layout-and-query-checking.md): Schema layout and query checking. Its migration-layout half is amended: there is one `schema.sql` and no ledger.
   **Accepted.**
 - [ADR-0005](0005-nats-subjects-and-delivery.md): NATS subjects and delivery. **Accepted.**
 - [ADR-0006](0006-public-api-versioning-and-openapi.md): REST versioning, and who owns the public

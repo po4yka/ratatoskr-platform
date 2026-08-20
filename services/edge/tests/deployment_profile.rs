@@ -6,8 +6,8 @@
 //! is killed halfway, or a scrape target that is permanently down — never an error message.
 //!
 //! It lives beside `ratatoskr-edge` because that is the binary that declares the streams and applies
-//! the migrations, so it is the one whose constants the profile has to match. The other two roles
-//! are reached through `RuntimeRole`, which every binary shares.
+//! `schema.sql`, so it is the one whose constants the profile has to match. The other two roles are
+//! reached through `RuntimeRole`, which every binary shares.
 
 #![allow(
     clippy::expect_used,

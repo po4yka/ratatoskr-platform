@@ -1,9 +1,9 @@
 -- What `ratatoskr-ingest` and `ratatoskr-scheduler` may see. Run AFTER `ratatoskr-edge` has started
--- at least once, because it grants on tables that its migrations create.
+-- at least once, because it grants on tables that `schema.sql` creates.
 --
 --     sudo -u postgres psql -d ratatoskr -f deploy/postgres/02-grants.sql
 --
--- Re-run it after any migration that adds a table one of those two roles must WRITE. The default
+-- Re-run it after any schema change that adds a table one of those two roles must WRITE. The default
 -- privileges at the end cover reading; writing is granted by name, on purpose, so that adding a
 -- table never silently hands two services write access to it.
 --
@@ -27,8 +27,8 @@
 --   * `ratatoskr_scheduler` cannot read `identity` or `platform_ingest`. It publishes commands from
 --     rows an operator wrote, and has no reason to see either.
 --
--- Neither may create anything anywhere: `create` on a schema is what a migration needs, and only
--- `ratatoskr-edge` migrates.
+-- Neither may create anything anywhere: `create` on a schema is what `schema.sql` needs, and only
+-- `ratatoskr-edge` applies it.
 
 grant usage on schema platform_ingest to ratatoskr_ingest;
 grant usage on schema operations      to ratatoskr_ingest;
@@ -70,9 +70,9 @@ grant select, insert on operations.outbox               to ratatoskr_scheduler;
 -- future tables
 -- ---------------------------------------------------------------------------------------------
 --
--- A migration creates a table owned by `ratatoskr_edge`, and a new table grants nothing to anybody.
--- These make the next migration's tables readable without a second manual step — inside
--- `operations` only, and as `select` only.
+-- `schema.sql` creates tables owned by `ratatoskr_edge`, and a new table grants nothing to anybody.
+-- These make the next new table readable without a second manual step — inside `operations` only,
+-- and as `select` only.
 
 alter default privileges for role ratatoskr_edge in schema operations
     grant select on tables to ratatoskr_ingest, ratatoskr_scheduler;

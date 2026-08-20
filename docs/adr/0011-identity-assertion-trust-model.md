@@ -96,7 +96,7 @@ session.
   There is deliberately no key set and no `kid`. One issuer with one key needs neither, and a key set
   is a selection mechanism, which is a thing that can select wrongly.
 - An assertion that arrives when no key is configured is refused as unauthenticated, and
-  `GET /v2/capabilities` reports `telegram.mini_app` as unavailable — so a client can tell the
+  `GET /v1/capabilities` reports `telegram.mini_app` as unavailable — so a client can tell the
   difference before it tries, which is the whole point of that endpoint.
 - The exchange creates internal users. A deployment that does not want Telegram sign-in leaves the
   key unset, and the route then mints nothing.
@@ -115,10 +115,10 @@ caller cannot be allowed to probe.
 
 ## Compatibility and migration
 
-Nothing is deployed and no assertion has been issued. `ratatoskr-telegram` does not exist yet either,
-so this ADR is the specification it will implement rather than a description of something already
-running: the token format above is the contract between the two repositories, and changing it later
-is a coordinated change in both.
+No assertion has been issued, and `ratatoskr-telegram` does not exist yet, so this ADR is the
+specification it will implement rather than a description of something already running: the token
+format above is the contract between the two repositories, and changing it later is a coordinated
+change in both.
 
 ## Validation
 

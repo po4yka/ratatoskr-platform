@@ -9,9 +9,9 @@
 //! **It does not listen.** S18: "no public listener except health". Rule V1 refuses a public bind
 //! for this role permanently, so the only socket is the operator listener.
 //!
-//! **It does not migrate.** S18 gives it its own least-privilege database role, and a role that may
-//! create a table is not one. `ratatoskr-edge` owns the migrations; this process checks that they
-//! have been applied and refuses to start if they have not.
+//! **It does not create the schema.** S18 gives it its own least-privilege database role, and a role
+//! that may create a table is not one. `ratatoskr-edge` owns `schema.sql`; this process checks that
+//! it has been applied and refuses to start if it has not.
 //!
 //! **It does not reach the broker.** The command is written to `operations.outbox` and stops there;
 //! `ratatoskr-edge` moves it to NATS. That is one pump on one host, decided in ADR-0013 rather than
@@ -70,7 +70,7 @@ impl platform_http::PublicRoutes for SchedulerLoop {
             .map_err(|error| format!("the schema could not be inspected: {error}"))?;
         if !present {
             return Err(
-                "operations.schedules is absent; ratatoskr-edge applies the migrations and must \
+                "operations.schedules is absent; ratatoskr-edge applies schema.sql and must \
                  have run at least once against this database"
                     .to_owned(),
             );

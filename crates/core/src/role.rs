@@ -46,7 +46,7 @@ impl RuntimeRole {
     /// Whether this role may bind a public listener.
     ///
     /// `Edge` and, since milestone 7, `Ingest`: a webhook source reaches
-    /// `POST /v2/ingest/webhooks/{source_id}` over the public internet, so the adapter
+    /// `POST /v1/ingest/webhooks/{source_id}` over the public internet, so the adapter
     /// `ARCHITECTURE.md` S9 describes cannot exist without a listener to reach it on.
     ///
     /// `Scheduler` is permanently false (`ARCHITECTURE.md` S18: "no public listener except

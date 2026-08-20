@@ -2,7 +2,7 @@
 //!
 //! One route, and the whole of `ARCHITECTURE.md` S9 behind it. A third party pushes a signal, and
 //! six steps later it is a durable operation and a command on the bus — the same operation and the
-//! same command a client would have produced through `POST /v2/captures`, because a webhook is a
+//! same command a client would have produced through `POST /v1/captures`, because a webhook is a
 //! second door into one room rather than a second room.
 //!
 //! # What "generic" means here
@@ -38,7 +38,7 @@ const ACTION: &str = "ingest.webhook.receive";
 /// Without the source identifier, because the ledger's `route` column is a bounded path and a UUID
 /// does not fit its grammar. The source is folded into the key instead (see [`dedup_key`]), which
 /// scopes the reservation more tightly than the column could.
-const ROUTE: &str = "/v2/ingest/webhooks";
+const ROUTE: &str = "/v1/ingest/webhooks";
 
 /// The header a source's own event identifier arrives in.
 ///
@@ -66,13 +66,13 @@ pub struct WebhookSignal {
 #[derive(Debug, serde::Serialize, schemars::JsonSchema)]
 pub struct SignalAccepted {
     /// The operation created for this signal. The owner of the source can read it at
-    /// `GET /v2/operations/{operation_id}`; the source itself cannot, because it has no session.
+    /// `GET /v1/operations/{operation_id}`; the source itself cannot, because it has no session.
     pub operation_id: Uuid,
     /// Always `accepted` here. Present so a caller never has to infer it from the status code.
     pub status: &'static str,
 }
 
-/// `POST /v2/ingest/webhooks/{source_id}`.
+/// `POST /v1/ingest/webhooks/{source_id}`.
 ///
 /// Authenticates the source, bounds the signal, then hands the transaction to [`accept`].
 pub async fn receive(
@@ -399,7 +399,7 @@ fn accepted(operation_id: Uuid) -> Response {
 /// How this route is described in the generated `OpenAPI` document.
 pub const DOC: RouteDoc = RouteDoc {
     method: Method::Post,
-    path: "/v2/ingest/webhooks/{source_id}",
+    path: "/v1/ingest/webhooks/{source_id}",
     operation_id: "receiveWebhookSignal",
     summary: "Push a signal from a registered source",
     description: "\

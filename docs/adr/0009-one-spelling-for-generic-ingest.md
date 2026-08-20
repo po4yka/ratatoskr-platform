@@ -9,11 +9,12 @@
 
 `README.md` spells the generic-ingress schema `platform_ingress.*`, and `DEVELOPMENT.md` records
 `AGENTS.md` as agreeing with it. `docs/ARCHITECTURE.md` S4.1 spells it `platform_ingest.*`. Milestone 2 could not resolve the
-contradiction and could not work around it either — a schema name is a migration, and a migration is
-the one artifact this repository never rewrites — so it wrote `-- platform_ingest is milestone 7`
-into `migrations/0001_identity.sql` and recorded the question as Q2.
+contradiction and could not work around it either — a schema name is written into the schema
+definition, and at the time that definition was a committed migration, the one artifact this
+repository never rewrote — so it wrote `-- platform_ingest is milestone 7` into
+`migrations/0001_identity.sql` and recorded the question as Q2.
 
-Milestone 7 is that migration. The question is due.
+Milestone 7 is where the schema is created. The question is due.
 
 It is not only a schema name. The same word appears in a binary name, a crate name, a library name,
 a database role, and now a public URL path. Every one of those is an operational contract that
@@ -50,7 +51,7 @@ outlives the pull request that writes it.
 | Rust library | `platform_ingest` |
 | Binary and runtime role | `ratatoskr-ingest`, `RuntimeRole::Ingest` |
 | Database role (S18) | `platform_ingest` |
-| Public path prefix | `/v2/ingest/…` |
+| Public path prefix | `/v1/ingest/…` |
 
 `README.md` carried the only `platform_ingress.*` identifier in the repository and is corrected.
 `AGENTS.md` needed no correction at all: every "ingress" in it is prose naming the *activity* —
@@ -61,10 +62,10 @@ bar or a `use` statement, it is spelled `ingest`.**
 
 ## Consequences
 
-- `migrations/0005_ingest.sql` creates `platform_ingest`, and the name is now permanent: reversing
-  it later would be a schema rename with a data move, not an edit.
+- `schema.sql` creates `platform_ingest`, and the name is now permanent: reversing it later would be
+  a schema rename with a data move, not an edit.
 - `crates/ingest` is the first crate whose name a reader can predict from the binary that uses it.
-- The public path is `/v2/ingest/webhooks/{source_id}`. It is versioned like every other route
+- The public path is `/v1/ingest/webhooks/{source_id}`. It is versioned like every other route
   (ADR-0006) even though its callers are third parties rather than our own clients — a third party
   is exactly the caller who cannot be redeployed in step with us.
 
@@ -80,7 +81,7 @@ question had to be answered before `0005`, and why milestone 2 was right to refu
 
 ## Validation
 
-`migrations/0005_ingest.sql` applies under the embedded migrator, and
+The `platform_ingest` section of `schema.sql` applies under `Database::apply_schema`, and
 `crates/ingest/tests/webhook.rs` reaches every table in it. A repository-wide grep for
 `platform_ingress` returns nothing outside this ADR.
 

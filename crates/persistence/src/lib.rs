@@ -1,4 +1,4 @@
-//! The `PostgreSQL` pool Platform owns, the migrator embedded in the binary, and the readiness probe
+//! The `PostgreSQL` pool Platform owns, the schema embedded in the binary, and the readiness probe
 //! for both.
 //!
 //! Scope. This crate owns the `identity` and `operations` schemas and nothing else. `ARCHITECTURE.md`
@@ -6,12 +6,11 @@
 //! thing that keeps that true over time is that no code outside `ratatoskr-platform-identity` and
 //! `ratatoskr-platform-operations` is given a reason to hold a [`Database`].
 //!
-//! Migrations live in one directory, `migrations/`, not the two that `ARCHITECTURE.md` S3 draws.
-//! `sqlx::Migrator` records applied versions in a single `_sqlx_migrations` table and exposes no way
-//! to change that table's name (verified against sqlx 0.8.6: the only setters are
-//! `set_ignore_missing` and `set_locking`), so two directories would share one ledger and collide on
-//! version numbers. The owning schema is carried in each file name instead. See
-//! `docs/adr/0004-migration-layout.md`.
+//! The schema is ONE file, `schema.sql` at the repository root, not the two directories
+//! `ARCHITECTURE.md` S3 once drew and not a numbered ledger. No database holds data that has to survive
+//! a schema change, so an incremental history buys nothing and costs a rule that an applied file
+//! can never be edited. A schema change edits `schema.sql` in place. See
+//! `docs/adr/0004-migration-layout-and-query-checking.md`.
 
 #[cfg(feature = "test-support")]
 pub mod test_support;
@@ -26,29 +25,27 @@ const IDLE_TIMEOUT: Duration = Duration::from_mins(10);
 
 use platform_core::{PlatformError, Subsystem};
 use secrecy::ExposeSecret as _;
-use sqlx::migrate::Migrator;
 use sqlx::postgres::{PgPool, PgPoolOptions};
 
-/// The migrations, embedded at compile time.
+/// The schema, embedded at compile time.
 ///
 /// Embedded rather than read from disk so a deployed binary cannot be paired with a different
-/// schema than the one it was built against. The path is relative to this crate's manifest.
-static MIGRATOR: Migrator = sqlx::migrate!("../../migrations");
+/// schema than the one it was built against. `include_str!` makes the file a build input, so
+/// editing it rebuilds this crate and every artifact that links it — which is the whole of the
+/// staleness protection a build script and a directory-listing test used to provide for a
+/// directory of files. The path is relative to this source file.
+const SCHEMA: &str = include_str!("../../../schema.sql");
 
-/// The migration versions this binary carries, ascending.
+/// The advisory-lock key `apply_schema` holds while it decides and applies.
 ///
-/// Exposed for one reason: so a test can compare them with the files on disk. `sqlx::migrate!`
-/// tracks the files it FINDS, so a newly added migration invalidates nothing and an already-built
-/// artifact keeps the set it was compiled with. `build.rs` closes that by tracking the directory;
-/// this is how the closure itself is checked, because a build script that silently stops working
-/// produces exactly the failure it was written to prevent — a process that migrates successfully to
-/// the wrong schema.
-#[must_use]
-pub fn embedded_migrations() -> Vec<i64> {
-    MIGRATOR.iter().map(|migration| migration.version).collect()
-}
+/// One arbitrary but fixed 64-bit value; `PostgreSQL` advisory locks are a namespace of integers
+/// with no meaning of their own, and nothing else in this system takes one. Kept because ADR-0010
+/// founds it on a case that still happens with exactly one process per role: a restart that
+/// overlaps the previous process's grace window is two processes, for a few seconds, and both call
+/// this method.
+const SCHEMA_LOCK: i64 = 0x7261_7461_736b_7201;
 
-/// A failure in the pool, a migration, or a query.
+/// A failure in the pool, the schema, or a query.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum PersistenceError {
@@ -56,9 +53,9 @@ pub enum PersistenceError {
     #[error("the database connection could not be established")]
     Connect(#[source] sqlx::Error),
 
-    /// A migration failed to apply, or the applied set does not match the embedded set.
-    #[error("the database schema could not be brought up to date")]
-    Migrate(#[source] sqlx::migrate::MigrateError),
+    /// The schema could not be applied.
+    #[error("the database schema could not be applied")]
+    Schema(#[source] sqlx::Error),
 
     /// A query failed.
     #[error("a database query failed")]
@@ -108,23 +105,30 @@ impl Database {
         Ok(Self { pool })
     }
 
-    /// Apply every embedded migration that has not been applied.
+    /// Apply [`SCHEMA`] to a database that does not have it yet.
     ///
-    /// Idempotent, and safe to run while another process is still holding connections: `sqlx` takes
-    /// a `PostgreSQL` advisory lock for the duration, so a restart that overlaps the previous
-    /// process's grace window applies each migration once. That is why the lock still matters with
-    /// exactly one process per role (ADR-0010) — a restart IS two processes, for a few seconds.
+    /// Idempotent, and safe to run while another process is still holding connections. One
+    /// transaction does all three things: it takes a `PostgreSQL` advisory lock, asks whether
+    /// `identity` exists, and applies the file only if it does not. The lock is transaction-scoped,
+    /// so it is released by the commit and by a panic alike, and a second process that arrives
+    /// during a restart waits for the first, then sees the schema and does nothing. That is why the
+    /// lock still matters with exactly one process per role (ADR-0010) — a restart IS two
+    /// processes, for a few seconds.
+    ///
+    /// `PostgreSQL` DDL is transactional, so a file that fails halfway leaves the database exactly
+    /// as it was rather than half-applied. The presence check is therefore an honest question:
+    /// either every object in the file is there or none of it is.
     ///
     /// # Errors
     ///
-    /// [`PersistenceError::Migrate`] if a migration fails, or if a migration that this binary does
-    /// not contain has already been applied — which means the database is newer than the binary and
-    /// continuing would corrupt it.
-    pub async fn migrate(&self) -> Result<(), PersistenceError> {
-        MIGRATOR
-            .run(&self.pool)
+    /// [`PersistenceError::Schema`] if the lock cannot be taken, the catalogue cannot be read, or a
+    /// statement in the file fails.
+    pub async fn apply_schema(&self) -> Result<(), PersistenceError> {
+        let mut transaction = self.pool.begin().await.map_err(PersistenceError::Schema)?;
+        lock_and_apply(&mut transaction)
             .await
-            .map_err(PersistenceError::Migrate)
+            .map_err(PersistenceError::Schema)?;
+        transaction.commit().await.map_err(PersistenceError::Schema)
     }
 
     /// Answer whether the database is usable right now.
@@ -158,10 +162,32 @@ impl Database {
     }
 }
 
-/// The migrations this binary carries, for the version endpoint and for tests.
+/// The body of [`Database::apply_schema`], on one connection so the lock and the apply share a
+/// session.
 ///
-/// A deployment that cannot say which schema it expects cannot be diagnosed.
-#[must_use]
-pub fn embedded_migration_versions() -> Vec<i64> {
-    MIGRATOR.iter().map(|migration| migration.version).collect()
+/// A free function taking `&mut PgConnection` by its named type: `PublicRoutes::build` is an async
+/// trait method, so `ratatoskr-edge`'s caller has to prove this future is `Send`, and that proof
+/// needs the executor's lifetime pinned rather than inferred at the call site
+/// (rust-lang/rust#100013, seen as "implementation of `Executor` is not general enough").
+///
+/// The file goes through `Executor::execute` and NOT `sqlx::raw_sql`, which trips the same bound.
+/// Both send the string over the simple query protocol, which runs every statement in it; `execute`
+/// folds the per-statement results into one.
+async fn lock_and_apply(connection: &mut sqlx::PgConnection) -> Result<(), sqlx::Error> {
+    sqlx::query("select pg_advisory_xact_lock($1)")
+        .bind(SCHEMA_LOCK)
+        .execute(&mut *connection)
+        .await?;
+
+    // The first schema the file creates. Under the lock, its absence means the file has never been
+    // applied to this database.
+    let present: Option<String> = sqlx::query_scalar("select to_regnamespace('identity')::text")
+        .fetch_one(&mut *connection)
+        .await?;
+
+    if present.is_none() {
+        sqlx::Executor::execute(connection, SCHEMA).await?;
+    }
+
+    Ok(())
 }

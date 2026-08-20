@@ -43,7 +43,7 @@ converts into a token.
 ## Decision
 
 **A callback creates one row in `identity.oauth_relays` holding the code, and the owning service
-claims it exactly once over `POST /v2/oauth/relays/{relay_id}` using a service session whose
+claims it exactly once over `POST /v1/oauth/relays/{relay_id}` using a service session whose
 principal holds the relay's claim capability. The claim returns the code and destroys it in the same
 statement.**
 
@@ -120,7 +120,7 @@ credential.
 
 ## Compatibility and migration
 
-`migrations/0006_oauth_relay.sql` creates the table. No provider service exists yet, so the claiming
+`schema.sql` creates the table, in its `identity` section. No provider service exists yet, so the claiming
 half has no consumer today — the route and its contract are what a provider repository implements
 against, in the same way ADR-0011 specifies the assertion for `ratatoskr-telegram`.
 

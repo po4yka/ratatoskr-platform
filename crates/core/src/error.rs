@@ -134,7 +134,7 @@ pub enum Subsystem {
     Telemetry,
     /// The HTTP harness: a listener, a middleware, or a handler.
     Http,
-    /// The database pool, a migration, or a query.
+    /// The database pool, the schema, or a query.
     Persistence,
 }
 

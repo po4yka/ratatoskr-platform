@@ -18,10 +18,10 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[non_exhaustive]
 pub enum Capability {
-    /// `content.submit` — submitting an address for capture, at `POST /v2/captures`.
+    /// `content.submit` — submitting an address for capture, at `POST /v1/captures`.
     ContentSubmit,
     /// `telegram.mini_app` — exchanging a `ratatoskr-telegram` identity assertion for a session, at
-    /// `POST /v2/sessions/telegram`.
+    /// `POST /v1/sessions/telegram`.
     TelegramMiniApp,
 }
 

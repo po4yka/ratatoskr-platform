@@ -52,7 +52,7 @@ is enforcement that lives in this repository rather than host firewall state a r
 
 ## Installing
 
-In this order. Steps 3 and 5 are separated by step 4 because a migration creates the schemas, and a
+In this order. Steps 3 and 5 are separated by step 4 because `schema.sql` creates the schemas, and a
 grant cannot name a schema that does not exist yet.
 
 ```bash
@@ -110,7 +110,7 @@ sudo cp deploy/systemd/ratatoskr-*.service /etc/systemd/system/
 sudo cp deploy/logrotate/ratatoskr /etc/logrotate.d/ratatoskr
 sudo systemctl daemon-reload
 
-# 6. Edge first, because it applies the migrations.
+# 6. Edge first, because it applies `schema.sql`.
 sudo systemctl enable --now ratatoskr-edge
 docker exec -i shared-postgres psql -U postgres -d ratatoskr < deploy/postgres/02-grants.sql
 sudo systemctl enable --now ratatoskr-ingest ratatoskr-scheduler
@@ -139,6 +139,10 @@ sudo systemctl start ratatoskr-backup.service
 
 Every step is re-runnable. `create database` reports that the database exists and is skipped; every
 other statement is a `grant`, an `alter role`, or an install.
+
+**A schema change reaches this database only if the database is recreated.** `ratatoskr-edge`
+applies `schema.sql` when the `identity` schema is absent, and skips the apply when the schema is
+already there. An edit to the file therefore changes nothing on a host that has already run step 6.
 
 ## Checking it
 
