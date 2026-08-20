@@ -478,3 +478,19 @@ openspec store register <path> --id ratatoskr-workspace
 ```
 
 `openspec doctor` reports whether both are in place.
+
+## The Rust skills in this repository
+
+`.agents/skills/` holds eighteen Rust skills vendored from `po4yka/rust-skills`, and
+`.claude/skills/` symlinks to them. Unlike the steps above this needs nothing from your machine: the
+files are in the tree, so a fresh clone already has them.
+
+Update them with the catalogue and never by hand:
+
+```bash
+npx skills update
+```
+
+That rewrites `.agents/skills/` and `skills-lock.json` from the catalogue. Run it in one repository,
+read the diff, then apply the same change to every Ratatoskr repository whose stack is Rust.
+`ratatoskr-workspace/.github/workflows/drift.yml` fails when one copy differs from the others.
