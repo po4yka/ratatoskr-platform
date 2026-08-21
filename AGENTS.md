@@ -83,11 +83,14 @@ Admin listeners (`/health/*`, `/metrics`, `/version`), PostgreSQL and NATS are n
 
 ## How a change starts
 
-Every non-trivial change begins as an OpenSpec change rather than as an edit. In your assistant that
-is `/opsx:propose <what you want to build>`, or `/opsx:explore` first when the shape is not clear
-yet. The command writes `openspec/changes/<id>/` holding a proposal, the spec deltas, a design and a
-task list, and you read that plan before any code is written. `/opsx:apply` builds it and
-`/opsx:archive` folds the deltas into `openspec/specs/`.
+Every non-trivial change begins as an OpenSpec change rather than as an edit, and each assistant
+starts one in its own syntax. Claude Code has the command: `/opsx:propose <what you want to build>`,
+or `/opsx:explore` first when the shape is not clear yet. Codex has no project-level command and
+triggers the same skill by name, `$openspec-propose`, or lets its description match it. OpenCode has
+its own command, `/opsx-propose`. Whichever starts it, the result is `openspec/changes/<id>/` holding
+a proposal, the spec deltas, a design and a task list, and you read that plan before any code is
+written. `/opsx:apply`, `$openspec-apply-change` or `/opsx-apply` builds it, and `/opsx:archive`,
+`$openspec-archive-change` or `/opsx-archive` folds the deltas into `openspec/specs/`.
 
 `openspec/specs/` holds the behaviour that is true today, and it starts empty on purpose. A spec here
 grows from a change that needed it. Do NOT convert `docs/REQUIREMENTS.md`, `docs/INTERFACES.md`,
@@ -121,8 +124,10 @@ covered.
 
 ## The Rust skill catalogue
 
-`.agents/skills/` holds eighteen Rust skills, and `.claude/skills/` symlinks to them, so Claude Code
-and Codex read one copy. Each is a reference sheet rather than a tutorial: the commands, flags,
+`.agents/skills/` holds eighteen Rust skills, and `.claude/skills/` symlinks to them, so all three
+assistants read one copy. Codex reads `.agents/skills/`, Claude Code reads `.claude/skills/`, and
+OpenCode scans both, so the existing symlink already covers it and nothing belongs under
+`.opencode/skills/`. Each is a reference sheet rather than a tutorial: the commands, flags,
 thresholds and triage tables for one Rust concern. Your assistant reads the descriptions and opens a
 skill only when the task matches one, so the set costs almost nothing until it is needed.
 

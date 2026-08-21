@@ -56,7 +56,7 @@ jobs:
           missing=0
           for f in \
             .gitignore .gitattributes .editorconfig \
-            README.md AGENTS.md DEVELOPMENT.md SECURITY.md LICENSE \
+            README.md AGENTS.md CLAUDE.md DEVELOPMENT.md SECURITY.md LICENSE \
             .githooks/pre-commit .github/workflows/zizmor.yml \
             .github/workflows/openspec.yml openspec/config.yaml \
             docs/ARCHITECTURE.md docs/REQUIREMENTS.md docs/THREAT_MODEL.md \
