@@ -11,7 +11,10 @@ use platform_eventing::inbox::Outcome;
 use platform_eventing::{Incoming, MessageClass, StreamSpec, Subject, deliver};
 use platform_operations::ProgressProjection;
 use platform_persistence::test_support::TestDatabase;
-use ratatoskr_operation_contracts::OperationStatus;
+use ratatoskr_identifiers::{Extensions, OperationId};
+use ratatoskr_operation_contracts::{
+    OperationReported, OperationStage, OperationStatus, ProgressPercent,
+};
 use uuid::Uuid;
 
 const CORRELATION: &str = "correlation:01a0153f-63e5-7010-a4c9-1fe6c43bcc39";
@@ -30,24 +33,73 @@ fn now() -> jiff::Timestamp {
     jiff::Timestamp::now()
 }
 
-fn event(operation_id: Uuid, status: &str) -> Incoming {
+fn report(operation_id: Uuid, status: OperationStatus) -> OperationReported {
+    OperationReported {
+        operation_id: OperationId(operation_id),
+        status,
+        stage: Some(OperationStage::parse("downloading").expect("a stage")),
+        progress_percent: Some(ProgressPercent::new(40).expect("a progress percentage")),
+        results: Vec::new(),
+        error: None,
+        warnings: Vec::new(),
+        extensions: Extensions::default(),
+    }
+}
+
+fn event(operation_id: Uuid, status: OperationStatus) -> Incoming {
     Incoming {
         message_id: Uuid::now_v7(),
-        subject: Subject::new(MessageClass::Event, "platform.operation.progressed.v1")
+        subject: Subject::new(MessageClass::Event, "platform.operation.reported.v1")
             .expect("a subject"),
         producer: "ratatoskr-extractor".to_owned(),
         payload: serde_json::json!({
             "event_id": Uuid::now_v7(),
             "producer": "ratatoskr-extractor",
-            "payload": {
-                "operation_id": operation_id,
-                "status": status,
-                "stage": "downloading",
-                "progress_percent": 40,
-                "message": "fetching",
-            }
+            "payload": serde_json::to_value(report(operation_id, status))
+                .expect("the published payload serializes"),
         }),
     }
+}
+
+#[tokio::test]
+async fn a_published_report_advances_the_projection() {
+    let harness = TestDatabase::create().await.expect("a test database");
+    let pool = harness.pool();
+    let operation = platform_operations::accept(
+        pool,
+        Uuid::now_v7(),
+        "content.capture.submit",
+        CORRELATION,
+        None,
+        now(),
+    )
+    .await
+    .expect("accepting");
+    let message = Incoming {
+        message_id: Uuid::now_v7(),
+        subject: Subject::new(MessageClass::Event, "platform.operation.reported.v1")
+            .expect("a subject"),
+        producer: "ratatoskr-extractor".to_owned(),
+        payload: serde_json::to_value(report(operation.operation_id, OperationStatus::Running))
+            .expect("the published payload serializes"),
+    };
+
+    assert_eq!(
+        deliver(pool, &ProgressProjection, &message, now())
+            .await
+            .expect("delivering"),
+        Some(Outcome::Applied)
+    );
+    assert_eq!(
+        platform_operations::find(pool, operation.operation_id)
+            .await
+            .expect("reading")
+            .expect("the operation")
+            .status,
+        OperationStatus::Running
+    );
+
+    harness.cleanup().await.expect("cleanup");
 }
 
 /// P-1. An event advances the projection, a redelivery of it changes nothing, and an older status
@@ -67,7 +119,7 @@ async fn the_projection_applies_advances_and_absorbs_redelivery() {
     .await
     .expect("accepting");
 
-    let running = event(operation.operation_id, "running");
+    let running = event(operation.operation_id, OperationStatus::Running);
     assert_eq!(
         deliver(pool, &ProgressProjection, &running, now())
             .await
@@ -93,7 +145,7 @@ async fn the_projection_applies_advances_and_absorbs_redelivery() {
     );
 
     // A DIFFERENT message carrying an older status: ordinary traffic under at-least-once delivery.
-    let stale = event(operation.operation_id, "queued");
+    let stale = event(operation.operation_id, OperationStatus::Queued);
     assert_eq!(
         deliver(pool, &ProgressProjection, &stale, now())
             .await
@@ -119,7 +171,7 @@ async fn an_unreadable_event_is_recorded_as_rejected() {
     let harness = TestDatabase::create().await.expect("a test database");
     let pool = harness.pool();
 
-    let mut unknown_operation = event(Uuid::now_v7(), "running");
+    let mut unknown_operation = event(Uuid::now_v7(), OperationStatus::Running);
     assert_eq!(
         deliver(pool, &ProgressProjection, &unknown_operation, now())
             .await
@@ -170,7 +222,7 @@ async fn an_event_published_to_jetstream_reaches_the_projection() {
     let stream_name = "ratatoskr_events";
     let consumer_name = format!("c_{}", Uuid::now_v7().simple());
     let subject =
-        Subject::new(MessageClass::Event, "platform.operation.progressed.v1").expect("a subject");
+        Subject::new(MessageClass::Event, "platform.operation.reported.v1").expect("a subject");
     // The same spec the service declares. Both declaration sites take one so that a stream cannot
     // be created with one policy by whichever process reached the broker first.
     let spec = StreamSpec::events(stream_name, vec!["evt.>".to_owned()]);
@@ -191,7 +243,7 @@ async fn an_event_published_to_jetstream_reaches_the_projection() {
         .await
         .expect("purging");
 
-    let message = event(operation.operation_id, "succeeded");
+    let message = event(operation.operation_id, OperationStatus::Succeeded);
     let body = serde_json::to_vec(&message.payload).expect("a body");
     platform_eventing::Publisher::publish(
         &publisher,

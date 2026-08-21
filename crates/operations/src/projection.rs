@@ -1,4 +1,4 @@
-//! Applying an inbound progress event to the operation projection.
+//! Applying an inbound progress report to the operation projection.
 //!
 //! This is the consuming half of `ARCHITECTURE.md` S5.1: a domain service reports progress, and
 //! Platform maintains the public projection a client polls or streams. Platform consumes only the
@@ -7,12 +7,12 @@
 
 use platform_eventing::inbox::Outcome;
 use platform_eventing::{EventingError, Handler, Incoming};
-use ratatoskr_operation_contracts::OperationStatus;
+use ratatoskr_operation_contracts::{OperationReported, OperationStatus};
 use uuid::Uuid;
 
 use crate::transition::Transition;
 
-/// Applies `platform.operation.progressed.v1`.
+/// Applies `platform.operation.reported.v1`.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ProgressProjection;
 
@@ -35,7 +35,7 @@ impl Handler for ProgressProjection {
             report.status,
             report.stage.as_deref(),
             report.progress_percent,
-            report.message.as_deref(),
+            None,
             now,
         )
         .await;
@@ -91,91 +91,43 @@ impl Handler for ProgressProjection {
     }
 }
 
-/// A typed result reference carried by a progress event.
+/// A typed result reference carried by a progress report.
 struct ReportedResult {
     result_kind: String,
     target: String,
 }
 
-/// The members Platform reads from a progress event, and no others.
+/// The members Platform reads from a progress report, and no others.
 struct ProgressReport {
     operation_id: Uuid,
     status: OperationStatus,
     stage: Option<String>,
     progress_percent: Option<u8>,
-    message: Option<String>,
     results: Vec<ReportedResult>,
 }
 
 impl ProgressReport {
     /// Read the envelope, returning `None` for anything this build cannot act on.
     ///
-    /// Permissive about members it does not use and strict about the two it does: an event with no
-    /// operation or an unrecognised status cannot be applied, and guessing would corrupt the
-    /// projection.
+    /// The contract is the parser: a report with a missing or invalid required field cannot be
+    /// applied, and guessing would corrupt the projection.
     fn read(payload: &serde_json::Value) -> Option<Self> {
         let body = payload.get("payload").unwrap_or(payload);
-        let operation_id = body
-            .get("operation_id")
-            .and_then(serde_json::Value::as_str)
-            .and_then(|raw| raw.parse().ok())?;
-        let status = body
-            .get("status")
-            .and_then(serde_json::Value::as_str)
-            .and_then(status_from_token)?;
-
-        let results = body
-            .get("results")
-            .and_then(serde_json::Value::as_array)
-            .map(|items| {
-                items
-                    .iter()
-                    .filter_map(|item| {
-                        Some(ReportedResult {
-                            result_kind: item
-                                .get("result_kind")
-                                .and_then(serde_json::Value::as_str)?
-                                .to_owned(),
-                            target: item
-                                .get("target")
-                                .and_then(serde_json::Value::as_str)?
-                                .to_owned(),
-                        })
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+        let report = serde_json::from_value::<OperationReported>(body.clone()).ok()?;
 
         Some(Self {
-            operation_id,
-            status,
-            stage: body
-                .get("stage")
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_owned),
-            progress_percent: body
-                .get("progress_percent")
-                .and_then(serde_json::Value::as_u64)
-                .and_then(|value| u8::try_from(value).ok())
-                .filter(|value| *value <= 100),
-            message: body
-                .get("message")
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_owned),
-            results,
+            operation_id: report.operation_id.0,
+            status: report.status,
+            stage: report.stage.map(String::from),
+            progress_percent: report.progress_percent.map(u8::from),
+            results: report
+                .results
+                .into_iter()
+                .map(|result| ReportedResult {
+                    result_kind: String::from(result.result_kind),
+                    target: String::from(result.target),
+                })
+                .collect(),
         })
-    }
-}
-
-fn status_from_token(token: &str) -> Option<OperationStatus> {
-    match token {
-        "accepted" => Some(OperationStatus::Accepted),
-        "queued" => Some(OperationStatus::Queued),
-        "running" => Some(OperationStatus::Running),
-        "succeeded" => Some(OperationStatus::Succeeded),
-        "partially_succeeded" => Some(OperationStatus::PartiallySucceeded),
-        "failed" => Some(OperationStatus::Failed),
-        "cancelled" => Some(OperationStatus::Cancelled),
-        _ => None,
     }
 }

@@ -370,7 +370,7 @@ claude.export.import_requested.v1
 Representative events:
 
 ```text
-platform.operation.progressed.v1
+platform.operation.reported.v1
 content.document.extracted.v1
 knowledge.analysis.completed.v1
 github.repository.added.v1
@@ -380,7 +380,12 @@ chatgpt.export.ingested.v1
 claude.export.ingested.v1
 ```
 
-Platform consumes only the fields required to maintain public projections. It does not duplicate complete domain records.
+Domain services produce `platform.operation.reported.v1`; Platform consumes those reports and
+produces full `OperationSnapshot` values for clients. Platform consumes only the fields required to
+maintain public projections. It does not duplicate complete domain records.
+
+The Platform-owned `platform.operation.progressed.v1` contract carries a full snapshot, but
+publishing that event is not implemented. Clients currently receive snapshots through REST and SSE.
 
 ## 12. Capability architecture
 

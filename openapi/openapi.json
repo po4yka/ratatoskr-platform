@@ -1,15 +1,47 @@
 {
   "components": {
     "schemas": {
-      "BlobRef": {
-        "description": "Opaque, content-addressed handle to stored bytes.\n\nCarries no bucket, host, filesystem path, signed URL or expiry: `ARCHITECTURE.md` S14\nforbids all of them (\"Blob references are opaque and do not expose filesystem paths or\nsigned storage URLs\"). Resolving a handle to bytes is a service concern and needs separate\nauthorization.\n\nThis tightens S5.1's `BlobRef(pub String)`; S5.1's own requirement list says identifier\nstring formats are \"stable and validated\", which a public `String` cannot guarantee.\n`INTERFACES.md`'s richer blob description (hash, size, media type, authorization metadata)\nis a descriptor, not a handle; the descriptor arrives with Document IR in m5.\n\nThe two-colon shape is deliberate: parsed as an `EntityRef` it is kind `blob`, local id\n`sha256:<hex>`.",
+      "BlobOwner": {
+        "description": "Deployment identity of the service that owns and resolves a blob.",
         "examples": [
-          "blob:sha256:0000000000000000000000000000000000000000000000000000000000000000"
+          "ratatoskr-extractor",
+          "ratatoskr-vault"
         ],
-        "maxLength": 76,
-        "pattern": "^blob:sha256:[0-9a-f]{64}$",
-        "title": "BlobRef",
+        "maxLength": 64,
+        "pattern": "^[a-z][a-z0-9-]{1,63}$",
+        "title": "BlobOwner",
         "type": "string"
+      },
+      "BlobRef": {
+        "additionalProperties": false,
+        "description": "Reference to content-addressed bytes owned by one service.\n\nThis is a reference, not a storage API. The owner writes and resolves the bytes under its own\ncontent-addressed directory. No host, filesystem path, signed URL, credentials, or expiry can\nappear in this contract.",
+        "properties": {
+          "digest": {
+            "$ref": "#/components/schemas/ContentDigest",
+            "description": "Digest that names the bytes and lets a reader verify them."
+          },
+          "length_bytes": {
+            "description": "Exact byte length of the stored value.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "media_type": {
+            "$ref": "#/components/schemas/MediaType",
+            "description": "Media type of the stored bytes."
+          },
+          "owner_service": {
+            "$ref": "#/components/schemas/BlobOwner",
+            "description": "Service that owns the bytes and their lifecycle."
+          }
+        },
+        "required": [
+          "owner_service",
+          "digest",
+          "media_type",
+          "length_bytes"
+        ],
+        "type": "object"
       },
       "CapabilityDocument": {
         "description": "What a client is told it may do.",
@@ -55,6 +87,45 @@
           "status"
         ],
         "type": "object"
+      },
+      "ContentDigest": {
+        "additionalProperties": false,
+        "description": "A content digest with an explicit algorithm.",
+        "properties": {
+          "algorithm": {
+            "$ref": "#/components/schemas/DigestAlgorithm",
+            "description": "Hash algorithm used to produce `hex`."
+          },
+          "hex": {
+            "$ref": "#/components/schemas/DigestHex",
+            "description": "Lowercase hexadecimal digest bytes."
+          }
+        },
+        "required": [
+          "algorithm",
+          "hex"
+        ],
+        "type": "object"
+      },
+      "DigestAlgorithm": {
+        "description": "Algorithm used to calculate a content digest.",
+        "oneOf": [
+          {
+            "const": "sha256",
+            "description": "SHA-256.",
+            "type": "string"
+          }
+        ]
+      },
+      "DigestHex": {
+        "description": "Lowercase hexadecimal bytes of a content digest.",
+        "examples": [
+          "0000000000000000000000000000000000000000000000000000000000000000"
+        ],
+        "maxLength": 64,
+        "pattern": "^[0-9a-f]{64}$",
+        "title": "DigestHex",
+        "type": "string"
       },
       "EntityRef": {
         "description": "A namespaced, polymorphic wire reference, serialized as `<kind>:<local_id>`. The kind vocabulary is open: an unrecognised kind is preserved verbatim. The local identity is opaque and need not be a UUID; when it is one it must be the canonical lowercase hyphenated spelling, so one identity has one reference. Equality is octet equality of `<kind>:<local_id>`: the kind is lowercase by grammar, and the local part is case-sensitive and never case-folded, because provider identities are case-significant. This rule is narrower than the `pattern` below, which cannot express it.",
@@ -180,6 +251,17 @@
         ],
         "type": "object",
         "x-ratatoskr-unknown-policy": "preserve"
+      },
+      "MediaType": {
+        "description": "Internet media type of stored bytes, without parameters.",
+        "examples": [
+          "text/html",
+          "application/pdf"
+        ],
+        "maxLength": 255,
+        "pattern": "^[a-z0-9][a-z0-9!#$&^_.+-]{0,126}/[a-z0-9][a-z0-9!#$&^_.+-]{0,126}$",
+        "title": "MediaType",
+        "type": "string"
       },
       "MinimumClientVersions": {
         "description": "The client-version floors.\n\nA struct rather than a map, so the set of surfaces is closed and a typo in a client name cannot\nsilently produce a floor nobody reads. `ARCHITECTURE.md` S12 names these two.",

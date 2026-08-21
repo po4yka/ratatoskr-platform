@@ -12,7 +12,9 @@ request that writes it.
   and never wrote it; the number is left empty rather than reused, because a dangling reference to
   ADR-0001 in an old review comment must not resolve to something else.
 - [ADR-0002](0002-operation-state-machine-and-progress-semantics.md): Operation state machine and
-  progress semantics. **Accepted.**
+  progress semantics. **Accepted.** Open question Q3 is answered by workspace change
+  [`unblock-the-first-domain-service`](https://github.com/po4yka/ratatoskr-workspace/tree/main/openspec/changes/unblock-the-first-domain-service):
+  producers report progress to Platform, and Platform owns the snapshot contract.
 - [ADR-0003](0003-service-identity-and-producer-name.md): Service identity and the wire producer
   name. **Accepted.**
 - [ADR-0004](0004-migration-layout-and-query-checking.md): Schema layout and query checking. Its migration-layout half is amended: there is one `schema.sql` and no ledger.
