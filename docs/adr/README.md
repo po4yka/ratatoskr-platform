@@ -38,6 +38,10 @@ request that writes it.
 - [ADR-0013](0013-single-host-deployment-profile.md): The single-host deployment profile — where
   schedules live, which process publishes, the NATS credential, the three database roles, and what
   the units enforce. **Accepted**, and discharges what ADR-0005 reserved and ADR-0010 scoped out.
+- [ADR-0014](0014-stale-operation-reconciliation.md): Stale-operation reconciliation — why the
+  reaper is an edge task and not a scheduler command, what counts as liveness, and how an operation
+  nobody advances reaches a truthful end. **Accepted**, and discharges what S14 required and
+  ADR-0002 left unassigned.
 
 Still unwritten, and deliberately unnumbered until somebody writes one: idempotency retention, which
 should be written in the same pull request as the retention loop rather than left here; and the

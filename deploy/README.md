@@ -223,7 +223,7 @@ Every row of `ARCHITECTURE.md` S16 has a publication point, and
 | `platform_outbox_dead_lettered` | work a client was told had been accepted and that nobody delivered. Never expected above zero |
 | `platform_outbox_oldest_pending_age_seconds` | the publisher is not draining. With edge down, everything the other two roles accept lands here |
 | `platform_inbox_unprocessed` | a handler is failing after claiming a message |
-| `platform_operations_oldest_unterminated_age_seconds` | an operation nobody finished. There is no reconciler yet, so this is the only way to see one |
+| `platform_operations_oldest_unterminated_age_seconds` | an operation nobody finished. The reaper (ADR-0014) terminates the ones past their window; a value persistently above the window means the reaper is not running or the window is wrong for how long work here actually takes |
 | `platform_scheduler_occurrences_total{outcome="skipped"}` | the scheduler is not keeping up with its own schedules |
 | `platform_capability_available` | a capability the deployment is advertising as unavailable |
 

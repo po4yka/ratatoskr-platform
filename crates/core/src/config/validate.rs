@@ -1,4 +1,4 @@
-//! The startup validation rules V1–V18 and the operator-facing failure report.
+//! The startup validation rules V1–V19 and the operator-facing failure report.
 //!
 //! Order at startup is strictly: extract, validate, initialise telemetry, bind listeners. Telemetry
 //! is initialised *after* validation so that an invalid `log_filter` fails as a configuration
@@ -44,7 +44,7 @@ pub const SHUTDOWN_CEILING_SECONDS: u64 = 120;
 /// The key and variable of the public listener address, named by V1 and V2.
 const PUBLIC_BIND: (&str, &str) = ("public.bind", "RATATOSKR__PUBLIC__BIND");
 
-/// Applies V1–V18 and returns every violation found, in rule order.
+/// Applies V1–V19 and returns every violation found, in rule order.
 pub(crate) fn validate(role: RuntimeRole, config: &PlatformConfig) -> Vec<Violation> {
     let mut found = Vec::new();
 
@@ -132,7 +132,27 @@ pub(crate) fn validate(role: RuntimeRole, config: &PlatformConfig) -> Vec<Violat
     found.extend(identity_violations(config));
     found.extend(retention_violations(config));
     found.extend(limit_violations(config));
+    found.extend(operations_violations(config));
 
+    found
+}
+
+/// V19 — the reconciliation rule (ADR-0014).
+///
+/// The floor is an hour, not a minute: below it, one slow worker report or one broker blip would
+/// fail work that is merely slow, and the window is the one knob between an operator and every
+/// long-running operation in the deployment. Zero is refused outright, not read as disabled — the
+/// V18 argument applies verbatim, and "disabled" is spelled by setting the ceiling.
+fn operations_violations(config: &PlatformConfig) -> Vec<Violation> {
+    let mut found = Vec::new();
+    if !(3600..=2_592_000).contains(&config.operations.stale_after_seconds) {
+        found.push(Violation {
+            key: "operations.stale_after_seconds",
+            env_var: "RATATOSKR__OPERATIONS__STALE_AFTER_SECONDS",
+            rule: "must be 3600..=2592000; zero harvests every unterminated operation rather than \
+                   disabling the reaper",
+        });
+    }
     found
 }
 

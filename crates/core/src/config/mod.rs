@@ -29,9 +29,9 @@ use figment::Figment;
 use figment::providers::{Env, Serialized};
 
 pub use crate::config::model::{
-    AdminConfig, BusConfig, DEFAULT_ACTOR_REQUESTS_PER_MINUTE, DatabaseConfig,
-    EVENT_RETENTION_DAYS, IdentityConfig, LogFormat, OtlpConfig, PlatformConfig, PublicConfig,
-    RetentionConfig, ShutdownConfig, TelemetryConfig,
+    AdminConfig, BusConfig, DEFAULT_ACTOR_REQUESTS_PER_MINUTE, DEFAULT_STALE_AFTER_SECONDS,
+    DatabaseConfig, EVENT_RETENTION_DAYS, IdentityConfig, LogFormat, OperationsConfig, OtlpConfig,
+    PlatformConfig, PublicConfig, RetentionConfig, ShutdownConfig, TelemetryConfig,
 };
 pub use crate::config::validate::{SHUTDOWN_CEILING_SECONDS, Violation};
 use crate::role::RuntimeRole;
@@ -125,6 +125,9 @@ impl PlatformConfig {
             // Windows that are safe on the smallest deployment: long enough that nothing is lost
             // to a weekend outage, short enough that no mechanical table grows without end.
             retention: RetentionConfig::default(),
+            // The reconciliation window is one day by default, and the reaper it feeds is an edge
+            // task (ADR-0014); the other roles carry the section so one shape stays one shape.
+            operations: OperationsConfig::default(),
             shutdown: ShutdownConfig {
                 drain_seconds: model::default_drain_seconds(),
                 grace_seconds: model::default_grace_seconds(),

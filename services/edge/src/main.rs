@@ -64,6 +64,21 @@ const OBSERVE_INTERVAL: Duration = Duration::from_secs(15);
 /// hour of the fastest producer here is a few thousand rows.
 const RETENTION_INTERVAL: Duration = Duration::from_hours(1);
 
+/// How often the stale-operation reaper runs (ADR-0014).
+///
+/// One minute. The window it enforces defaults to a day, so a pass sixty seconds late moves the
+/// worst-case detection age by under a tenth of a percent; what the interval really bounds is how
+/// long a client polling `GET /v1/operations/{id}` can see an operation that will never advance
+/// after its truthfulness has already lapsed.
+const RECONCILE_INTERVAL: Duration = Duration::from_mins(1);
+
+/// How many operations one reaper pass may terminate.
+///
+/// A bound rather than a target — the same reason [`RETENTION_BATCH`] and the pump's batch are
+/// bounds. An operation is terminated in one short transaction, so a hundred per minute drains any
+/// backlog this deployment can produce without ever holding a lock set worth naming.
+const RECONCILE_BATCH: i64 = 100;
+
 /// How many rows one sweep removes from one table.
 ///
 /// A bound rather than a target. An unbounded `delete` against a table nobody has pruned since the
@@ -196,6 +211,10 @@ impl platform_http::PublicRoutes for EdgeRoutes {
             spawn_bus_prober(publisher, Arc::clone(health)),
             spawn_observer(database.pool().clone(), Arc::clone(&state)),
             spawn_retention(database.pool().clone(), config.retention.clone()),
+            spawn_reconciler(
+                database.pool().clone(),
+                config.operations.stale_after_seconds,
+            ),
         ];
 
         Ok(Serving {
@@ -279,6 +298,47 @@ fn spawn_observer(
             }
             if let Err(error) = platform_operations::sample(&pool, now).await {
                 tracing::warn!(%error, "the operation gauges could not be sampled");
+            }
+        }
+    })
+}
+
+/// Terminate the operations nobody has advanced in their window, forever.
+///
+/// It runs here for the reason every other loop does: `ratatoskr-edge` is the process that owns
+/// the database (ADR-0013), and the reaper writes to `operations.operations` — platform data no
+/// second process may touch. ADR-0014 records why this is an edge task and not a
+/// scheduler-published command.
+fn spawn_reconciler(pool: PgPool, stale_after_seconds: u64) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        // Saturating rather than panicking: V19 bounds the value, but this loop outlives any
+        // single validation run, and arithmetic on a u64 cannot be allowed to take the process
+        // down from inside a background task nobody is watching.
+        let window =
+            jiff::SignedDuration::from_secs(i64::try_from(stale_after_seconds).unwrap_or(i64::MAX));
+        let mut ticker = tokio::time::interval(RECONCILE_INTERVAL);
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            ticker.tick().await;
+            match platform_operations::reconcile::run_once(
+                &pool,
+                window,
+                RECONCILE_BATCH,
+                jiff::Timestamp::now(),
+            )
+            .await
+            {
+                Ok(report) if report.reconciled > 0 || report.skipped > 0 => {
+                    tracing::info!(
+                        reconciled = report.reconciled,
+                        skipped = report.skipped,
+                        "stale-operation pass",
+                    );
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    tracing::warn!(%error, "a stale-operation pass failed");
+                }
             }
         }
     })

@@ -53,12 +53,54 @@ pub struct PlatformConfig {
     #[serde(default)]
     pub retention: RetentionConfig,
 
+    /// How the operation projection reconciles work that stopped showing signs of life.
+    /// Always present; every member has a default (ADR-0014).
+    #[serde(default)]
+    pub operations: OperationsConfig,
+
     /// The two phases of a graceful stop.
     pub shutdown: ShutdownConfig,
 
     /// Logging, filtering and span export.
     pub telemetry: TelemetryConfig,
 }
+
+/// The stale-operation reconciliation window (`ADR-0014`).
+///
+/// One member, and it is the only knob the reaper has: an operation unterminated with no observed
+/// fact newer than this window is harvested as `failed`. The pass interval and its batch are
+/// constants beside their siblings in `ratatoskr-edge`, because a knob nobody tunes is a knob that
+/// lies about being tunable.
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OperationsConfig {
+    /// `RATATOSKR__OPERATIONS__STALE_AFTER_SECONDS`. Default 86 400 — one day, longer than any
+    /// plausible broker outage plus drain-plus-restart on this host, shorter than forever.
+    ///
+    /// Validated to `3600..=2_592_000` by rule V19, which refuses zero outright: a limit of zero
+    /// reads as "off" to whoever typed it and behaves as "harvest everything" in code, and there is
+    /// no spelling of that misunderstanding this repository wants to serve. To disable
+    /// reconciliation an operator sets the ceiling; the honest name for what that does is on the
+    /// value, not behind a boolean.
+    #[serde(default = "default_stale_after_seconds")]
+    pub stale_after_seconds: u64,
+}
+
+pub(super) const fn default_stale_after_seconds() -> u64 {
+    DEFAULT_STALE_AFTER_SECONDS
+}
+
+impl Default for OperationsConfig {
+    fn default() -> Self {
+        Self {
+            stale_after_seconds: default_stale_after_seconds(),
+        }
+    }
+}
+
+/// The default of [`OperationsConfig::stale_after_seconds`], as a constant the documentation and
+/// `.env.example` can name without a second literal drifting from them.
+pub const DEFAULT_STALE_AFTER_SECONDS: u64 = 86_400;
 
 /// The operator plane: `/health/live`, `/health/ready`, `/metrics`, `/version`. Never the public API
 /// (`AGENTS.md`: "Keep admin and diagnostic endpoints separate from the public user surface").

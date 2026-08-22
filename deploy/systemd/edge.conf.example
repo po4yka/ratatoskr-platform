@@ -35,4 +35,8 @@ RATATOSKR__BUS__NKEY_SEED_PATH=/etc/ratatoskr/edge.nkey
 # the callback: every parameter of that request is attacker-supplied (ADR-0012).
 #RATATOSKR__IDENTITY__OAUTH_COMPLETION_URL=https://ratatoskr.example/oauth/done
 
+# The stale-operation reaper (ADR-0014). The compiled default of one day is what this deployment
+# runs; state it only to move the window.
+#RATATOSKR__OPERATIONS__STALE_AFTER_SECONDS=86400
+
 RATATOSKR__TELEMETRY__LOG_FORMAT=json

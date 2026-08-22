@@ -430,7 +430,7 @@ No database transaction spans a network call.
 - Commands are published from a durable outbox.
 - Domain unavailability leaves the operation queued or failed with a truthful retry state.
 - Consumer restarts replay events idempotently.
-- Stale running operations are reconciled by an explicit reaper/reconciliation command.
+- Stale running operations are reconciled by an explicit reaper: a bounded pass inside `ratatoskr-edge` (ADR-0014), not a bus round trip — every schedule occurrence creates a user-owned operation, and reconciliation is platform-internal maintenance with no principal to own one.
 - Scheduler occurrences use deterministic IDs to prevent duplicate work.
 - SSE disconnects do not affect operation execution.
 - Partial domain outcomes map to `partially_succeeded`, not false success or rollback of already completed external actions.
@@ -562,7 +562,6 @@ disagree. Kept because the ordering below still reads as the intended arc.
 9. Thin Scheduler command publication and the single-host deployment profile (ADR-0013).
 10. The `linux/arm64` artifact and the first end-to-end slice on the deployment target.
 
-Projection hardening and stale-operation reconciliation were listed at 9 and are in no item; they
-are unassigned rather than scheduled.
+Projection hardening was listed at 9 and is in no item; it is unassigned rather than scheduled. Stale-operation reconciliation left that sentence at ADR-0014, which accepts it as a reaper pass inside `ratatoskr-edge`.
 
 Material changes to identity ownership, public API versioning, or operation semantics require ADRs and coordinated contract updates.

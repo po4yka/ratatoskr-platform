@@ -27,6 +27,7 @@ use crate::transition::Transition;
 use uuid::Uuid;
 
 pub mod projection;
+pub mod reconcile;
 pub mod transition;
 
 /// A refusal that is an expected outcome rather than a fault.
@@ -351,9 +352,8 @@ fn count_transition(outcome: Transition) {
 /// not knowable from any single write: it is a property of the set. So it is sampled on the
 /// observer's timer, in one statement that scans only the unterminated rows.
 ///
-/// The age is what a stale-operation reconciler would act on. That reconciler does not exist —
-/// S14 requires it and no milestone owns it — which makes this the only way to see the condition it
-/// would repair.
+/// The age is what the stale-operation reaper acts on (ADR-0014, `reconcile`): before that
+/// existed, this gauge was the only way to see the condition it repairs.
 ///
 /// # Errors
 ///

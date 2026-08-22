@@ -620,3 +620,58 @@ fn an_inbox_window_shorter_than_the_event_stream_is_refused() {
         Ok(())
     });
 }
+
+/// V19. The reconciliation window is bounded, and zero is refused outright: a limit of zero reads
+/// as "off" to whoever typed it and behaves as "refuse everything" in code, and there is no
+/// spelling of that misunderstanding this repository wants to serve (`V18`'s argument verbatim).
+/// "Disabled" is spelled by setting the ceiling, never by a boolean nobody tests.
+#[test]
+fn the_staleness_window_is_bounded_and_zero_is_not_disabled() {
+    for below_floor in [0_u64, 3599] {
+        Jail::expect_with(|jail| {
+            jail.set_env("RATATOSKR__OPERATIONS__STALE_AFTER_SECONDS", below_floor);
+            assert!(
+                names(
+                    &violations(RuntimeRole::Edge),
+                    "operations.stale_after_seconds",
+                ),
+                "{below_floor} must be refused by rule V19",
+            );
+            Ok(())
+        });
+    }
+
+    Jail::expect_with(|jail| {
+        jail.set_env("RATATOSKR__OPERATIONS__STALE_AFTER_SECONDS", 2_592_001_u64);
+        assert!(
+            names(
+                &violations(RuntimeRole::Edge),
+                "operations.stale_after_seconds"
+            ),
+            "a window beyond thirty days must be refused by rule V19",
+        );
+        Ok(())
+    });
+
+    // The floor and the ceiling themselves are accepted, and the documented default is what an
+    // absent variable produces.
+    for accepted in [3600_u64, 2_592_000] {
+        Jail::expect_with(|jail| {
+            jail.set_env("RATATOSKR__OPERATIONS__STALE_AFTER_SECONDS", accepted);
+            let loaded =
+                config::load(RuntimeRole::Edge).expect("the boundary values of rule V19 are legal");
+            assert_eq!(loaded.operations.stale_after_seconds, accepted);
+            Ok(())
+        });
+    }
+
+    Jail::expect_with(|_jail| {
+        let loaded = config::load(RuntimeRole::Edge).expect("defaults alone must be valid");
+        assert_eq!(
+            loaded.operations.stale_after_seconds,
+            platform_core::config::DEFAULT_STALE_AFTER_SECONDS,
+            "an absent variable is one day, not zero",
+        );
+        Ok(())
+    });
+}

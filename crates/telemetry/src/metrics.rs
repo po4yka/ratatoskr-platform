@@ -108,6 +108,15 @@ pub const PLATFORM_OPERATIONS: &str = "platform_operations";
 pub const PLATFORM_OPERATIONS_OLDEST_UNTERMINATED_AGE_SECONDS: &str =
     "platform_operations_oldest_unterminated_age_seconds";
 
+/// `platform_operations_reconciled_total` — counter.
+///
+/// `ARCHITECTURE.md` S14's reconciliation, counted where it happens (ADR-0014): one increment per
+/// operation the reaper terminated. It sits beside
+/// [`PLATFORM_OPERATION_TRANSITIONS_TOTAL`](self::PLATFORM_OPERATION_TRANSITIONS_TOTAL) rather than
+/// instead of it — that series answers "what moved", this one answers "what WE moved", and merging
+/// them makes a misbehaving worker indistinguishable from an aggressive window.
+pub const PLATFORM_OPERATIONS_RECONCILED_TOTAL: &str = "platform_operations_reconciled_total";
+
 /// `platform_outbox_pending` — gauge. `ARCHITECTURE.md` S16 item 4.
 pub const PLATFORM_OUTBOX_PENDING: &str = "platform_outbox_pending";
 
@@ -179,7 +188,7 @@ pub const DURATION_BUCKETS: [f64; 11] = [
 
 /// Every metric name this workspace emits. A rename silently breaks every dashboard and every
 /// alert, so it must break test T-4 first.
-pub const ALL: [&str; 19] = [
+pub const ALL: [&str; 20] = [
     HTTP_SERVER_REQUEST_DURATION_SECONDS,
     PLATFORM_READINESS,
     PLATFORM_BUILD_INFO,
@@ -191,6 +200,7 @@ pub const ALL: [&str; 19] = [
     PLATFORM_OPERATION_TRANSITIONS_TOTAL,
     PLATFORM_OPERATIONS,
     PLATFORM_OPERATIONS_OLDEST_UNTERMINATED_AGE_SECONDS,
+    PLATFORM_OPERATIONS_RECONCILED_TOTAL,
     PLATFORM_OUTBOX_PENDING,
     PLATFORM_OUTBOX_DEAD_LETTERED,
     PLATFORM_OUTBOX_OLDEST_PENDING_AGE_SECONDS,

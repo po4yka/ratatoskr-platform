@@ -93,6 +93,7 @@ fn the_metric_name_set_is_exactly_the_documented_set() {
             "platform_operation_transitions_total",
             "platform_operations",
             "platform_operations_oldest_unterminated_age_seconds",
+            "platform_operations_reconciled_total",
             "platform_outbox_pending",
             "platform_outbox_dead_lettered",
             "platform_outbox_oldest_pending_age_seconds",

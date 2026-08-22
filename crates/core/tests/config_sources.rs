@@ -29,7 +29,7 @@ use platform_core::config::{self, ConfigError, LogFormat, PlatformConfig};
 /// configuration variable, and milestones 5 to 8 added the database, the bus and the identity keys
 /// without touching it — so the claim had been false for four milestones, and this list is what
 /// makes it checkable again.
-const DOCUMENTED: [(&str, &str); 24] = [
+const DOCUMENTED: [(&str, &str); 25] = [
     ("RATATOSKR__ADMIN__BIND", "127.0.0.1:19464"),
     ("RATATOSKR__PUBLIC__BIND", "127.0.0.1:18080"),
     ("RATATOSKR__PUBLIC__REQUEST_TIMEOUT_SECONDS", "17"),
@@ -61,6 +61,7 @@ const DOCUMENTED: [(&str, &str); 24] = [
     ("RATATOSKR__RETENTION__OUTBOX_DAYS", "32"),
     ("RATATOSKR__RETENTION__AUDIT_DAYS", "33"),
     ("RATATOSKR__RETENTION__SCHEDULE_OCCURRENCE_DAYS", "34"),
+    ("RATATOSKR__OPERATIONS__STALE_AFTER_SECONDS", "86400"),
     ("RATATOSKR__SHUTDOWN__DRAIN_SECONDS", "7"),
     ("RATATOSKR__SHUTDOWN__GRACE_SECONDS", "11"),
     ("RATATOSKR__TELEMETRY__LOG_FORMAT", "pretty"),
