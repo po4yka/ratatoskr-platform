@@ -71,6 +71,16 @@ pub const PLATFORM_CAPABILITY_AVAILABLE: &str = "platform_capability_available";
 /// identifiers", and a user id in a label is both a disclosure and an unbounded cardinality.
 pub const PLATFORM_AUTH_DECISIONS_TOTAL: &str = "platform_auth_decisions_total";
 
+/// `platform_rate_limit_decisions_total{outcome}` — counter.
+///
+/// Emitted from the per-actor limiter's `admit`, where the decision is made, so every call site is
+/// counted by construction rather than by a line somebody remembers to add. `outcome` is
+/// `admitted` or `refused` — a closed set, like every label here.
+///
+/// It carries no identifier of any kind: an actor id in a label is both a disclosure and an
+/// unbounded cardinality, and S16 requires these decisions "without sensitive identifiers".
+pub const PLATFORM_RATE_LIMIT_DECISIONS_TOTAL: &str = "platform_rate_limit_decisions_total";
+
 /// `platform_operation_transitions_total{outcome}` — counter. `ARCHITECTURE.md` S16 item 3, the
 /// transition half.
 ///
@@ -169,7 +179,7 @@ pub const DURATION_BUCKETS: [f64; 11] = [
 
 /// Every metric name this workspace emits. A rename silently breaks every dashboard and every
 /// alert, so it must break test T-4 first.
-pub const ALL: [&str; 18] = [
+pub const ALL: [&str; 19] = [
     HTTP_SERVER_REQUEST_DURATION_SECONDS,
     PLATFORM_READINESS,
     PLATFORM_BUILD_INFO,
@@ -177,6 +187,7 @@ pub const ALL: [&str; 18] = [
     PLATFORM_SCHEDULER_OCCURRENCES_TOTAL,
     PLATFORM_CAPABILITY_AVAILABLE,
     PLATFORM_AUTH_DECISIONS_TOTAL,
+    PLATFORM_RATE_LIMIT_DECISIONS_TOTAL,
     PLATFORM_OPERATION_TRANSITIONS_TOTAL,
     PLATFORM_OPERATIONS,
     PLATFORM_OPERATIONS_OLDEST_UNTERMINATED_AGE_SECONDS,

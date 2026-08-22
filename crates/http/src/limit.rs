@@ -40,6 +40,11 @@ use uuid::Uuid;
 /// way to bypass the limiter is to attack it hard enough, which is the wrong way round.
 const MAX_TRACKED_ACTORS: usize = 10_000;
 
+/// The two outcomes of one admission decision, as the closed label set they are.
+const ADMITTED: &str = "admitted";
+/// The other outcome of an admission decision.
+const REFUSED: &str = "refused";
+
 /// One actor's allowance, as a token bucket.
 #[derive(Debug, Clone, Copy)]
 struct Bucket {
@@ -76,21 +81,37 @@ impl ActorLimiter {
     /// Spend one token for `actor`, or report that it has none.
     ///
     /// `now` is passed rather than read, so the refill is testable without sleeping.
+    ///
+    /// Every path that returns counts its own decision, here and not at the call sites: the
+    /// callers already branch on this `bool`, and a third call site cannot forget a counter it
+    /// never sees. The poisoned-mutex path counts as `admitted`, because that is the decision the
+    /// request received.
     #[must_use]
     pub fn admit(&self, actor: Uuid, now: jiff::Timestamp) -> bool {
+        let outcome = self.decide(actor, now);
+        metrics::counter!(
+            platform_telemetry::metrics::PLATFORM_RATE_LIMIT_DECISIONS_TOTAL,
+            "outcome" => outcome,
+        )
+        .increment(1);
+        outcome == ADMITTED
+    }
+
+    /// The decision itself, separated from its counting so every return has exactly one exit.
+    fn decide(&self, actor: Uuid, now: jiff::Timestamp) -> &'static str {
         let Ok(mut buckets) = self.buckets.lock() else {
             // A poisoned mutex means another thread panicked while holding it. Admitting is the
             // safe side here: the alternative is a limiter that refuses every request for the life
             // of the process because of an unrelated panic.
             tracing::error!("the rate limiter is poisoned; admitting");
-            return true;
+            return ADMITTED;
         };
 
         if !buckets.contains_key(&actor) && buckets.len() >= MAX_TRACKED_ACTORS {
             buckets
                 .retain(|_, bucket| Self::refill(bucket, self.per_minute, now) < self.per_minute);
             if buckets.len() >= MAX_TRACKED_ACTORS {
-                return false;
+                return REFUSED;
             }
         }
 
@@ -102,11 +123,11 @@ impl ActorLimiter {
         if tokens < 1.0 {
             bucket.tokens = tokens;
             bucket.at = now;
-            return false;
+            return REFUSED;
         }
         bucket.tokens = tokens - 1.0;
         bucket.at = now;
-        true
+        ADMITTED
     }
 
     /// The bucket's contents at `now`, capped at the burst.
@@ -182,10 +203,140 @@ mod tests {
 
     use super::ActorLimiter;
     use jiff::{SignedDuration, Timestamp};
+    use std::sync::{Arc, Mutex};
     use uuid::Uuid;
 
     fn at(seconds: i64) -> Timestamp {
         Timestamp::from_second(seconds).expect("a timestamp inside the supported range")
+    }
+
+    /// Every counter increment recorded under it, as `name{label=value,...}` per unit.
+    #[derive(Clone, Default)]
+    struct Recorded(Arc<Mutex<Vec<String>>>);
+
+    impl Recorded {
+        fn lock(&self) -> std::sync::MutexGuard<'_, Vec<String>> {
+            self.0.lock().expect("the test recorder is uncontended")
+        }
+
+        fn contains(&self, series: &str) -> bool {
+            self.lock().iter().any(|entry| entry == series)
+        }
+    }
+
+    /// A recorder that remembers counters and ignores everything else.
+    struct CountingRecorder(Recorded);
+
+    impl metrics::Recorder for CountingRecorder {
+        fn describe_counter(
+            &self,
+            _: metrics::KeyName,
+            _: Option<metrics::Unit>,
+            _: metrics::SharedString,
+        ) {
+        }
+        fn describe_gauge(
+            &self,
+            _: metrics::KeyName,
+            _: Option<metrics::Unit>,
+            _: metrics::SharedString,
+        ) {
+        }
+        fn describe_histogram(
+            &self,
+            _: metrics::KeyName,
+            _: Option<metrics::Unit>,
+            _: metrics::SharedString,
+        ) {
+        }
+
+        fn register_counter(
+            &self,
+            key: &metrics::Key,
+            _: &metrics::Metadata<'_>,
+        ) -> metrics::Counter {
+            let recorded = self.0.clone();
+            let mut labels: Vec<String> = key
+                .labels()
+                .map(|label| format!("{}={}", label.key(), label.value()))
+                .collect();
+            labels.sort();
+            let series = if labels.is_empty() {
+                key.name().to_owned()
+            } else {
+                format!("{}{{{}}}", key.name(), labels.join(","))
+            };
+            metrics::Counter::from_arc(Arc::new(RecordingCounter { series, recorded }))
+        }
+
+        fn register_gauge(&self, _: &metrics::Key, _: &metrics::Metadata<'_>) -> metrics::Gauge {
+            metrics::Gauge::noop()
+        }
+
+        fn register_histogram(
+            &self,
+            _: &metrics::Key,
+            _: &metrics::Metadata<'_>,
+        ) -> metrics::Histogram {
+            metrics::Histogram::noop()
+        }
+    }
+
+    /// Counts into [`Recorded`], one entry per unit incremented.
+    struct RecordingCounter {
+        series: String,
+        recorded: Recorded,
+    }
+
+    impl metrics::CounterFn for RecordingCounter {
+        fn increment(&self, value: u64) {
+            let mut entries = self.recorded.lock();
+            for _ in 0..value {
+                entries.push(self.series.clone());
+            }
+        }
+
+        fn absolute(&self, value: u64) {
+            self.increment(value);
+        }
+    }
+
+    /// L-4. Every admission decision is counted with its outcome, at the site of the decision.
+    ///
+    /// `AGENTS.md` requires rate-limit decisions in telemetry; authorization has its series and
+    /// this is the other half.
+    #[test]
+    fn a_decision_is_counted_with_its_outcome() {
+        let recorded = Recorded::default();
+        let limiter = ActorLimiter::new(1);
+        let actor = Uuid::now_v7();
+        let now = at(1_700_000_000);
+
+        metrics::with_local_recorder(&CountingRecorder(recorded.clone()), || {
+            assert!(limiter.admit(actor, now));
+        });
+        metrics::with_local_recorder(&CountingRecorder(recorded.clone()), || {
+            assert!(
+                !limiter.admit(actor, now),
+                "the second request exceeds an allowance of one"
+            );
+        });
+
+        assert!(
+            recorded.contains("platform_rate_limit_decisions_total{outcome=admitted}"),
+            "an admitted request must count as admitted, got {:?}",
+            recorded.lock(),
+        );
+        assert!(
+            recorded.contains("platform_rate_limit_decisions_total{outcome=refused}"),
+            "a refused request must count as refused, got {:?}",
+            recorded.lock(),
+        );
+        assert_eq!(
+            recorded.lock().len(),
+            2,
+            "nothing else may be counted by an admit"
+        );
     }
 
     /// L-1. An actor spends its burst and is then refused.

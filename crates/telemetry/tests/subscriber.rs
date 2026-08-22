@@ -89,6 +89,7 @@ fn the_metric_name_set_is_exactly_the_documented_set() {
             "platform_scheduler_occurrences_total",
             "platform_capability_available",
             "platform_auth_decisions_total",
+            "platform_rate_limit_decisions_total",
             "platform_operation_transitions_total",
             "platform_operations",
             "platform_operations_oldest_unterminated_age_seconds",

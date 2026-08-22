@@ -62,11 +62,12 @@ Present since milestone 4: the transactional outbox and the inbox in `operations
 grammar, a `JetStream` publisher, and the pump that moves claimed rows onto the bus. Both routes that
 accept work write their command into the outbox; the pump runs in `ratatoskr-edge` only.
 
-Absent: nothing that a milestone owns. Three things are in NO item, and are listed here rather than left to be discovered — the device credential model,
+Absent: nothing that a milestone owns. The things in NO item are listed here rather than left to be discovered — the device credential model,
 which is the half of public authentication milestone 8 did not touch and has no ADR yet;
 stale-operation reconciliation, which `docs/ARCHITECTURE.md` S14 requires and ADR-0002 wrongly
-promised at milestone 9; and backup and restore, for which `deploy/README.md` allocates a path and
-writes nothing. Assigning any of them to a RANGE of milestones assigns them to nobody, which is how
+promised at milestone 9; and the off-host copy of the backup, which `deploy/backup/` does not
+replace: its daily dump reaches NVMe and a borg archive on the second volume, and nothing leaves
+the board. Assigning any of them to a RANGE of milestones assigns them to nobody, which is how
 the `Dockerfile` stayed unowned. None of them is scaffolded, stubbed or present in the checkout.
 
 ## Toolchain
@@ -392,6 +393,7 @@ before it breaks a dashboard.
 | dependency health | `platform_readiness` | `RuntimeState`, on every state change |
 | capability state | `platform_capability_available{capability}` | the observer, from the same facts the route reports |
 | authentication and authorization outcomes | `platform_auth_decisions_total{action,outcome}` | `audit::record`, so the series and `identity.audit_events` cannot disagree |
+| per-actor rate-limit decisions | `platform_rate_limit_decisions_total{outcome}` | the limiter's `admit`, where each decision is made |
 | operation age and transition counts | `platform_operation_transitions_total{outcome}`, `platform_operations{status}`, `platform_operations_oldest_unterminated_age_seconds` | `record_status` for the counter, the observer for the two gauges |
 | outbox and inbox lag | `platform_outbox_pending`, `platform_outbox_oldest_pending_age_seconds`, `platform_outbox_dead_lettered`, `platform_inbox_unprocessed` | the observer |
 | command publication failures | `platform_outbox_publications_total{outcome}` | `pump::run_once`, beside the place each outcome is decided |
