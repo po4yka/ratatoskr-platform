@@ -734,7 +734,7 @@ create table operations.operation_results (
     operation_id  uuid        not null references operations.operations (operation_id) on delete cascade,
     result_kind   text        not null,
     target        text        not null,
-    blob_ref      text,
+    payload       jsonb       not null,
     recorded_at   timestamptz not null,
 
     -- `OperationResultRef.result_kind`: what the target IS, e.g. `content.document`. Stored rather
@@ -745,13 +745,14 @@ create table operations.operation_results (
     -- The namespaced entity reference from ratatoskr-contracts, e.g. `document:<uuid7>`.
     constraint operation_results_target_is_namespaced
         check (target ~ '^[a-z][a-z0-9-]{0,31}:[A-Za-z0-9._~-]{1,128}$'),
-    constraint operation_results_blob_ref_is_bounded
-        check (blob_ref is null or length(blob_ref) between 1 and 255)
+    constraint operation_results_payload_is_an_object
+        check (jsonb_typeof(payload) = 'object')
 );
 
 comment on table operations.operation_results is
-    'Typed result REFERENCES, never result content. ARCHITECTURE S4.2: Platform does not own '
-    'extracted documents, summaries or snapshots. A result is a pointer into the owning service.';
+    'Typed result REFERENCES, never result content. The JSON payload preserves the published '
+    'OperationResultRef, including its structured BlobRef and additive fields. ARCHITECTURE S4.2: '
+    'Platform does not own extracted documents, summaries or snapshots.';
 
 create index operation_results_operation_id_idx
     on operations.operation_results (operation_id);
@@ -767,6 +768,7 @@ create table operations.operation_errors (
     code          text        not null,
     message       text        not null,
     retryable     boolean     not null,
+    payload       jsonb       not null,
     recorded_at   timestamptz not null,
 
     constraint operation_errors_severity_is_known
@@ -775,14 +777,15 @@ create table operations.operation_errors (
     constraint operation_errors_code_is_a_stable_code
         check (code ~ '^[a-z][a-z0-9_]{0,31}(\.[a-z][a-z0-9_]{0,31}){1,3}$'),
     constraint operation_errors_message_is_a_short_safe_string
-        check (length(message) between 1 and 200 and message !~ '[\n\r]')
+        check (length(message) between 1 and 200 and message !~ '[\n\r]'),
+    constraint operation_errors_payload_is_an_object
+        check (jsonb_typeof(payload) = 'object')
 );
 
 comment on table operations.operation_errors is
-    'Safe errors and warnings attached to an operation, in the shape that projects onto '
-    'ratatoskr-contracts ErrorEnvelope and WarningEnvelope. ARCHITECTURE S15 and the contracts '
-    'threat model both forbid a provider response or a stack trace reaching this surface, which is '
-    'why there is no details column and why message is bounded and newline-free.';
+    'Safe errors and warnings attached to an operation. Core columns stay bounded and queryable; '
+    'payload preserves the complete typed ErrorEnvelope or WarningEnvelope, including additive '
+    'fields. ARCHITECTURE S15 and the contracts threat model forbid raw provider diagnostics.';
 comment on column operations.operation_errors.severity is
     'ARCHITECTURE S14: a partial outcome is `partially_succeeded` with warnings, not a false '
     'success. Warnings and terminal errors therefore share a table and are distinguished here.';

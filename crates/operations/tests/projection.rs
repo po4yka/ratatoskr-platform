@@ -11,9 +11,16 @@ use platform_eventing::inbox::Outcome;
 use platform_eventing::{Incoming, MessageClass, StreamSpec, Subject, deliver};
 use platform_operations::ProgressProjection;
 use platform_persistence::test_support::TestDatabase;
-use ratatoskr_identifiers::{Extensions, OperationId};
+use ratatoskr_error_contracts::{
+    ErrorCode, ErrorEnvelope, FieldPath, FieldViolation, TraceId, WarningEnvelope,
+};
+use ratatoskr_identifiers::{
+    BlobOwner, BlobRef, ContentDigest, DigestAlgorithm, DigestHex, EntityRef, Extensions,
+    MediaType, OperationId, SafeMessage,
+};
 use ratatoskr_operation_contracts::{
-    OperationReported, OperationStage, OperationStatus, ProgressPercent,
+    OperationReported, OperationResultKind, OperationResultRef, OperationStage, OperationStatus,
+    ProgressPercent,
 };
 use uuid::Uuid;
 
@@ -100,6 +107,145 @@ async fn a_published_report_advances_the_projection() {
     );
 
     harness.cleanup().await.expect("cleanup");
+}
+
+#[tokio::test]
+async fn a_success_report_round_trips_complete_blob_ref() {
+    let harness = TestDatabase::create().await.expect("a test database");
+    let pool = harness.pool();
+    let operation = platform_operations::accept(
+        pool,
+        Uuid::now_v7(),
+        "content.capture.submit",
+        CORRELATION,
+        None,
+        now(),
+    )
+    .await
+    .expect("accepting");
+    let blob = BlobRef {
+        owner_service: BlobOwner::parse("ratatoskr-extractor").expect("a blob owner"),
+        digest: ContentDigest {
+            algorithm: DigestAlgorithm::Sha256,
+            hex: DigestHex::parse(
+                "0000000000000000000000000000000000000000000000000000000000000000",
+            )
+            .expect("a digest"),
+        },
+        media_type: MediaType::parse("application/vnd.ratatoskr.document+json")
+            .expect("a media type"),
+        length_bytes: 512,
+    };
+    let mut success = report(operation.operation_id, OperationStatus::Succeeded);
+    success.results.push(OperationResultRef {
+        result_kind: OperationResultKind::parse("content.document").expect("a result kind"),
+        target: EntityRef::parse("document:018f0000-0000-7000-8000-000000000002")
+            .expect("a document reference"),
+        blob: Some(blob.clone()),
+        extensions: Extensions::default(),
+    });
+    let message = Incoming {
+        message_id: Uuid::now_v7(),
+        subject: Subject::new(MessageClass::Event, "platform.operation.reported.v1")
+            .expect("a subject"),
+        producer: "ratatoskr-extractor".to_owned(),
+        payload: serde_json::json!({
+            "event_id": Uuid::now_v7(),
+            "producer": "ratatoskr-extractor",
+            "payload": serde_json::to_value(success).expect("the report serializes"),
+        }),
+    };
+
+    assert_eq!(
+        deliver(pool, &ProgressProjection, &message, now())
+            .await
+            .expect("delivering"),
+        Some(Outcome::Applied)
+    );
+    let snapshot = platform_operations::snapshot(pool, operation.operation_id)
+        .await
+        .expect("projecting the operation");
+    let result = snapshot.results.first().expect("a projected result");
+    let projected_blob = result.blob.clone();
+
+    harness.cleanup().await.expect("cleanup");
+
+    assert_eq!(projected_blob.as_ref(), Some(&blob));
+}
+
+#[tokio::test]
+async fn a_failed_report_round_trips_error_and_warnings() {
+    let harness = TestDatabase::create().await.expect("a test database");
+    let pool = harness.pool();
+    let operation = platform_operations::accept(
+        pool,
+        Uuid::now_v7(),
+        "content.capture.submit",
+        CORRELATION,
+        None,
+        now(),
+    )
+    .await
+    .expect("accepting");
+
+    let mut error_extensions = Extensions::new();
+    error_extensions.insert("support_reference", serde_json::json!("extractor-run-17"));
+    let error = ErrorEnvelope {
+        code: ErrorCode::parse("content.extraction.invalid_document").expect("an error code"),
+        message: SafeMessage::parse("The document could not be extracted.")
+            .expect("a safe error message"),
+        retryable: true,
+        field_violations: vec![FieldViolation {
+            field_path: FieldPath::parse("/document/title").expect("a field path"),
+            code: ErrorCode::parse("content.extraction.missing_title").expect("a violation code"),
+            message: SafeMessage::parse("The document has no title.")
+                .expect("a safe violation message"),
+            extensions: Extensions::new(),
+        }],
+        correlation_id: Some(EntityRef::parse(CORRELATION).expect("a correlation reference")),
+        trace_id: Some(
+            TraceId::parse("4bf92f3577b34da6a3ce929d0e0e4736").expect("a trace identifier"),
+        ),
+        extensions: error_extensions,
+    };
+    let mut warning_extensions = Extensions::new();
+    warning_extensions.insert("parser", serde_json::json!("fallback"));
+    let warning = WarningEnvelope {
+        code: ErrorCode::parse("content.extraction.partial_metadata").expect("a warning code"),
+        message: SafeMessage::parse("Some document metadata was unavailable.")
+            .expect("a safe warning message"),
+        field_path: Some(FieldPath::parse("/document/metadata").expect("a field path")),
+        extensions: warning_extensions,
+    };
+    let mut failed = report(operation.operation_id, OperationStatus::Failed);
+    failed.error = Some(error.clone());
+    failed.warnings.push(warning.clone());
+    let message = Incoming {
+        message_id: Uuid::now_v7(),
+        subject: Subject::new(MessageClass::Event, "platform.operation.reported.v1")
+            .expect("a subject"),
+        producer: "ratatoskr-extractor".to_owned(),
+        payload: serde_json::json!({
+            "event_id": Uuid::now_v7(),
+            "producer": "ratatoskr-extractor",
+            "payload": serde_json::to_value(failed).expect("the report serializes"),
+        }),
+    };
+
+    assert_eq!(
+        deliver(pool, &ProgressProjection, &message, now())
+            .await
+            .expect("delivering"),
+        Some(Outcome::Applied)
+    );
+    let snapshot = platform_operations::snapshot(pool, operation.operation_id).await;
+
+    harness.cleanup().await.expect("cleanup");
+
+    let snapshot = snapshot.expect("a failed operation with its error must remain readable");
+    assert_eq!(snapshot.errors, vec![error]);
+    assert_eq!(snapshot.warnings, vec![warning]);
+    assert!(snapshot.retryable);
 }
 
 /// P-1. An event advances the projection, a redelivery of it changes nothing, and an older status

@@ -13,13 +13,11 @@
 use platform_persistence::PersistenceError;
 
 pub use crate::projection::ProgressProjection;
-use ratatoskr_error_contracts::{ErrorCode, ErrorEnvelope, WarningEnvelope};
-use ratatoskr_identifiers::{
-    EntityRef, Extensions, OperationId, SafeMessage, TenantRef, UserId, WireTimestamp,
-};
+use ratatoskr_error_contracts::{ErrorEnvelope, WarningEnvelope};
+use ratatoskr_identifiers::{EntityRef, Extensions, OperationId, TenantRef, UserId, WireTimestamp};
 use ratatoskr_operation_contracts::{
-    OperationKind, OperationResultKind, OperationResultRef, OperationSnapshot, OperationStage,
-    OperationStatus, ProgressPercent,
+    OperationKind, OperationResultRef, OperationSnapshot, OperationStage, OperationStatus,
+    ProgressPercent,
 };
 use sqlx::{PgExecutor, Row as _};
 
@@ -421,24 +419,24 @@ pub async fn sample(pool: &sqlx::PgPool, now: jiff::Timestamp) -> Result<(), Ope
 pub async fn record_result<'e, E>(
     executor: E,
     operation_id: Uuid,
-    result_kind: &str,
-    target: &str,
-    blob_ref: Option<&str>,
+    result: &OperationResultRef,
     now: jiff::Timestamp,
 ) -> Result<(), OperationError>
 where
     E: PgExecutor<'e>,
 {
+    let payload = serde_json::to_value(result)
+        .map_err(|error| OperationError::ContractViolation(error.to_string()))?;
     sqlx::query(
         "insert into operations.operation_results
-             (result_id, operation_id, result_kind, target, blob_ref, recorded_at)
+             (result_id, operation_id, result_kind, target, payload, recorded_at)
          values ($1, $2, $3, $4, $5, $6)",
     )
     .bind(Uuid::now_v7())
     .bind(operation_id)
-    .bind(result_kind)
-    .bind(target)
-    .bind(blob_ref)
+    .bind(String::from(result.result_kind.clone()))
+    .bind(String::from(result.target.clone()))
+    .bind(payload)
     .bind(to_offset(now))
     .execute(executor)
     .await
@@ -447,37 +445,64 @@ where
     Ok(())
 }
 
-/// Attach a safe error or warning.
+/// Attach a complete safe error and synchronize operation retryability.
 ///
 /// # Errors
 ///
 /// [`OperationError::Persistence`] if the insert fails, including when the message is longer than
 /// the schema allows or contains a newline — both of which are how a stack trace arrives.
-pub async fn record_diagnostic<'e, E>(
-    executor: E,
+pub async fn record_error(
+    transaction: &mut sqlx::PgTransaction<'_>,
+    operation_id: Uuid,
+    error: &ErrorEnvelope,
+    now: jiff::Timestamp,
+) -> Result<(), OperationError> {
+    sqlx::query("update operations.operations set retryable = $2 where operation_id = $1")
+        .bind(operation_id)
+        .bind(error.retryable)
+        .execute(&mut **transaction)
+        .await
+        .map_err(PersistenceError::Query)?;
+    let payload = serde_json::to_value(error)
+        .map_err(|error| OperationError::ContractViolation(error.to_string()))?;
+    insert_diagnostic(transaction, operation_id, "error", &payload, now).await
+}
+
+/// Attach a complete safe warning.
+///
+/// # Errors
+///
+/// [`OperationError::Persistence`] if the insert fails.
+pub async fn record_warning(
+    transaction: &mut sqlx::PgTransaction<'_>,
+    operation_id: Uuid,
+    warning: &WarningEnvelope,
+    now: jiff::Timestamp,
+) -> Result<(), OperationError> {
+    let payload = serde_json::to_value(warning)
+        .map_err(|error| OperationError::ContractViolation(error.to_string()))?;
+    insert_diagnostic(transaction, operation_id, "warning", &payload, now).await
+}
+
+async fn insert_diagnostic(
+    transaction: &mut sqlx::PgTransaction<'_>,
     operation_id: Uuid,
     severity: &str,
-    code: &str,
-    message: &str,
-    retryable: bool,
+    payload: &serde_json::Value,
     now: jiff::Timestamp,
-) -> Result<(), OperationError>
-where
-    E: PgExecutor<'e>,
-{
+) -> Result<(), OperationError> {
     sqlx::query(
         "insert into operations.operation_errors
-             (error_id, operation_id, severity, code, message, retryable, recorded_at)
-         values ($1, $2, $3, $4, $5, $6, $7)",
+             (error_id, operation_id, severity, code, message, retryable, payload, recorded_at)
+         values ($1, $2, $3, $4 ->> 'code', $4 ->> 'message',
+                 coalesce(($4 ->> 'retryable')::boolean, false), $4, $5)",
     )
     .bind(Uuid::now_v7())
     .bind(operation_id)
     .bind(severity)
-    .bind(code)
-    .bind(message)
-    .bind(retryable)
+    .bind(payload)
     .bind(to_offset(now))
-    .execute(executor)
+    .execute(&mut **transaction)
     .await
     .map_err(PersistenceError::Query)?;
 
@@ -533,7 +558,7 @@ where
         .transpose()?;
 
     let result_rows = sqlx::query(
-        "select result_kind, target, blob_ref from operations.operation_results
+        "select payload from operations.operation_results
           where operation_id = $1 order by recorded_at, result_id",
     )
     .bind(operation_id)
@@ -543,18 +568,11 @@ where
 
     let mut results = Vec::with_capacity(result_rows.len());
     for row in result_rows {
-        let result_kind: String = row
-            .try_get("result_kind")
-            .map_err(PersistenceError::Query)?;
-        let target: String = row.try_get("target").map_err(PersistenceError::Query)?;
-        results.push(OperationResultRef {
-            result_kind: OperationResultKind::parse(&result_kind)
-                .map_err(|error| violation("result_kind", error.to_string()))?,
-            target: EntityRef::parse(&target)
-                .map_err(|error| violation("result target", error.to_string()))?,
-            blob: None,
-            extensions: Extensions::default(),
-        });
+        let payload: serde_json::Value = row.try_get("payload").map_err(PersistenceError::Query)?;
+        results.push(
+            serde_json::from_value(payload)
+                .map_err(|error| violation("result", error.to_string()))?,
+        );
     }
 
     let (errors, warnings) = load_diagnostics(executor, operation_id).await?;
@@ -605,7 +623,7 @@ where
         |what: &str, detail: String| OperationError::ContractViolation(format!("{what}: {detail}"));
 
     let rows = sqlx::query(
-        "select severity, code, message, retryable from operations.operation_errors
+        "select severity, payload from operations.operation_errors
           where operation_id = $1 order by recorded_at, error_id",
     )
     .bind(operation_id)
@@ -617,23 +635,18 @@ where
     let mut warnings = Vec::new();
     for row in rows {
         let severity: String = row.try_get("severity").map_err(PersistenceError::Query)?;
-        let code: String = row.try_get("code").map_err(PersistenceError::Query)?;
-        let message: String = row.try_get("message").map_err(PersistenceError::Query)?;
-        let retryable: bool = row.try_get("retryable").map_err(PersistenceError::Query)?;
-
-        let code = ErrorCode::parse(&code).map_err(|error| violation("code", error.to_string()))?;
-        let message = SafeMessage::parse(&message)
-            .map_err(|error| violation("message", error.to_string()))?;
+        let payload: serde_json::Value = row.try_get("payload").map_err(PersistenceError::Query)?;
 
         if severity == "warning" {
-            warnings.push(WarningEnvelope {
-                code,
-                message,
-                field_path: None,
-                extensions: Extensions::default(),
-            });
+            warnings.push(
+                serde_json::from_value(payload)
+                    .map_err(|error| violation("warning", error.to_string()))?,
+            );
         } else {
-            errors.push(ErrorEnvelope::new(code, message, retryable));
+            errors.push(
+                serde_json::from_value(payload)
+                    .map_err(|error| violation("error", error.to_string()))?,
+            );
         }
     }
 

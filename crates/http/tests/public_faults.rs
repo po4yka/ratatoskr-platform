@@ -151,8 +151,10 @@ fn oversized() -> Request<Body> {
 
 /// Every permitted `ErrorEnvelope::new` site, with the reason it is permitted. Adding a row here is
 /// a deliberate act a reviewer sees; adding a construction site without one fails F-1.
-const ALLOWED_ENVELOPE_SITES: [&str; 2] =
-    ["crates/http/src/fault.rs", "crates/operations/src/lib.rs"];
+const ALLOWED_ENVELOPE_SITES: [&str; 2] = [
+    "crates/http/src/fault.rs",
+    "crates/operations/src/reconcile.rs",
+];
 
 /// F-1: every `ErrorEnvelope::new` site in the repository is one this test names and justifies.
 ///
@@ -167,10 +169,9 @@ const ALLOWED_ENVELOPE_SITES: [&str; 2] =
 ///   * `crates/http/src/fault.rs` is the ONLY place that authors an envelope as an HTTP RESPONSE
 ///     BODY. That is the rule milestone 1 established and it is unchanged: no handler writes its
 ///     own error body.
-///   * `crates/operations/src/lib.rs` reconstitutes a diagnostic that is already stored in
-///     `operations.operation_errors` into the `errors` field of an `OperationSnapshot`. It is data
-///     inside a successful response, not the response to a failure, and routing it through
-///     `fault.rs` would mean mapping a stored row onto a `FailureKind` that does not describe it.
+///   * `crates/operations/src/reconcile.rs` authors Platform's own stale-operation diagnostic. It
+///     is data inside a successful operation snapshot, not the response to an HTTP failure, and
+///     routing it through `fault.rs` would map it onto a `FailureKind` that does not describe it.
 #[test]
 fn error_envelope_is_constructed_in_exactly_one_place() {
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");

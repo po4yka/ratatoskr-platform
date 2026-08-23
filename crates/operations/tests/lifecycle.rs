@@ -10,7 +10,8 @@
 use platform_operations::OperationError;
 use platform_operations::transition::{self, Transition};
 use platform_persistence::test_support::TestDatabase;
-use ratatoskr_operation_contracts::OperationStatus;
+use ratatoskr_identifiers::{EntityRef, Extensions};
+use ratatoskr_operation_contracts::{OperationResultKind, OperationResultRef, OperationStatus};
 use uuid::Uuid;
 
 fn now() -> jiff::Timestamp {
@@ -347,9 +348,13 @@ async fn the_snapshot_projection_satisfies_the_contract() {
     platform_operations::record_result(
         pool,
         operation.operation_id,
-        "content.document",
-        "document:01a0153f-63e5-7010-a4c9-1fe6c43bcc40",
-        None,
+        &OperationResultRef {
+            result_kind: OperationResultKind::parse("content.document").expect("a result kind"),
+            target: EntityRef::parse("document:01a0153f-63e5-7010-a4c9-1fe6c43bcc40")
+                .expect("a target"),
+            blob: None,
+            extensions: Extensions::default(),
+        },
         now(),
     )
     .await

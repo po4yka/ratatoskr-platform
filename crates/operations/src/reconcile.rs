@@ -20,7 +20,7 @@ use ratatoskr_operation_contracts::OperationStatus;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::{OperationError, record_diagnostic};
+use crate::OperationError;
 use platform_persistence::PersistenceError;
 use sqlx::Row as _;
 
@@ -147,21 +147,14 @@ async fn reconcile_one(
     // An operation the PLATFORM terminated for silence may honestly be resubmitted, and invariant
     // I2 refuses a `failed` snapshot with no error — so the flag, the record and the status land in
     // one transaction or not at all.
-    sqlx::query("update operations.operations set retryable = true where operation_id = $1")
-        .bind(operation_id)
-        .execute(&mut *transaction)
-        .await
-        .map_err(PersistenceError::Query)?;
-    record_diagnostic(
-        &mut *transaction,
-        operation_id,
-        "error",
-        STALE_ERROR_CODE,
-        STALE_MESSAGE,
+    let error = ratatoskr_error_contracts::ErrorEnvelope::new(
+        ratatoskr_error_contracts::ErrorCode::parse(STALE_ERROR_CODE)
+            .map_err(|error| crate::OperationError::ContractViolation(error.to_string()))?,
+        ratatoskr_identifiers::SafeMessage::parse(STALE_MESSAGE)
+            .map_err(|error| crate::OperationError::ContractViolation(error.to_string()))?,
         true,
-        now,
-    )
-    .await?;
+    );
+    crate::record_error(&mut transaction, operation_id, &error, now).await?;
 
     transaction
         .commit()

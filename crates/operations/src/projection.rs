@@ -7,7 +7,8 @@
 
 use platform_eventing::inbox::Outcome;
 use platform_eventing::{EventingError, Handler, Incoming};
-use ratatoskr_operation_contracts::{OperationReported, OperationStatus};
+use ratatoskr_error_contracts::{ErrorEnvelope, WarningEnvelope};
+use ratatoskr_operation_contracts::{OperationReported, OperationResultRef, OperationStatus};
 use uuid::Uuid;
 
 use crate::transition::Transition;
@@ -65,20 +66,24 @@ impl Handler for ProgressProjection {
             }
         };
 
-        for result in report.results {
-            crate::record_result(
-                &mut **transaction,
-                report.operation_id,
-                &result.result_kind,
-                &result.target,
-                None,
-                now,
-            )
-            .await
-            .map_err(|error| match error {
-                crate::OperationError::Persistence(error) => EventingError::Persistence(error),
-                other => EventingError::Bus(other.to_string()),
-            })?;
+        for result in &report.results {
+            crate::record_result(&mut **transaction, report.operation_id, result, now)
+                .await
+                .map_err(|error| match error {
+                    crate::OperationError::Persistence(error) => EventingError::Persistence(error),
+                    other => EventingError::Bus(other.to_string()),
+                })?;
+        }
+
+        if let Some(error) = &report.error {
+            crate::record_error(transaction, report.operation_id, error, now)
+                .await
+                .map_err(map_operation_error)?;
+        }
+        for warning in &report.warnings {
+            crate::record_warning(transaction, report.operation_id, warning, now)
+                .await
+                .map_err(map_operation_error)?;
         }
 
         Ok(match transition {
@@ -91,19 +96,15 @@ impl Handler for ProgressProjection {
     }
 }
 
-/// A typed result reference carried by a progress report.
-struct ReportedResult {
-    result_kind: String,
-    target: String,
-}
-
 /// The members Platform reads from a progress report, and no others.
 struct ProgressReport {
     operation_id: Uuid,
     status: OperationStatus,
     stage: Option<String>,
     progress_percent: Option<u8>,
-    results: Vec<ReportedResult>,
+    results: Vec<OperationResultRef>,
+    error: Option<ErrorEnvelope>,
+    warnings: Vec<WarningEnvelope>,
 }
 
 impl ProgressReport {
@@ -120,14 +121,16 @@ impl ProgressReport {
             status: report.status,
             stage: report.stage.map(String::from),
             progress_percent: report.progress_percent.map(u8::from),
-            results: report
-                .results
-                .into_iter()
-                .map(|result| ReportedResult {
-                    result_kind: String::from(result.result_kind),
-                    target: String::from(result.target),
-                })
-                .collect(),
+            results: report.results,
+            error: report.error,
+            warnings: report.warnings,
         })
+    }
+}
+
+fn map_operation_error(error: crate::OperationError) -> EventingError {
+    match error {
+        crate::OperationError::Persistence(error) => EventingError::Persistence(error),
+        other => EventingError::Bus(other.to_string()),
     }
 }
