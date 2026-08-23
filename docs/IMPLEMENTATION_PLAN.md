@@ -23,7 +23,11 @@
 > the slice, and an item after the one it enables lets that item's Definition of Done pass on the one
 > check it exists for. See `ratatoskr-workspace/docs/DEPLOYMENT_TARGET.md`.
 
-Open questions that block a later item are recorded in `DEVELOPMENT.md`. Q2 (the `platform_ingress` versus `platform_ingest` schema spelling) blocked item 7 and is closed by [ADR-0009](adr/0009-one-spelling-for-generic-ingest.md). Q4 (the `correlation` entity kind in `contracts.toml`) is a one-line change to a sibling repository and is still open.
+Open questions and their resolutions are recorded in `DEVELOPMENT.md`. Q2 (the
+`platform_ingress` versus `platform_ingest` schema spelling) closed at item 7 through
+[ADR-0009](adr/0009-one-spelling-for-generic-ingest.md). Q4 closed at item 4 without a contracts
+change: `correlation` remains legal through the open wire vocabulary and deliberately absent from
+the contracts repository's closed fixture vocabulary.
 
 1. Create Rust workspace, typed config, errors, telemetry, health/readiness. *(implemented)*
 2. Implement `identity` schema, users, sessions, devices, and revocation. *(implemented)*

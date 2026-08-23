@@ -2,7 +2,7 @@
 
 `ratatoskr-platform` provides the public control plane for Ratatoskr: identity, authentication, the Edge API, long-running operation tracking, generic ingestion entrypoints, and deterministic scheduling.
 
-> **Status:** milestones 1 through 8 of `docs/IMPLEMENTATION_PLAN.md` are implemented. Three binaries (`ratatoskr-edge`, `ratatoskr-ingest`, `ratatoskr-scheduler`) build, load a typed configuration, install telemetry, expose liveness, readiness, metrics and version on an operator listener, and drain on SIGTERM. `ratatoskr-edge` also binds a public listener that currently serves no routes and returns a contract `ErrorEnvelope` on every non-2xx. Milestones 2 and 3 add the two schemas Platform owns: `identity` (users, external identity mappings, devices, sessions, rotating refresh tokens, assertions, grants, revocations and the public-action audit trail) and `operations` (operations, attempts, progress history, typed result references and safe diagnostics), together with the operation transition table and a trigger that enforces the same rule for any writer that bypasses it. Milestone 4 adds the transactional outbox and inbox, the `cmd.`/`evt.` subject grammar and a JetStream publisher, so a state change and the message announcing it commit together or not at all. Milestone 5 adds the first public routes — `POST /v1/captures` and `GET /v1/operations/{id}` — session authentication and the idempotency ledger: a capture reserves its key, creates its operation and enqueues its command in one transaction, a retry returns the original operation, and the same key with a different payload is refused. Milestone 6 closes the loop: `ratatoskr-edge` publishes the outbox to `JetStream`, consumes `evt.>` back into the operation projection with inbox deduplication, and streams progress at `GET /v1/operations/{id}/events` — read from persisted state, never from the bus, which is never exposed to a client. Milestone 7 adds `GET /v1/capabilities`, the `platform_ingest` schema and the generic webhook adapter at `POST /v1/ingest/webhooks/{source_id}` — the first thing `ratatoskr-ingest` serves, on a public listener of its own — and the generated public `OpenAPI` document in `openapi/openapi.json`, written from the route tables and drift-checked by the test suite. Milestone 8 adds the two ways a person or a provider gets in: `POST /v1/sessions/telegram` exchanges an assertion from `ratatoskr-telegram` for a session — Platform holds only that service's public key and never the bot token — and the OAuth callback facade relays an authorization code to the service that owns the provider through a one-time record, so the code appears in no command, no log and no redirect. Scheduling described below is planned and is not implemented.
+> **Status:** every milestone of `docs/IMPLEMENTATION_PLAN.md` is implemented. The three binaries (`ratatoskr-edge`, `ratatoskr-ingest`, `ratatoskr-scheduler`) provide the public capture and operation APIs, generic webhook ingest, operation projection and SSE delivery, periodic command publication, and the single-host deployment profile. Milestone 10 ran the capture, webhook, and scheduled-command slice through the deployed PostgreSQL and JetStream services on the target host. The detailed current inventory and remaining absences are recorded in `DEVELOPMENT.md`.
 
 > [!IMPORTANT]
 > **Ratatoskr is in development.** No database holds data that has to survive a schema change.
@@ -122,11 +122,7 @@ Idempotency-Key: 018f...
 
 ```json
 {
-  "platform": "instagram",
-  "canonical_url": "https://www.instagram.com/reel/...",
-  "captured_at": "2026-08-17T10:30:00+04:00",
-  "source": "ios_share_extension",
-  "note": "Save for later analysis"
+  "url": "https://example.com/article"
 }
 ```
 
@@ -143,18 +139,19 @@ The corresponding provider service and Knowledge service progress the operation 
 
 ## Commands and events
 
-Platform consumes and emits contracts from `ratatoskr-contracts`. Initial event families include:
+Platform publishes capture commands and consumes operation reports through contracts from
+`ratatoskr-contracts`:
 
 ```text
-platform.operation.accepted.v1
-platform.operation.progressed.v1
-platform.operation.completed.v1
-platform.operation.failed.v1
-platform.identity.linked.v1
-platform.capture.accepted.v1
+cmd.content.capture.requested.v1
+evt.platform.operation.reported.v1
 ```
 
-Platform emits and consumes nothing today; eventing arrives with milestone 4. That list is also stale: `ratatoskr-contracts` ships only `platform.operation.progressed.v1`, whose payload is a state-carried `OperationSnapshot` covering every transition, so `accepted`, `completed` and `failed` have no contract behind them. Either Platform emits one event type or contracts gains three; recorded as open question Q3 in `DEVELOPMENT.md`.
+Domain services publish `platform.operation.reported.v1`; Platform consumes those reports to update
+the public projection. Platform also owns the full-snapshot
+`platform.operation.progressed.v1` contract, but does not publish that event today because clients
+read the projection through REST and SSE. Open question Q3 in `DEVELOPMENT.md` records this resolved
+ownership split.
 
 Commands use at-least-once delivery through NATS JetStream. Platform uses transactional outbox/inbox records, globally unique event IDs, and idempotent state transitions. Exactly-once execution is not assumed.
 
@@ -208,15 +205,9 @@ The array is short because the vocabulary is closed and holds only names this bu
 
 ## Observability
 
-The binaries emit structured `tracing` logs, OpenTelemetry spans, and bounded-cardinality metrics. Three metrics exist today:
-
-```text
-http_server_request_duration_seconds{role,method,route,status}
-platform_readiness{role}
-platform_build_info{role,version,git_sha,rust_version}
-```
-
-The signals `docs/ARCHITECTURE.md` S16 requires but that have no subject yet — operation age, outbox lag, idempotency conflicts, SSE delivery lag, scheduler drift, authentication outcomes — are not emitted at all, because an always-zero series asserts that a component is healthy when it does not exist. `DEVELOPMENT.md` carries the full S16 coverage table with the milestone that supplies each one, and the metric naming convention that keeps later milestones consistent.
+The binaries emit structured `tracing` logs, OpenTelemetry spans, and twenty bounded-cardinality
+metrics. `platform_telemetry::metrics::ALL` is the canonical implemented-name inventory;
+`DEVELOPMENT.md` maps every S16 requirement to its publication point.
 
 Correlation IDs connect client requests, operations, commands, domain events, and downstream notifications. Every request is given one server-side, returned in `x-correlation-id`; see [ADR-0007](docs/adr/0007-correlation-identity-and-trace-context.md).
 
@@ -234,18 +225,22 @@ Correlation IDs connect client requests, operations, commands, domain events, an
 
 The authoritative sequence is `docs/IMPLEMENTATION_PLAN.md`.
 
-1. Establish the Axum service skeleton and typed configuration. **(implemented)**
-2. Add identity, session, and operation schemas. **(implemented)**
-3. Implement NATS outbox/inbox infrastructure. **(implemented)**
-4. Publish the initial operation and capture APIs. **(implemented)**
-5. Add SSE operation progress. **(implemented)**
-6. Implement capability discovery. **(implemented)**
-7. Add generic device capture ingestion. **(implemented)**
-8. Add the thin scheduler and integration tests in `ratatoskr-workspace`.
+1. Create the Rust workspace, typed configuration, errors, telemetry, and health endpoints. **(implemented)**
+2. Implement the `identity` schema. **(implemented)**
+3. Implement the `operations` schema and state machine. **(implemented)**
+4. Add the transactional outbox/inbox and NATS identities and subjects. **(implemented)**
+5. Implement the authenticated capture API and idempotency. **(implemented)**
+6. Project operation reports and expose SSE. **(implemented)**
+7. Add capabilities and generic ingest. **(implemented)**
+8. Add the OAuth callback facade and Telegram assertion exchange. **(implemented)**
+9. Add thin Scheduler publication and the single-host deployment profile. **(implemented)**
+10. Build the `linux/arm64` artifact and run the first end-to-end slice on the deployment target. **(implemented)**
 
 ## Workspace integration
 
-`ratatoskr-workspace` pins Platform together with compatible contracts and dependent clients. Platform remains independently buildable and testable. Cross-repository changes involving the public API use an explicit changeset and an expand/migrate/contract rollout.
+The planned `ratatoskr-workspace` topology will pin Platform together with compatible contracts and
+dependent clients. No workspace repository pins exist yet. Platform remains independently buildable
+and testable. Cross-repository changes involving the public API use an explicit changeset.
 
 ## Project status
 

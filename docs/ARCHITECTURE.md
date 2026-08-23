@@ -1,6 +1,7 @@
 # Ratatoskr Platform Architecture
 
-> Status: target architecture. The crates and services marked `(m1)` in S3 exist; everything else in this document remains a planned boundary rather than a claim about implemented behavior. Schemas, routes, and event infrastructure described here are not implemented.
+> Status: target architecture. Milestones 1 through 10 are implemented. Statements explicitly
+> marked as future work remain target boundaries rather than claims about current behavior.
 
 ## 1. Purpose
 
@@ -37,8 +38,8 @@ flowchart LR
     Telegram --> Edge
     Edge --> Ops
     Edge --> Bus
-    Ingest --> Bus
-    Scheduler --> Bus
+    Ingest --> Ops
+    Scheduler --> Ops
     Bus --> Domains
     Domains --> Bus
     Bus --> Edge
@@ -51,32 +52,31 @@ Public clients communicate only with Edge. Provider-specific services own provid
 ```text
 ratatoskr-platform/
 ├── crates/
-│   ├── core/            (m1)  runtime role, typed configuration, the internal error type
-│   ├── telemetry/       (m1)  subscriber, wire identity, correlation, metrics
-│   ├── http/            (m1)  shared server harness, operator plane, lifecycle
-│   ├── platform-domain/
-│   ├── identity/
-│   ├── operations/
-│   ├── authorization/
-│   ├── idempotency/
-│   ├── public-api/
+│   ├── api-doc/
+│   ├── core/
 │   ├── eventing/
+│   ├── http/
+│   ├── idempotency/
+│   ├── identity/
+│   ├── ingest/
+│   ├── operations/
 │   ├── persistence/
-│   └── test-support/
+│   ├── public-api/
+│   ├── scheduling/
+│   └── telemetry/
 ├── services/
-│   ├── edge/            (m1)
-│   ├── ingest/          (m1)
-│   └── scheduler/       (m1)
+│   ├── edge/
+│   ├── ingest/
+│   └── scheduler/
+├── deploy/
+├── openapi/
 ├── schema.sql
-├── tests/
-│   ├── contract/
-│   └── integration/
 └── docs/
 ```
 
-`core` and `http` are additions to the original ten: the listed crates have no home for configuration, the internal error type, process lifecycle or the operator plane, since `platform-domain` is domain, `persistence` is SQL, and `public-api` is the milestone-5 route surface. `telemetry` is unchanged in name and scope.
-
-Only the paths marked `(m1)` exist. An unmarked path is a planned boundary and is deliberately not created as an empty shell; the milestone that needs it creates it.
+This is the implemented repository structure. Tests remain next to their owning crate or service;
+cross-cutting deployment artifacts live under `deploy/`, and `openapi/openapi.json` is generated from
+the route tables and checked for drift.
 
 Service binaries may share platform primitives, but they must not become one universal worker with all domain dependencies.
 

@@ -1,8 +1,8 @@
 # Developing Ratatoskr Platform
 
-> Status: Implemented for milestones 1 through 8; milestones 9 and 10 are Proposed.  
+> Status: Every milestone is implemented.
 > Owner: `ratatoskr-platform`  
-> Last reviewed: 2026-08-20
+> Last reviewed: 2026-08-23
 
 ## Current stage
 
@@ -74,8 +74,8 @@ Stale-operation reconciliation left this list at ADR-0014: it is the reaper pass
 ## Toolchain
 
 Rust and Tokio, Axum and Tower, figment for configuration, `tracing` with OpenTelemetry, and
-Prometheus text exposition. SQLx/PostgreSQL, NATS JetStream and OpenAPI are in the intended stack but
-arrive with the milestones named below. The pinned toolchain in `rust-toolchain.toml` is the only
+Prometheus text exposition. SQLx/PostgreSQL, NATS JetStream and OpenAPI are implemented parts of the
+stack. The pinned toolchain in `rust-toolchain.toml` is the only
 supported one, and every command is run with `--locked` against the committed `Cargo.lock`.
 
 ## Command families
@@ -377,9 +377,8 @@ The "Emitted" column is the point, and every `no` in it is deliberate. Emitting 
 an always-zero series would be worse than absence: a panel reading `outbox_lag: 0` and a `for: 5m`
 alert that never fires both assert that a component is healthy when nothing is watching it.
 
-Three instruments exist, and only three: `http_server_request_duration_seconds`,
-`platform_readiness` and `platform_build_info` (`platform_telemetry::metrics::ALL`, held to exactly
-that list by test T-4).
+Twenty instruments exist. `platform_telemetry::metrics::ALL` is the canonical list, and test T-4
+fails if a rename or inventory change is not handled deliberately.
 
 **This table was a plan, became a debt, and is now closed.** Milestone 1 wrote it with an "Arrives"
 column, and milestones 2 through 7 then shipped the SUBJECTS — operations, an outbox, idempotency,
@@ -431,22 +430,20 @@ impossible rather than a rule somebody has to remember.
 
 ## Open questions for the repository owner
 
-Each blocks a later milestone or records a contradiction between documents that the milestone which
-found it must not resolve unilaterally. Q2 and Q4 are **hard blockers**: they cannot be worked around
-in the milestone that hits them. Q2 is closed by milestone 7; Q4 is a one-line change to a sibling
-repository and is still open. A struck-through row is answered; it is kept rather than deleted so the
-answer stays attached to the question.
+Each originally blocked a later milestone or recorded a contradiction between documents that the
+milestone which found it could not resolve unilaterally. A struck-through row is answered; it is kept
+rather than deleted so the answer stays attached to the question.
 
 | # | Question | Blocks |
 |---|---|---|
-| Q1 | `README.md` listed `crates/{identity, operations, api-contracts, ingress, platform-infrastructure}`; `docs/ARCHITECTURE.md` S3 lists a different set sharing only `identity` and `operations`. Milestone 1 treats S3 as normative and deleted the README tree. If README's list was intended, S3 must change instead. | milestone 2, which creates the first crate whose name appears in one list and not the other |
+| ~~Q1~~ | ~~`README.md` and `docs/ARCHITECTURE.md` listed different crate sets.~~ **Closed by the implemented workspace.** S3 now records the actual crates and keeps future boundaries out of the current tree. | — |
 | ~~Q2~~ | ~~**Ingress schema spelling.**~~ **Closed by [ADR-0009](docs/adr/0009-one-spelling-for-generic-ingest.md) at milestone 7.** The word is `ingest` wherever it is an identifier: the schema, the crate, the library, the binary, the S18 database role and the `/v1/ingest` path prefix. `README.md` is corrected; `AGENTS.md` turned out to use "ingress" only in prose and needed no change. | — |
 | ~~Q3~~ | ~~**Event family mismatch.**~~ **Closed by workspace change [`unblock-the-first-domain-service`](https://github.com/po4yka/ratatoskr-workspace/tree/main/openspec/changes/unblock-the-first-domain-service).** Domain services publish `platform.operation.reported.v1`; Platform consumes those reports and owns the full-snapshot `platform.operation.progressed.v1` contract. Emitting the snapshot event is not implemented yet because no second consumer needs it; clients read the projection through REST and SSE. | — |
-| Q4 | **`correlation` is not in `contracts.toml [entity_kinds].known`.** `EntityKind` is open on the wire, so nothing breaks at milestones 1 through 3, but a Platform event fixture carrying `correlation:` fails `cargo contracts check`. The fix is a one-line contracts changeset. See [ADR-0007](docs/adr/0007-correlation-identity-and-trace-context.md). | milestone 4, **hard** |
+| ~~Q4~~ | ~~**`correlation` is not in `contracts.toml [entity_kinds].known`.**~~ **Closed by milestone 4 without widening the governed fixture vocabulary.** `EntityKind` is open on the wire, Platform keeps its event fixtures in this repository, and the published contracts deliberately keep `correlation` out of their closed fixture list. See [ADR-0007](docs/adr/0007-correlation-identity-and-trace-context.md). | — |
 | Q5 | Contracts pins `serde_json = "=1.0.151"` and `schemars = "=1.2.2"` exactly. Those are graph-wide constraints: Platform cannot move past them while depending on this contracts commit, including for a security advisory. The remedy is a contracts bump, and it is worth knowing before an advisory rather than during one. | any milestone, on the day it happens |
 | Q6 | `docs/ARCHITECTURE.md` S18's "no public listener except health" is read here as "the scheduler binds exactly one listener and it serves only probes", enforced by a startup validation rule. If health was meant to sit on a public listener alongside the API, the readiness body must be narrowed further, because it would then be reachable from the internet. | milestone 1, if the reading is wrong — one validation rule and one router |
 | Q7 | The seven-command-families sentence is genuinely ambiguous. This document takes the documentation reading; the literal reading forces a database and a message bus into milestone 1, contradicting `docs/IMPLEMENTATION_PLAN.md` items 2 and 4. | milestone 1, if the literal reading was intended |
-| Q8 | `README.md`'s former Observability metric names (`http_request_duration`, `operation_duration`, `outbox_lag`, …) carry no units and mostly have no subject. They are treated as aspirational and were replaced by the three implemented names, with S16 as normative. If those names are a contract with a dashboard that already exists somewhere, that needs saying. | milestone 1 |
+| Q8 | `README.md`'s former Observability metric names (`http_request_duration`, `operation_duration`, `outbox_lag`, …) carry no units and mostly have no subject. They are treated as aspirational and were replaced by the twenty names in `platform_telemetry::metrics::ALL`, with S16 as normative. If those former names are a contract with a dashboard that already exists somewhere, that needs saying. | ongoing |
 | Q9 | `missing_docs`, `unwrap_used`, `expect_used` and `panic` are all denied, inherited from contracts. That is strict for a service: every `LazyLock` constant needs an `#[allow(…, reason = "…")]`. Kept, because a control plane is exactly where an `unwrap` is a 500 — but the `reason =` discipline must hold or the allows become noise. | ongoing |
 | ~~Q10~~ | ~~`ingest` and `scheduler` `main.rs` differ by one constant.~~ **Answered at milestone 7, as scheduled: they diverged.** Ingest gained a public listener, a required database, a schema check and a router; scheduler still binds nothing but its operator listener. The duplication is repaid and the two must not be collapsed. | — |
 
