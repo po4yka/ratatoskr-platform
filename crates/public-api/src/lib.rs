@@ -145,6 +145,14 @@ fn table() -> Vec<Endpoint> {
             handler: get(operations::read),
         },
         Endpoint {
+            doc: operations::LIST_DOC,
+            handler: get(operations::list),
+        },
+        Endpoint {
+            doc: operations::CANCEL_DOC,
+            handler: post(operations::cancel),
+        },
+        Endpoint {
             doc: stream::DOC,
             handler: get(stream::events),
         },
@@ -199,4 +207,5 @@ fn register_schemas(generator: &mut schemars::SchemaGenerator) {
     generator.subschema_for::<oauth::RelayedCallback>();
     generator.subschema_for::<ratatoskr_operation_contracts::OperationSnapshot>();
     generator.subschema_for::<ratatoskr_error_contracts::ErrorEnvelope>();
+    generator.subschema_for::<operations::OperationList>();
 }

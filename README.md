@@ -137,6 +137,15 @@ Example response:
 
 The corresponding provider service and Knowledge service progress the operation asynchronously through versioned events.
 
+Pending work can be stopped and surveyed without guessing identifiers:
+
+```http
+POST /v1/operations/{operation_id}/cancel
+GET /v1/operations?state=running&kind=content.capture.submit&limit=20
+```
+
+Cancelling a live operation records a stop request, delivers it to the executing service over the bus, and answers with the operation's current state — the status becomes `cancelled` only when that service confirms it stopped. Cancelling an already-finished operation returns its outcome as plain truth. The listing is scoped to the caller, filtered exactly, paginated by an opaque cursor that cannot shift under concurrent writes, and carries lifecycle facts without result or error payloads.
+
 ## Commands and events
 
 Platform publishes capture commands and consumes operation reports through contracts from
@@ -144,6 +153,7 @@ Platform publishes capture commands and consumes operation reports through contr
 
 ```text
 cmd.content.capture.requested.v1
+cmd.platform.operation.cancel_requested.v1
 evt.platform.operation.reported.v1
 ```
 

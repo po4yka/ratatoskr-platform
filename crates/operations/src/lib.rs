@@ -12,6 +12,8 @@
 
 use platform_persistence::PersistenceError;
 
+pub use crate::cancel::{Cancellation, request_cancellation};
+pub use crate::list::{ListScope, Page, list_operations};
 pub use crate::projection::ProgressProjection;
 use ratatoskr_error_contracts::{ErrorEnvelope, WarningEnvelope};
 use ratatoskr_identifiers::{EntityRef, Extensions, OperationId, TenantRef, UserId, WireTimestamp};
@@ -24,6 +26,8 @@ use sqlx::{PgExecutor, Row as _};
 use crate::transition::Transition;
 use uuid::Uuid;
 
+pub mod cancel;
+pub mod list;
 pub mod projection;
 pub mod reconcile;
 pub mod transition;
@@ -77,6 +81,9 @@ pub struct Operation {
     pub correlation_id: String,
     /// Whether the client may resubmit.
     pub retryable: bool,
+    /// When the owner asked for the work to stop, if it was asked. A request, not a state: the
+    /// operation reaches `cancelled` only when its owning service confirms it stopped.
+    pub cancellation_requested_at: Option<jiff::Timestamp>,
     /// When it was accepted.
     pub accepted_at: jiff::Timestamp,
     /// When its status last changed.
@@ -85,7 +92,7 @@ pub struct Operation {
     pub terminated_at: Option<jiff::Timestamp>,
 }
 
-fn status_str(status: OperationStatus) -> &'static str {
+pub(crate) fn status_str(status: OperationStatus) -> &'static str {
     match status {
         OperationStatus::Accepted => "accepted",
         OperationStatus::Queued => "queued",
@@ -102,7 +109,7 @@ fn status_str(status: OperationStatus) -> &'static str {
     }
 }
 
-fn status_from_str(value: &str) -> Option<OperationStatus> {
+pub(crate) fn status_from_str(value: &str) -> Option<OperationStatus> {
     match value {
         "accepted" => Some(OperationStatus::Accepted),
         "queued" => Some(OperationStatus::Queued),
@@ -115,12 +122,12 @@ fn status_from_str(value: &str) -> Option<OperationStatus> {
     }
 }
 
-fn to_offset(value: jiff::Timestamp) -> time::OffsetDateTime {
+pub(crate) fn to_offset(value: jiff::Timestamp) -> time::OffsetDateTime {
     time::OffsetDateTime::from_unix_timestamp_nanos(value.as_nanosecond())
         .unwrap_or(time::OffsetDateTime::UNIX_EPOCH)
 }
 
-fn from_offset(value: time::OffsetDateTime) -> jiff::Timestamp {
+pub(crate) fn from_offset(value: time::OffsetDateTime) -> jiff::Timestamp {
     jiff::Timestamp::from_nanosecond(value.unix_timestamp_nanos())
         .unwrap_or(jiff::Timestamp::UNIX_EPOCH)
 }
@@ -171,6 +178,7 @@ where
         progress_percent: None,
         correlation_id: correlation_id.to_owned(),
         retryable: false,
+        cancellation_requested_at: None,
         accepted_at: now,
         status_changed_at: now,
         terminated_at: None,
@@ -191,7 +199,8 @@ where
 {
     let row = sqlx::query(
         "select operation_id, owner_user_id, kind, status, stage, progress_percent,
-                correlation_id, retryable, accepted_at, status_changed_at, terminated_at
+                correlation_id, retryable, cancellation_requested_at,
+                accepted_at, status_changed_at, terminated_at
            from operations.operations where operation_id = $1",
     )
     .bind(operation_id)
@@ -203,6 +212,9 @@ where
     let status: String = row.try_get("status").map_err(PersistenceError::Query)?;
     let terminated_at: Option<time::OffsetDateTime> = row
         .try_get("terminated_at")
+        .map_err(PersistenceError::Query)?;
+    let requested_at: Option<time::OffsetDateTime> = row
+        .try_get("cancellation_requested_at")
         .map_err(PersistenceError::Query)?;
 
     Ok(Some(Operation {
@@ -224,6 +236,7 @@ where
             .try_get("correlation_id")
             .map_err(PersistenceError::Query)?,
         retryable: row.try_get("retryable").map_err(PersistenceError::Query)?,
+        cancellation_requested_at: requested_at.map(from_offset),
         accepted_at: from_offset(
             row.try_get("accepted_at")
                 .map_err(PersistenceError::Query)?,

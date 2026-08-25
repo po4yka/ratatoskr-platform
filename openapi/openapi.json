@@ -302,6 +302,29 @@
         "title": "OperationKind",
         "type": "string"
       },
+      "OperationList": {
+        "description": "One page of [`OperationSummary`] rows, newest accepted first.\n\n`next_cursor` is always present: `null` means the walk is finished, a string means at least\none more page exists. A cursor is opaque to the client - pass it back verbatim.",
+        "properties": {
+          "next_cursor": {
+            "description": "The continuation point, or `null` when this page holds the end of the listing.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "operations": {
+            "description": "The rows of this page.",
+            "items": {
+              "$ref": "#/components/schemas/OperationSummary"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "operations"
+        ],
+        "type": "object"
+      },
       "OperationResultKind": {
         "description": "What an [`OperationResultRef`](crate::OperationResultRef) points at, e.g.\n`content.document`.",
         "examples": [
@@ -503,6 +526,78 @@
             "type": "string"
           }
         ]
+      },
+      "OperationSummary": {
+        "description": "One listed operation: identification and lifecycle truth, no payloads.\n\nResult references, errors and warnings stay the singular endpoint's job; a listing answers\n\"what is the state of my work\", and a client that wants an outcome follows the identifier.",
+        "properties": {
+          "accepted_at": {
+            "$ref": "#/components/schemas/WireTimestamp",
+            "description": "When it was accepted."
+          },
+          "correlation_id": {
+            "description": "The correlation identifier that ties this operation to its acceptance request.",
+            "type": "string"
+          },
+          "kind": {
+            "description": "What work it performs.",
+            "type": "string"
+          },
+          "operation_id": {
+            "description": "The operation's identity.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "progress_percent": {
+            "description": "Bounded progress, when one was reported.",
+            "format": "int16",
+            "maximum": 32767,
+            "minimum": -32768,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "retryable": {
+            "description": "Whether the client may resubmit this work after a failure.",
+            "type": "boolean"
+          },
+          "stage": {
+            "description": "A producer-defined display phase, when one was reported.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "$ref": "#/components/schemas/OperationStatus",
+            "description": "Where it is in the lifecycle."
+          },
+          "status_changed_at": {
+            "$ref": "#/components/schemas/WireTimestamp",
+            "description": "When its status last changed."
+          },
+          "terminated_at": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WireTimestamp"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When it finished, if it has."
+          }
+        },
+        "required": [
+          "operation_id",
+          "kind",
+          "status",
+          "retryable",
+          "correlation_id",
+          "accepted_at",
+          "status_changed_at"
+        ],
+        "type": "object"
       },
       "ProgressPercent": {
         "description": "Completion estimate in whole percent, 0..=100 inclusive. Integer, never floating point, so canonical serialization is platform-independent. Absence means the producer cannot estimate, never zero.",
@@ -1118,6 +1213,111 @@
         ]
       }
     },
+    "/v1/operations": {
+      "get": {
+        "description": "Answers with your operations, newest accepted first, in pages you size. Filter them by lifecycle `state`, by exact `kind`, or both at once; follow `next_cursor` for the rest. The cursor is opaque: pages cannot shift while you walk them, and passing `null` back means you are done.\n\nRows carry identification and lifecycle facts but not result references, errors or warnings - read those from `GET /v1/operations/{operation_id}`, which stays the place an outcome lives.",
+        "operationId": "listOperations",
+        "parameters": [
+          {
+            "description": "Only operations in this lifecycle state. One of accepted, queued, running, succeeded, partially_succeeded, failed, cancelled.",
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only operations of exactly this kind, e.g. content.capture.submit.",
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "How many rows to answer with, 1 to 100. The default is 20.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The `next_cursor` value of the previous response, verbatim.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationList"
+                }
+              }
+            },
+            "description": "One page. `next_cursor` is null after the last one."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "A state outside the vocabulary, a malformed kind, a page size outside 1..=100, or a cursor this service did not issue."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No credential, or one that does not authenticate here."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "This caller has spent its request allowance. Retryable: the allowance refills continuously, so waiting is the fix."
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "A dependency did not answer in time."
+          }
+        },
+        "security": [
+          {
+            "sessionBearer": []
+          }
+        ],
+        "summary": "List your operations",
+        "tags": [
+          "operations"
+        ]
+      }
+    },
     "/v1/operations/{operation_id}": {
       "get": {
         "description": "Returns the operation as a snapshot: its status, the stage it is in, its progress, and its result or its errors once it has one. The same shape every consumer of an operation sees; there is no second, API-only projection to keep in step.\n\nPoll this, or subscribe to `GET /v1/operations/{operation_id}/events` to be told instead of asking. An operation you do not own and an operation that does not exist both answer 404, so this route cannot be used to discover which identifiers are real.",
@@ -1192,6 +1392,95 @@
           }
         ],
         "summary": "The current state of one operation",
+        "tags": [
+          "operations"
+        ]
+      }
+    },
+    "/v1/operations/{operation_id}/cancel": {
+      "post": {
+        "description": "Records a request to stop one of your operations and delivers it to the service executing the work, which stops cooperatively and reports the outcome like any other progress report. The response carries the operation's CURRENT state, never the requested one: between the request and the confirmation the operation keeps whatever status its work has actually reached.\n\nThe route is idempotent without an `Idempotency-Key`. Cancelling twice queues one stop request, and cancelling an operation that already finished answers with its outcome as plain truth - a `succeeded` capture stays `succeeded`.",
+        "operationId": "cancelOperation",
+        "parameters": [
+          {
+            "description": "The operation to stop, as returned by the route that created it.",
+            "in": "path",
+            "name": "operation_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationSnapshot"
+                }
+              }
+            },
+            "description": "Nothing to stop: the operation had already finished, and the body carries its outcome unchanged."
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationSnapshot"
+                }
+              }
+            },
+            "description": "The stop request was recorded for a still-running operation. The body carries its current snapshot."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No credential, or one that does not authenticate here."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No such operation, or it belongs to somebody else."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "This caller has spent its request allowance. Retryable: the allowance refills continuously, so waiting is the fix."
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "A dependency did not answer in time. Nothing was written; retrying is safe and converges on current truth."
+          }
+        },
+        "security": [
+          {
+            "sessionBearer": []
+          }
+        ],
+        "summary": "Ask for an operation to stop",
         "tags": [
           "operations"
         ]

@@ -58,6 +58,16 @@ REQUIRES `RATATOSKR__DATABASE__URL` and refuses to start without it: every route
 writes the database, and a process that started anyway would report itself ready and then fail every
 request.
 
+Present since the operation-surface extension: `POST /v1/operations/{id}/cancel`, which records a
+stop request on a live operation (`cancellation_requested_at`), enqueues one
+`cmd.platform.operation.cancel_requested.v1` through the outbox in the same transaction, and answers
+with current truth — `202` while anything can still happen, `200` with the outcome for an operation
+that already finished; and `GET /v1/operations`, an owner-scoped listing with exact `state` and
+`kind` filters and keyset-cursor pagination over `(accepted_at, operation_id)` whose rows carry the
+lifecycle fields but not the heavy payload collections. Cancellation reaches `cancelled` only when
+the owning service reports it back; a stop request is not a sign of life, and the reaper still fails
+an operation that stays silent past its staleness bound.
+
 Present since milestone 4: the transactional outbox and the inbox in `operations`, the NATS subject
 grammar, a `JetStream` publisher, and the pump that moves claimed rows onto the bus. Both routes that
 accept work write their command into the outbox; the pump runs in `ratatoskr-edge` only.
