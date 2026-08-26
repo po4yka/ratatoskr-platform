@@ -42,6 +42,11 @@ request that writes it.
   reaper is an edge task and not a scheduler command, what counts as liveness, and how an operation
   nobody advances reaches a truthful end. **Accepted**, and discharges what S14 required and
   ADR-0002 left unassigned.
+- [ADR-0015](0015-edge-routing-model.md): Edge routing to domain services — path-prefix reverse
+  proxy at edge, minted identity claims instead of per-service credentials, streaming pass-through,
+  route-class budgets, envelope normalization, truthful upstream failures, and why client uploads
+  traverse edge to per-service blob receipts. **Accepted**; the gateway implementation continues
+  under `openspec/changes/add-edge-gateway-routing`.
 
 Still unwritten, and deliberately unnumbered until somebody writes one: idempotency retention, which
 should be written in the same pull request as the retention loop rather than left here; and the
