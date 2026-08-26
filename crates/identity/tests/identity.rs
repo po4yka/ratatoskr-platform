@@ -184,7 +184,11 @@ async fn revoking_a_device_revokes_its_sessions() {
             .await
             .expect("revoking the device");
     transaction.commit().await.expect("commit");
-    assert_eq!(revoked, 3, "every session of the device must be revoked");
+    assert_eq!(
+        revoked.len(),
+        3,
+        "every session of the device must be revoked"
+    );
 
     let live: i64 = sqlx::query_scalar(
         "select count(*) from identity.sessions where device_id = $1 and revoked_at is null",

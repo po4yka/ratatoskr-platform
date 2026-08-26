@@ -21,7 +21,7 @@ use platform_identity::{
 };
 use uuid::Uuid;
 
-use crate::ApiState;
+use crate::{ApiState, correlation_of};
 
 /// How long a session minted from an assertion lives.
 ///
@@ -326,6 +326,487 @@ The internal user is independent of the Telegram account. Signing in for the fir
         ResponseDoc {
             status: 504,
             description: "A dependency did not answer in time. Nothing was written.",
+            payload: Some(Payload::Json("ErrorEnvelope")),
+        },
+    ],
+};
+
+// -------------------------------------------------------------------------------------------------
+// The lifecycle surface: seeing your sessions, and ending them.
+//
+// ADR-0016. Listing is how the settings page answers "where am I signed in"; revocation is how it
+// answers "sign that out". Both are owner-scoped with the anti-oracle rule the rest of this API
+// observes: somebody else's session and a missing one are the same 404 — but a real foreign target
+// leaves a denial behind, because probing is worth seeing.
+// -------------------------------------------------------------------------------------------------
+
+use axum::extract::Path;
+use platform_api_doc::{In as DocIn, Parameter};
+
+/// One listed session: what kind it is, what device carries it when one does, and its liveness.
+#[derive(Debug, serde::Serialize, schemars::JsonSchema)]
+pub struct SessionSummary {
+    /// The session's identity.
+    pub session_id: Uuid,
+    /// How it was established.
+    pub kind: String,
+    /// The bound device, when the kind requires one.
+    pub device: Option<SessionDeviceRef>,
+    /// When it was issued.
+    pub issued_at: String,
+    /// When it stops being valid on its own.
+    pub expires_at: String,
+    /// When it last authenticated, as far as the throttled liveness touch records.
+    pub last_seen_at: Option<String>,
+}
+
+/// A device reference inside [`SessionSummary`].
+#[derive(Debug, serde::Serialize, schemars::JsonSchema)]
+pub struct SessionDeviceRef {
+    /// The device's identity.
+    pub device_id: Uuid,
+    /// Which client it is.
+    pub kind: String,
+    /// The owner's name for it, when there is one.
+    pub display_name: Option<String>,
+}
+
+/// One page of [`SessionSummary`] rows, newest first. `next_cursor` nulls at the end of the walk.
+#[derive(Debug, serde::Serialize, schemars::JsonSchema)]
+pub struct SessionList {
+    /// The page.
+    pub sessions: Vec<SessionSummary>,
+    /// Pass back verbatim for the next page; `null` after the last one.
+    pub next_cursor: Option<String>,
+}
+
+/// The query string of `GET /v1/sessions`.
+#[derive(Debug, Default, serde::Deserialize)]
+pub struct SessionListParams {
+    /// How many rows to answer with, between 1 and 100.
+    pub limit: Option<String>,
+    /// The continuation cursor from the previous response.
+    pub cursor: Option<String>,
+}
+
+const SESSIONS_PAGE_DEFAULT: i64 = 20;
+const SESSIONS_PAGE_MAX: i64 = 100;
+
+fn encode_session_cursor(issued_at: jiff::Timestamp, session_id: Uuid) -> String {
+    format!("{}.{}", issued_at.as_microsecond(), session_id)
+}
+
+fn decode_session_cursor(raw: &str) -> Option<(jiff::Timestamp, Uuid)> {
+    let (micros, identifier) = raw.split_once('.')?;
+    let session_id = Uuid::parse_str(identifier).ok()?;
+    let issued_at = jiff::Timestamp::from_microsecond(micros.parse::<i64>().ok()?).ok()?;
+    Some((issued_at, session_id))
+}
+
+/// `GET /v1/sessions`.
+///
+/// The caller's live sessions — unrevoked and unexpired — across every kind, newest first,
+/// keyset-paginated so pages never shift under concurrent sign-ins.
+pub async fn list_sessions(
+    State(state): State<Arc<ApiState>>,
+    principal: crate::Principal,
+    axum::extract::Query(params): axum::extract::Query<SessionListParams>,
+) -> Response {
+    let limit = match params.limit.as_deref() {
+        None => SESSIONS_PAGE_DEFAULT,
+        Some(raw) => match raw.parse::<i64>() {
+            Ok(value) if (1..=SESSIONS_PAGE_MAX).contains(&value) => value,
+            _ => return platform_http::reject(FailureKind::InvalidRequest),
+        },
+    };
+    let after = match params.cursor.as_deref() {
+        None | Some("") => None,
+        Some(raw) => match decode_session_cursor(raw) {
+            Some(anchor) => Some(anchor),
+            None => return platform_http::reject(FailureKind::InvalidRequest),
+        },
+    };
+
+    let sessions = platform_identity::session::list_live_sessions(
+        state.database.pool(),
+        principal.user_id,
+        jiff::Timestamp::now(),
+        after,
+        limit,
+    )
+    .await;
+    let sessions = match sessions {
+        Ok(sessions) => sessions,
+        Err(error) => {
+            tracing::error!(%error, "the session listing could not be read");
+            return platform_http::reject(FailureKind::RequestTimeout);
+        }
+    };
+
+    let page_full = usize::try_from(limit).is_ok_and(|bound| sessions.len() == bound);
+    let next_cursor = page_full
+        .then_some(sessions.last())
+        .flatten()
+        .map(|last| encode_session_cursor(last.issued_at, last.session_id));
+    let rows = sessions
+        .into_iter()
+        .map(|s| SessionSummary {
+            session_id: s.session_id,
+            kind: s.kind.as_str().to_owned(),
+            device: s.device.map(|d| SessionDeviceRef {
+                device_id: d.device_id,
+                kind: d.kind.as_str().to_owned(),
+                display_name: d.display_name,
+            }),
+            issued_at: s.issued_at.to_string(),
+            expires_at: s.expires_at.to_string(),
+            last_seen_at: s.last_seen_at.map(|seen| seen.to_string()),
+        })
+        .collect();
+
+    (
+        http::StatusCode::OK,
+        Json(SessionList {
+            sessions: rows,
+            next_cursor,
+        }),
+    )
+        .into_response()
+}
+
+/// `DELETE /v1/sessions/{session_id}`.
+///
+/// Revokes one of the caller's live sessions in place — auditable history stays, access ends
+/// now — recording why. Repeating the call, naming a dead session, a foreign one or none at all:
+/// the same 404 each time.
+///
+/// No `Idempotency-Key`: the identifier is the idempotency domain, exactly as cancellation's is.
+pub async fn revoke_session(
+    State(state): State<Arc<ApiState>>,
+    principal: crate::Principal,
+    context: Option<axum::Extension<platform_http::RequestContext>>,
+    Path(session_id): Path<Uuid>,
+) -> Response {
+    let correlation = correlation_of(context);
+    let now = jiff::Timestamp::now();
+    let pool = state.database.pool();
+
+    let Ok(mut transaction) = pool.begin().await else {
+        tracing::error!("a transaction could not be started");
+        return platform_http::reject(FailureKind::RequestTimeout);
+    };
+
+    let subject = platform_identity::session::find_session(&mut *transaction, session_id).await;
+    let subject = match subject {
+        Ok(Some(session)) => session,
+        Ok(None) => return platform_http::reject(FailureKind::NotFound),
+        Err(error) => {
+            tracing::error!(%error, "the session could not be read");
+            return platform_http::reject(FailureKind::RequestTimeout);
+        }
+    };
+    if subject.user_id != principal.user_id {
+        if let Err(error) =
+            record_denial(&mut transaction, &principal, &correlation, session_id, now).await
+        {
+            tracing::error!(%error, "a foreign revocation could not be audited");
+            return platform_http::reject(FailureKind::RequestTimeout);
+        }
+        if let Err(error) = transaction.commit().await {
+            tracing::error!(%error, "the denial could not be committed");
+            return platform_http::reject(FailureKind::RequestTimeout);
+        }
+        return platform_http::reject(FailureKind::NotFound);
+    }
+    if !subject.is_live_at(now) {
+        // Already ended: the repeat converges on the same truth as a miss.
+        return platform_http::reject(FailureKind::NotFound);
+    }
+
+    if let Err(error) =
+        platform_identity::session::revoke_session(&mut *transaction, session_id, now).await
+    {
+        tracing::error!(%error, "the session could not be revoked");
+        return platform_http::reject(FailureKind::RequestTimeout);
+    }
+    if let Err(error) = platform_identity::record_revocation(
+        &mut *transaction,
+        platform_identity::RevocationSubject::Session,
+        session_id,
+        platform_identity::RevocationReason::UserRequest,
+        Some(principal.user_id),
+        now,
+    )
+    .await
+    {
+        tracing::error!(%error, "the revocation could not be recorded");
+        return platform_http::reject(FailureKind::RequestTimeout);
+    }
+
+    let event = AuditEvent {
+        audit_event_id: Uuid::now_v7(),
+        actor_user_id: Some(principal.user_id),
+        actor_session_id: Some(principal.session_id),
+        action: "session.revoke",
+        target_kind: "session",
+        target_id: Some(session_id),
+        outcome: AuditOutcome::Allowed,
+        correlation_id: correlation.clone(),
+    };
+    if let Err(error) = audit::record(&mut *transaction, &event, now).await {
+        tracing::error!(%error, "the revocation could not be audited");
+        return platform_http::reject(FailureKind::RequestTimeout);
+    }
+    if let Err(error) = transaction.commit().await {
+        tracing::error!(%error, "the revocation could not be committed");
+        return platform_http::reject(FailureKind::RequestTimeout);
+    }
+
+    http::StatusCode::NO_CONTENT.into_response()
+}
+
+/// What revoke-all answers.
+#[derive(Debug, serde::Serialize, schemars::JsonSchema)]
+pub struct RevokedAll {
+    /// How many live sessions ended, including the calling one.
+    pub revoked: u64,
+}
+
+/// `POST /v1/sessions/revoke-all`.
+///
+/// Ends every live session you own — including the one making this call, which is why the answer
+/// arrives before your next request does. Plain truth, no carve-out to remember. Devices are
+/// untouched on purpose: killing logins must not brick installations, and a device recovers with
+/// one call carrying its root secret.
+pub async fn revoke_all(
+    State(state): State<Arc<ApiState>>,
+    principal: crate::Principal,
+    context: Option<axum::Extension<platform_http::RequestContext>>,
+) -> Response {
+    let correlation = correlation_of(context);
+    let now = jiff::Timestamp::now();
+    let pool = state.database.pool();
+
+    let Ok(mut transaction) = pool.begin().await else {
+        tracing::error!("a transaction could not be started");
+        return platform_http::reject(FailureKind::RequestTimeout);
+    };
+
+    // Collect then revoke in the caller's transaction, so every revoked session gets both its
+    // fast-path instant and its durable why, atomically.
+    let live = platform_identity::session::list_live_session_ids(
+        &mut *transaction,
+        principal.user_id,
+        now,
+    )
+    .await;
+    let live = match live {
+        Ok(ids) => ids,
+        Err(error) => {
+            tracing::error!(%error, "the live sessions could not be read");
+            return platform_http::reject(FailureKind::RequestTimeout);
+        }
+    };
+
+    let revoked = platform_identity::session::revoke_all_sessions_of_user(
+        &mut *transaction,
+        principal.user_id,
+        now,
+    )
+    .await;
+    let _ = match revoked {
+        Ok(revoked) => revoked,
+        Err(error) => {
+            tracing::error!(%error, "the sessions could not be revoked");
+            return platform_http::reject(FailureKind::RequestTimeout);
+        }
+    };
+
+    for session_id in &live {
+        if let Err(error) = platform_identity::record_revocation(
+            &mut *transaction,
+            platform_identity::RevocationSubject::Session,
+            *session_id,
+            platform_identity::RevocationReason::UserRequest,
+            Some(principal.user_id),
+            now,
+        )
+        .await
+        {
+            tracing::error!(%error, "a sweep revocation could not be recorded");
+            return platform_http::reject(FailureKind::RequestTimeout);
+        }
+    }
+
+    let event = AuditEvent {
+        audit_event_id: Uuid::now_v7(),
+        actor_user_id: Some(principal.user_id),
+        actor_session_id: Some(principal.session_id),
+        action: "session.revoke_all",
+        target_kind: "session",
+        target_id: None,
+        outcome: AuditOutcome::Allowed,
+        correlation_id: correlation.clone(),
+    };
+    if let Err(error) = audit::record(&mut *transaction, &event, now).await {
+        tracing::error!(%error, "the sweep could not be audited");
+        return platform_http::reject(FailureKind::RequestTimeout);
+    }
+    if let Err(error) = transaction.commit().await {
+        tracing::error!(%error, "the sweep could not be committed");
+        return platform_http::reject(FailureKind::RequestTimeout);
+    }
+
+    (
+        http::StatusCode::OK,
+        Json(RevokedAll {
+            revoked: u64::try_from(live.len()).unwrap_or(u64::MAX),
+        }),
+    )
+        .into_response()
+}
+
+/// The denial an authenticated actor leaves behind when they reach for a session that is not
+/// theirs. Written in the caller's transaction: the refusal and its trace commit together.
+async fn record_denial(
+    transaction: &mut sqlx::PgTransaction<'_>,
+    principal: &crate::Principal,
+    correlation: &str,
+    target: Uuid,
+    now: jiff::Timestamp,
+) -> Result<(), platform_persistence::PersistenceError> {
+    let event = AuditEvent {
+        audit_event_id: Uuid::now_v7(),
+        actor_user_id: Some(principal.user_id),
+        actor_session_id: Some(principal.session_id),
+        action: "session.revoke",
+        target_kind: "session",
+        target_id: Some(target),
+        outcome: AuditOutcome::Denied,
+        correlation_id: correlation.to_owned(),
+    };
+    audit::record(&mut **transaction, &event, now).await
+}
+
+/// How the lifecycle routes are described in the generated document.
+/// How the session-listing route is described in the generated document.
+pub const LIST_DOC: RouteDoc = RouteDoc {
+    method: Method::Get,
+    path: "/v1/sessions",
+    operation_id: "listSessions",
+    summary: "List your active sessions",
+    description: "\
+Where you are signed in: every live session of yours, whichever way it was established, newest \
+first, each with its kind, its bound device when it has one, and when it last saw use. Follow \
+`next_cursor` for the rest.",
+    tag: "sessions",
+    security: Security::Session,
+    parameters: &[
+        Parameter {
+            name: "limit",
+            location: DocIn::Query,
+            required: false,
+            format: None,
+            description: "Page size, between 1 and 100. Defaults to 20.",
+        },
+        Parameter {
+            name: "cursor",
+            location: DocIn::Query,
+            required: false,
+            format: None,
+            description: "The `next_cursor` value of the previous response, verbatim.",
+        },
+    ],
+    request: None,
+    responses: &[
+        ResponseDoc {
+            status: 200,
+            description: "One page. `next_cursor` is null after the last one.",
+            payload: Some(Payload::Json("SessionList")),
+        },
+        ResponseDoc {
+            status: 401,
+            description: "No credential, or one that does not authenticate.",
+            payload: Some(Payload::Json("ErrorEnvelope")),
+        },
+        ResponseDoc {
+            status: 504,
+            description: "A dependency did not answer in time.",
+            payload: Some(Payload::Json("ErrorEnvelope")),
+        },
+    ],
+};
+
+/// How the single-revocation route is described in the generated document.
+pub const REVOKE_DOC: RouteDoc = RouteDoc {
+    method: Method::Delete,
+    path: "/v1/sessions/{session_id}",
+    operation_id: "revokeSession",
+    summary: "Revoke one of your sessions",
+    description: "\
+Signs that session out immediately; its record remains for audit. A session belonging to \
+somebody else, an already-dead one and a nonexistent identifier are all the same answer.",
+    tag: "sessions",
+    security: Security::Session,
+    parameters: &[Parameter {
+        name: "session_id",
+        location: DocIn::Path,
+        required: true,
+        format: Some("uuid"),
+        description: "The session to revoke.",
+    }],
+    request: None,
+    responses: &[
+        ResponseDoc {
+            status: 204,
+            description: "The session no longer authenticates anything.",
+            payload: None,
+        },
+        ResponseDoc {
+            status: 401,
+            description: "No credential, or one that does not authenticate.",
+            payload: Some(Payload::Json("ErrorEnvelope")),
+        },
+        ResponseDoc {
+            status: 404,
+            description: "No such live session of yours — indistinguishable from somebody else's.",
+            payload: Some(Payload::Json("ErrorEnvelope")),
+        },
+        ResponseDoc {
+            status: 504,
+            description: "A dependency did not answer in time. Nothing was changed.",
+            payload: Some(Payload::Json("ErrorEnvelope")),
+        },
+    ],
+};
+
+/// How the revoke-all route is described in the generated document.
+pub const REVOKE_ALL_DOC: RouteDoc = RouteDoc {
+    method: Method::Post,
+    path: "/v1/sessions/revoke-all",
+    operation_id: "revokeAllSessions",
+    summary: "Revoke every one of your sessions",
+    description: "\
+Signs out everywhere at once, including the session making this call. Devices are deliberately \
+untouched: a registered device recovers by presenting its root secret to the device login route.",
+    tag: "sessions",
+    security: Security::Session,
+    parameters: &[],
+    request: None,
+    responses: &[
+        ResponseDoc {
+            status: 200,
+            description: "Every live session is revoked; the answer counts them.",
+            payload: Some(Payload::Json("RevokedAll")),
+        },
+        ResponseDoc {
+            status: 401,
+            description: "No credential, or one that does not authenticate.",
+            payload: Some(Payload::Json("ErrorEnvelope")),
+        },
+        ResponseDoc {
+            status: 504,
+            description: "A dependency did not answer in time. Nothing was changed.",
             payload: Some(Payload::Json("ErrorEnvelope")),
         },
     ],

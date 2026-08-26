@@ -18,7 +18,7 @@
 use std::sync::Arc;
 
 use axum::Router;
-use axum::routing::{MethodRouter, get, post};
+use axum::routing::{MethodRouter, delete, get, post};
 use platform_api_doc::{ApiSurface, RouteDoc};
 use platform_http::RuntimeState;
 use platform_persistence::Database;
@@ -26,6 +26,8 @@ use platform_persistence::Database;
 pub mod auth;
 pub mod capabilities;
 pub mod captures;
+pub mod credentials;
+pub mod devices;
 pub mod oauth;
 pub mod operations;
 pub mod sessions;
@@ -66,6 +68,10 @@ pub struct ApiState {
     /// In memory, and that is correct rather than a compromise: exactly one edge process runs
     /// (ADR-0010), so this map is the whole system's view of an actor and not one replica's guess.
     pub actor_limit: Arc<platform_http::ActorLimiter>,
+    /// A fixed pre-authentication budget for pairing attempts. The tunnel's client-address headers
+    /// are attacker-controlled, so one process-wide bucket is the only honest identity before a
+    /// pairing code has authenticated anything.
+    pub pairing_limit: Arc<platform_http::ActorLimiter>,
 }
 
 impl ApiState {
@@ -84,6 +90,7 @@ impl ApiState {
             actor_limit: Arc::new(platform_http::ActorLimiter::new(
                 platform_core::config::DEFAULT_ACTOR_REQUESTS_PER_MINUTE,
             )),
+            pairing_limit: Arc::new(platform_http::ActorLimiter::new(20)),
             database,
             audience: audience.into(),
             idempotency_ttl: jiff::SignedDuration::from_hours(24),
@@ -165,6 +172,42 @@ fn table() -> Vec<Endpoint> {
             handler: post(sessions::exchange_telegram),
         },
         Endpoint {
+            doc: sessions::LIST_DOC,
+            handler: get(sessions::list_sessions),
+        },
+        Endpoint {
+            doc: sessions::REVOKE_DOC,
+            handler: delete(sessions::revoke_session),
+        },
+        Endpoint {
+            doc: sessions::REVOKE_ALL_DOC,
+            handler: post(sessions::revoke_all),
+        },
+        Endpoint {
+            doc: credentials::OPEN_DOC,
+            handler: post(credentials::open_device_session),
+        },
+        Endpoint {
+            doc: credentials::REFRESH_DOC,
+            handler: post(credentials::refresh),
+        },
+        Endpoint {
+            doc: devices::CREATE_CODE_DOC,
+            handler: post(devices::create_pairing_code),
+        },
+        Endpoint {
+            doc: devices::PAIR_DOC,
+            handler: post(devices::pair),
+        },
+        Endpoint {
+            doc: devices::LIST_DOC,
+            handler: get(devices::list_devices),
+        },
+        Endpoint {
+            doc: devices::DELETE_DOC,
+            handler: delete(devices::delete_device),
+        },
+        Endpoint {
             doc: oauth::CALLBACK_DOC,
             handler: get(oauth::callback),
         },
@@ -204,6 +247,17 @@ fn register_schemas(generator: &mut schemars::SchemaGenerator) {
     generator.subschema_for::<capabilities::CapabilityDocument>();
     generator.subschema_for::<sessions::ExchangeAssertion>();
     generator.subschema_for::<sessions::SessionMinted>();
+    generator.subschema_for::<sessions::SessionList>();
+    generator.subschema_for::<sessions::RevokedAll>();
+    generator.subschema_for::<credentials::OpenDeviceSession>();
+    generator.subschema_for::<credentials::DeviceSessionOpened>();
+    generator.subschema_for::<credentials::RefreshSession>();
+    generator.subschema_for::<credentials::RotatedCredentials>();
+    generator.subschema_for::<devices::CreatePairingCode>();
+    generator.subschema_for::<devices::PairingCodeIssued>();
+    generator.subschema_for::<devices::PairDevice>();
+    generator.subschema_for::<devices::Paired>();
+    generator.subschema_for::<devices::DeviceList>();
     generator.subschema_for::<oauth::RelayedCallback>();
     generator.subschema_for::<ratatoskr_operation_contracts::OperationSnapshot>();
     generator.subschema_for::<ratatoskr_error_contracts::ErrorEnvelope>();

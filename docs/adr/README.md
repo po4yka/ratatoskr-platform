@@ -47,7 +47,9 @@ request that writes it.
   route-class budgets, envelope normalization, truthful upstream failures, and why client uploads
   traverse edge to per-service blob receipts. **Accepted**; the gateway implementation continues
   under `openspec/changes/add-edge-gateway-routing`.
+- [ADR-0016](0016-device-credential-model.md): Device credential model — primary-session pairing,
+  device-root and rotating session credentials, lifecycle visibility, revocation, and pairing abuse
+  limits. **Accepted**, and closes the authentication half milestone 8 left open.
 
 Still unwritten, and deliberately unnumbered until somebody writes one: idempotency retention, which
-should be written in the same pull request as the retention loop rather than left here; and the
-device credential model, which is the half of public authentication milestone 8 did not touch.
+should be written in the same pull request as the retention loop rather than left here.

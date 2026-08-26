@@ -29,6 +29,8 @@ pub mod assertion;
 pub mod audit;
 pub mod device;
 pub mod grant;
+pub mod pairing;
+pub mod refresh;
 pub mod relay;
 pub mod session;
 pub mod user;

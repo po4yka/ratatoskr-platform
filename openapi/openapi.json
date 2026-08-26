@@ -107,6 +107,127 @@
         ],
         "type": "object"
       },
+      "CreatePairingCode": {
+        "description": "What creating a pairing code may ask for.",
+        "properties": {
+          "expected_kind": {
+            "description": "The kind of device expected to present this code, when the initiator wants to pin one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "label": {
+            "description": "A free-text note about what is expected to pair, at most 120 characters.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "DeviceList": {
+        "description": "One page of [`DeviceSummary`] rows, newest first. `next_cursor` nulls at the end of the walk.",
+        "properties": {
+          "devices": {
+            "description": "The page.",
+            "items": {
+              "$ref": "#/components/schemas/DeviceSummary"
+            },
+            "type": "array"
+          },
+          "next_cursor": {
+            "description": "Pass back verbatim for the next page; `null` after the last one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "devices"
+        ],
+        "type": "object"
+      },
+      "DeviceSessionOpened": {
+        "description": "What a login grants — both credentials appear once, here, and nowhere again.",
+        "properties": {
+          "credential": {
+            "description": "The new session's bearer credential.",
+            "type": "string"
+          },
+          "device_id": {
+            "description": "The device that authenticated.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "expires_at": {
+            "description": "When that credential stops working.",
+            "type": "string"
+          },
+          "refresh_expires_at": {
+            "description": "When that link stops being usable.",
+            "type": "string"
+          },
+          "refresh_token": {
+            "description": "The first link of the new refresh chain.",
+            "type": "string"
+          },
+          "user_id": {
+            "description": "The internal user the device belongs to.",
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "user_id",
+          "device_id",
+          "credential",
+          "expires_at",
+          "refresh_token",
+          "refresh_expires_at"
+        ],
+        "type": "object"
+      },
+      "DeviceSummary": {
+        "description": "One listed device.",
+        "properties": {
+          "created_at": {
+            "description": "When it was registered.",
+            "type": "string"
+          },
+          "device_id": {
+            "description": "The device's identity.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "display_name": {
+            "description": "The owner's name for it, when there is one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "description": "Which client it is.",
+            "type": "string"
+          },
+          "last_seen_at": {
+            "description": "When it last authenticated, as far as the throttled liveness touch records.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "device_id",
+          "kind",
+          "created_at"
+        ],
+        "type": "object"
+      },
       "DigestAlgorithm": {
         "description": "Algorithm used to calculate a content digest.",
         "oneOf": [
@@ -278,6 +399,25 @@
         "required": [
           "web",
           "mobile"
+        ],
+        "type": "object"
+      },
+      "OpenDeviceSession": {
+        "description": "What a logging-in device presents.",
+        "properties": {
+          "device_id": {
+            "description": "The device identifier issued at pairing.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "device_secret": {
+            "description": "The device's root secret. Stored only as a digest; wrong means refused.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "device_id",
+          "device_secret"
         ],
         "type": "object"
       },
@@ -599,6 +739,94 @@
         ],
         "type": "object"
       },
+      "PairDevice": {
+        "description": "What a pairing device presents.",
+        "properties": {
+          "code": {
+            "description": "The single-use code minted by an authenticated session.",
+            "type": "string"
+          },
+          "display_name": {
+            "description": "A name its owner chose for it, at most 120 characters.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "description": "The kind this device claims for itself.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "kind"
+        ],
+        "type": "object"
+      },
+      "Paired": {
+        "description": "What pairing grants — every secret in it appears once, here, and nowhere again.",
+        "properties": {
+          "credential": {
+            "description": "The first session's bearer credential.",
+            "type": "string"
+          },
+          "device_id": {
+            "description": "The registered installation.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "device_secret": {
+            "description": "The device's root credential. Stored only as a digest; losing it means pairing again.",
+            "type": "string"
+          },
+          "expires_at": {
+            "description": "When that credential stops working.",
+            "type": "string"
+          },
+          "refresh_expires_at": {
+            "description": "When that link stops being usable.",
+            "type": "string"
+          },
+          "refresh_token": {
+            "description": "The first link of the refresh chain.",
+            "type": "string"
+          },
+          "user_id": {
+            "description": "The internal user the device now belongs to.",
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "device_id",
+          "user_id",
+          "device_secret",
+          "credential",
+          "expires_at",
+          "refresh_token",
+          "refresh_expires_at"
+        ],
+        "type": "object"
+      },
+      "PairingCodeIssued": {
+        "description": "A minted pairing code.",
+        "properties": {
+          "code": {
+            "description": "The code. Shown once, carried to the new device, never retrievable from Platform again.",
+            "type": "string"
+          },
+          "expires_at": {
+            "description": "When it stops being acceptable.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "expires_at"
+        ],
+        "type": "object"
+      },
       "ProgressPercent": {
         "description": "Completion estimate in whole percent, 0..=100 inclusive. Integer, never floating point, so canonical serialization is platform-independent. Absence means the producer cannot estimate, never zero.",
         "examples": [
@@ -608,6 +836,19 @@
         "minimum": 0,
         "title": "ProgressPercent",
         "type": "integer"
+      },
+      "RefreshSession": {
+        "description": "What a refreshing client presents.",
+        "properties": {
+          "refresh_token": {
+            "description": "The current, unspent link of the session's refresh chain.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "refresh_token"
+        ],
+        "type": "object"
       },
       "RelayedCallback": {
         "description": "What the owning service gets, once.",
@@ -641,6 +882,49 @@
         ],
         "type": "object"
       },
+      "RevokedAll": {
+        "description": "What revoke-all answers.",
+        "properties": {
+          "revoked": {
+            "description": "How many live sessions ended, including the calling one.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revoked"
+        ],
+        "type": "object"
+      },
+      "RotatedCredentials": {
+        "description": "What rotation returns — both credentials appear once, here, and nowhere again.",
+        "properties": {
+          "credential": {
+            "description": "The replacement bearer credential for the same session.",
+            "type": "string"
+          },
+          "expires_at": {
+            "description": "When it stops working.",
+            "type": "string"
+          },
+          "refresh_expires_at": {
+            "description": "When that link stops being usable.",
+            "type": "string"
+          },
+          "refresh_token": {
+            "description": "The next link of the chain. The presented one is spent from this instant.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "credential",
+          "expires_at",
+          "refresh_token",
+          "refresh_expires_at"
+        ],
+        "type": "object"
+      },
       "SafeMessage": {
         "description": "Human-readable text safe to show to an operator or an end user.\n\n1..=1024 characters with no C0 or DEL control characters. The newline ban is the point: it\nmakes it structurally impossible to smuggle a stack trace or a forged log line into a wire\nmessage (`ARCHITECTURE.md` S5.5 \"no stack traces or secrets in wire errors\", S14).\n\nNot machine-parsed and not stable across releases; changing a message is not a contract\nchange. Consumers branch on codes, never on this.",
         "examples": [
@@ -650,6 +934,55 @@
         "pattern": "^[^\\x00-\\x1f\\x7f]{1,1024}$",
         "title": "SafeMessage",
         "type": "string"
+      },
+      "SessionDeviceRef": {
+        "description": "A device reference inside [`SessionSummary`].",
+        "properties": {
+          "device_id": {
+            "description": "The device's identity.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "display_name": {
+            "description": "The owner's name for it, when there is one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "description": "Which client it is.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "device_id",
+          "kind"
+        ],
+        "type": "object"
+      },
+      "SessionList": {
+        "description": "One page of [`SessionSummary`] rows, newest first. `next_cursor` nulls at the end of the walk.",
+        "properties": {
+          "next_cursor": {
+            "description": "Pass back verbatim for the next page; `null` after the last one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sessions": {
+            "description": "The page.",
+            "items": {
+              "$ref": "#/components/schemas/SessionSummary"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "sessions"
+        ],
+        "type": "object"
       },
       "SessionMinted": {
         "description": "The session, once.",
@@ -672,6 +1005,53 @@
           "credential",
           "expires_at",
           "user_id"
+        ],
+        "type": "object"
+      },
+      "SessionSummary": {
+        "description": "One listed session: what kind it is, what device carries it when one does, and its liveness.",
+        "properties": {
+          "device": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SessionDeviceRef"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The bound device, when the kind requires one."
+          },
+          "expires_at": {
+            "description": "When it stops being valid on its own.",
+            "type": "string"
+          },
+          "issued_at": {
+            "description": "When it was issued.",
+            "type": "string"
+          },
+          "kind": {
+            "description": "How it was established.",
+            "type": "string"
+          },
+          "last_seen_at": {
+            "description": "When it last authenticated, as far as the throttled liveness touch records.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "session_id": {
+            "description": "The session's identity.",
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "kind",
+          "issued_at",
+          "expires_at"
         ],
         "type": "object"
       },
@@ -949,6 +1329,275 @@
         "summary": "Submit an address for capture",
         "tags": [
           "captures"
+        ]
+      }
+    },
+    "/v1/devices": {
+      "get": {
+        "description": "The installations currently trusted under your account, newest first. Follow `next_cursor` for the rest; a device stops appearing here the moment it is deleted.",
+        "operationId": "listDevices",
+        "parameters": [
+          {
+            "description": "Page size, between 1 and 100. Defaults to 20.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The `next_cursor` value of the previous response, verbatim.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceList"
+                }
+              }
+            },
+            "description": "One page. `next_cursor` is null after the last one."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No credential, or one that does not authenticate."
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "A dependency did not answer in time."
+          }
+        },
+        "security": [
+          {
+            "sessionBearer": []
+          }
+        ],
+        "summary": "List your active devices",
+        "tags": [
+          "devices"
+        ]
+      }
+    },
+    "/v1/devices/pair": {
+      "post": {
+        "description": "Completes pairing from the NEW device. Presents a live single-use code and declares what kind of client this installation is; the answer carries the device's root secret, its first session credential and the first refresh link — each returned once, never recoverable afterwards.\n\nEvery unacceptable code receives the same refusal: unknown, expired, already used, set aside and kind-mismatched are deliberately indistinguishable. If the response is lost after a successful exchange, the code is spent; pair again with a fresh code and delete the leftover device entry.",
+        "operationId": "pairDevice",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PairDevice"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Paired"
+                }
+              }
+            },
+            "description": "The device is registered and its credentials appear once, here."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The body is not readable or names an unknown kind."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The code was not accepted, for a reason this API does not disclose."
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "A dependency did not answer in time. Nothing was written."
+          }
+        },
+        "security": [],
+        "summary": "Exchange a pairing code for device credentials",
+        "tags": [
+          "devices"
+        ]
+      }
+    },
+    "/v1/devices/pairing-codes": {
+      "post": {
+        "description": "Starts pairing: an authenticated session mints a short-lived, single-use code that one new device can present to become trusted under your account.\n\nThe code is shown ONCE and expires quickly. Creating another code sets the previous pending one aside, so you never hold more than one. Optionally pin the kind of device allowed to present it.",
+        "operationId": "createPairingCode",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePairingCode"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PairingCodeIssued"
+                }
+              }
+            },
+            "description": "The code, and when it expires. It appears in this response and nowhere else."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The body is not readable or names an unknown kind."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No credential, or one that does not authenticate."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "This account has spent its request allowance."
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "A dependency did not answer in time. Nothing was written."
+          }
+        },
+        "security": [
+          {
+            "sessionBearer": []
+          }
+        ],
+        "summary": "Mint a single-use pairing code for a new device",
+        "tags": [
+          "devices"
+        ]
+      }
+    },
+    "/v1/devices/{device_id}": {
+      "delete": {
+        "description": "Revokes the device and every session opened by it, together and immediately: its root secret stops working and none of its sessions authenticate afterwards. Another user's device and a nonexistent one are the same answer.",
+        "operationId": "deleteDevice",
+        "parameters": [
+          {
+            "description": "The device to revoke.",
+            "in": "path",
+            "name": "device_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The device and all of its sessions are revoked."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No credential, or one that does not authenticate."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No such device, or it belongs to somebody else — indistinguishable on purpose."
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "A dependency did not answer in time. Nothing was changed."
+          }
+        },
+        "security": [
+          {
+            "sessionBearer": []
+          }
+        ],
+        "summary": "Delete one of your devices",
+        "tags": [
+          "devices"
         ]
       }
     },
@@ -1565,6 +2214,246 @@
         ]
       }
     },
+    "/v1/sessions": {
+      "get": {
+        "description": "Where you are signed in: every live session of yours, whichever way it was established, newest first, each with its kind, its bound device when it has one, and when it last saw use. Follow `next_cursor` for the rest.",
+        "operationId": "listSessions",
+        "parameters": [
+          {
+            "description": "Page size, between 1 and 100. Defaults to 20.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The `next_cursor` value of the previous response, verbatim.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionList"
+                }
+              }
+            },
+            "description": "One page. `next_cursor` is null after the last one."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No credential, or one that does not authenticate."
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "A dependency did not answer in time."
+          }
+        },
+        "security": [
+          {
+            "sessionBearer": []
+          }
+        ],
+        "summary": "List your active sessions",
+        "tags": [
+          "sessions"
+        ]
+      }
+    },
+    "/v1/sessions/device": {
+      "post": {
+        "description": "The recovery login for a registered device: present your device identifier and root secret and receive a fresh session credential plus a new refresh chain, each returned once.\n\nA wrong secret, an unknown identifier and a revoked device receive the same refusal.",
+        "operationId": "openDeviceSession",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OpenDeviceSession"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceSessionOpened"
+                }
+              }
+            },
+            "description": "The session is open; its credentials appear once, here."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The body is not readable."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The presentation was not believed, for a reason this API does not disclose."
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "A dependency did not answer in time. Nothing was written."
+          }
+        },
+        "security": [],
+        "summary": "Open a session from a device's root secret",
+        "tags": [
+          "sessions"
+        ]
+      }
+    },
+    "/v1/sessions/refresh": {
+      "post": {
+        "description": "Exchanges the current refresh link for a new session credential AND the next link, atomically; the old bearer credential stops working at once. Each link works once.\n\nPresenting a spent link revokes the whole session — a well-behaved client never does that, so a replay means the credential leaked. The refusal looks like every other refresh failure; recover by logging in again with the device root secret.",
+        "operationId": "refreshSession",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RefreshSession"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RotatedCredentials"
+                }
+              }
+            },
+            "description": "Both credentials are replaced; the answer carries them once."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The body is not readable."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The presented link was not usable, for a reason this API does not disclose."
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "A dependency did not answer in time. Nothing was changed."
+          }
+        },
+        "security": [],
+        "summary": "Rotate a device session's credentials",
+        "tags": [
+          "sessions"
+        ]
+      }
+    },
+    "/v1/sessions/revoke-all": {
+      "post": {
+        "description": "Signs out everywhere at once, including the session making this call. Devices are deliberately untouched: a registered device recovers by presenting its root secret to the device login route.",
+        "operationId": "revokeAllSessions",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevokedAll"
+                }
+              }
+            },
+            "description": "Every live session is revoked; the answer counts them."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No credential, or one that does not authenticate."
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "A dependency did not answer in time. Nothing was changed."
+          }
+        },
+        "security": [
+          {
+            "sessionBearer": []
+          }
+        ],
+        "summary": "Revoke every one of your sessions",
+        "tags": [
+          "sessions"
+        ]
+      }
+    },
     "/v1/sessions/telegram": {
       "post": {
         "description": "Takes a short-lived assertion issued by `ratatoskr-telegram` — which is the service that owns the bot token and validates the raw Mini App `initData` — and returns a Platform session credential.\n\nThe credential is returned ONCE. Only its digest is stored, so it cannot be recovered afterwards; a client that loses it exchanges a new assertion.\n\nAn assertion is single-use. Presenting the same one twice mints one session, and the second attempt is refused exactly as an invalid one is. Every refusal is the same 401: a missing key, a bad signature, a wrong audience, an expired assertion and a replayed one are indistinguishable from outside, because the difference is a fact about the verification and not about the caller.\n\nThe internal user is independent of the Telegram account. Signing in for the first time creates one.",
@@ -1623,6 +2512,68 @@
         },
         "security": [],
         "summary": "Exchange a Telegram identity assertion for a session",
+        "tags": [
+          "sessions"
+        ]
+      }
+    },
+    "/v1/sessions/{session_id}": {
+      "delete": {
+        "description": "Signs that session out immediately; its record remains for audit. A session belonging to somebody else, an already-dead one and a nonexistent identifier are all the same answer.",
+        "operationId": "revokeSession",
+        "parameters": [
+          {
+            "description": "The session to revoke.",
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The session no longer authenticates anything."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No credential, or one that does not authenticate."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No such live session of yours — indistinguishable from somebody else's."
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "A dependency did not answer in time. Nothing was changed."
+          }
+        },
+        "security": [
+          {
+            "sessionBearer": []
+          }
+        ],
+        "summary": "Revoke one of your sessions",
         "tags": [
           "sessions"
         ]

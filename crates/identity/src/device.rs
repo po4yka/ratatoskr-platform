@@ -206,7 +206,7 @@ pub async fn revoke_device(
     transaction: &mut sqlx::PgTransaction<'_>,
     device_id: Uuid,
     revoked_at: jiff::Timestamp,
-) -> Result<u64, PersistenceError> {
+) -> Result<Vec<Uuid>, PersistenceError> {
     sqlx::query(
         "update identity.registered_devices set revoked_at = $2
           where device_id = $1 and revoked_at is null",
@@ -217,15 +217,148 @@ pub async fn revoke_device(
     .await
     .map_err(PersistenceError::Query)?;
 
-    let sessions = sqlx::query(
+    let sessions: Vec<Uuid> = sqlx::query_scalar(
         "update identity.sessions set revoked_at = $2
-          where device_id = $1 and revoked_at is null",
+          where device_id = $1 and revoked_at is null
+         returning session_id",
     )
     .bind(device_id)
     .bind(to_offset(revoked_at))
-    .execute(&mut **transaction)
+    .fetch_all(&mut **transaction)
     .await
     .map_err(PersistenceError::Query)?;
 
-    Ok(sessions.rows_affected())
+    Ok(sessions)
+}
+
+/// A device as the listing presents it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeviceRef {
+    /// The device's identity.
+    pub device_id: Uuid,
+    /// Which client.
+    pub kind: DeviceKind,
+    /// The human label, when the owner gave one.
+    pub display_name: Option<String>,
+}
+
+/// One active device in the owner's listing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListedDevice {
+    /// The device's identity.
+    pub device_id: Uuid,
+    /// Which client.
+    pub kind: DeviceKind,
+    /// The human label, when the owner gave one.
+    pub display_name: Option<String>,
+    /// When it was registered.
+    pub created_at: jiff::Timestamp,
+    /// When it was last used, as far as the throttled touch records.
+    pub last_seen_at: Option<jiff::Timestamp>,
+}
+
+/// Verify a presented root secret against an active device and answer its owner.
+///
+/// One statement, so there is no window between "is this device acceptable" and "whose is it".
+/// The row lock it takes serializes against revocation: a deletion committing concurrently makes
+/// this verification fail rather than granting a session onto a dying device. Use inside the
+/// caller's transaction.
+///
+/// A wrong secret, an unknown identifier and a revoked device are the same `None` — the caller is
+/// untrusted, and three different answers would be an oracle (`ARCHITECTURE.md` S15).
+///
+/// # Errors
+///
+/// [`PersistenceError::Query`] if the statement fails.
+pub async fn authenticate_device<'e, E>(
+    executor: E,
+    device_id: Uuid,
+    presented: SecretDigest,
+) -> Result<Option<Uuid>, PersistenceError>
+where
+    E: PgExecutor<'e>,
+{
+    let row: Option<(Uuid,)> = sqlx::query_as(
+        "select user_id
+           from identity.registered_devices
+          where device_id = $1
+            and revoked_at is null
+            and secret_hash = $2
+          for update",
+    )
+    .bind(device_id)
+    .bind(presented.as_bytes().as_slice())
+    .fetch_optional(executor)
+    .await
+    .map_err(PersistenceError::Query)?;
+
+    Ok(row.map(|(user_id,)| user_id))
+}
+
+/// List one user's active devices, newest first, cursor-paginated.
+///
+/// Revoked devices are history, not manageable state, and never appear here.
+///
+/// # Errors
+///
+/// [`PersistenceError::Query`] if the statement fails.
+pub async fn list_active_devices<'e, E>(
+    executor: E,
+    user_id: Uuid,
+    after: Option<(jiff::Timestamp, Uuid)>,
+    limit: i64,
+) -> Result<Vec<ListedDevice>, PersistenceError>
+where
+    E: PgExecutor<'e>,
+{
+    let rows = if let Some((created_at, device_id)) = after {
+        sqlx::query(
+            "select device_id, kind, display_name, created_at, last_seen_at
+               from identity.registered_devices
+              where user_id = $1
+                and revoked_at is null
+                and (created_at, device_id) < ($2, $3)
+              order by created_at desc, device_id desc
+              limit $4",
+        )
+        .bind(user_id)
+        .bind(to_offset(created_at))
+        .bind(device_id)
+        .bind(limit + 1)
+        .fetch_all(executor)
+        .await
+    } else {
+        sqlx::query(
+            "select device_id, kind, display_name, created_at, last_seen_at
+               from identity.registered_devices
+              where user_id = $1
+                and revoked_at is null
+              order by created_at desc, device_id desc
+              limit $2",
+        )
+        .bind(user_id)
+        .bind(limit + 1)
+        .fetch_all(executor)
+        .await
+    }
+    .map_err(PersistenceError::Query)?;
+
+    let mut devices = Vec::new();
+    for row in rows {
+        let kind: String = row.try_get("kind").map_err(PersistenceError::Query)?;
+        devices.push(ListedDevice {
+            device_id: row.try_get("device_id").map_err(PersistenceError::Query)?,
+            kind: DeviceKind::from_str_opt(&kind).unwrap_or(DeviceKind::ExportAgent),
+            display_name: row
+                .try_get("display_name")
+                .map_err(PersistenceError::Query)?,
+            created_at: from_offset(row.try_get("created_at").map_err(PersistenceError::Query)?),
+            last_seen_at: row
+                .try_get::<Option<time::OffsetDateTime>, _>("last_seen_at")
+                .map_err(PersistenceError::Query)?
+                .map(from_offset),
+        });
+    }
+    devices.truncate(usize::try_from(limit).unwrap_or(0));
+    Ok(devices)
 }

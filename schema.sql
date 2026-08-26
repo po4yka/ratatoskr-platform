@@ -470,6 +470,86 @@ create index oauth_relays_expires_at_idx
     on identity.oauth_relays (expires_at)
     where claimed_at is null;
 
+-- ---------------------------------------------------------------------------------------------
+-- pairing_codes: the single-use grant a new device presents to become trusted
+-- ---------------------------------------------------------------------------------------------
+--
+-- ADR-0016. The one credential an untrusted party may ever present for enrollment, minted by a
+-- session that already is trusted. The code itself exists in the response that carried it and in
+-- whatever channel the user moved it through; like every other secret in this file, this table
+-- holds its digest and nothing else.
+
+create table identity.pairing_codes (
+    pairing_code_id       uuid        primary key,
+    user_id               uuid        not null references identity.users (user_id),
+    created_by_session_id uuid        not null references identity.sessions (session_id),
+    code_hash             bytea       not null,
+    expected_kind         text,
+    label                 text,
+    created_at            timestamptz not null,
+    expires_at            timestamptz not null,
+    failed_attempts       integer     not null default 0,
+    superseded_at         timestamptz,
+    consumed_at           timestamptz,
+    consumed_by_device_id uuid        references identity.registered_devices (device_id),
+
+    -- What the initiating session approved. Null means "any kind"; a value must be honoured at
+    -- consumption, which is what makes the approval UX contract more than decoration.
+    constraint pairing_codes_expected_kind_is_known
+        check (expected_kind is null or expected_kind in
+               ('mobile', 'browser_extension', 'export_agent')),
+    constraint pairing_codes_label_is_bounded
+        check (label is null or length(label) between 1 and 120),
+    constraint pairing_codes_code_hash_is_a_digest
+        check (length(code_hash) = 32),
+    constraint pairing_codes_expires_after_it_is_created
+        check (expires_at > created_at),
+    constraint pairing_codes_failed_attempts_is_bounded
+        check (failed_attempts between 0 and 5),
+    -- One end per code: consumed, or set aside, never both. There is deliberately no `expired`
+    -- marker — expiry is `expires_at` compared against `now()`, a fact of time rather than a third
+    -- column that could fall out of sync with it.
+    constraint pairing_codes_ends_at_most_once
+        check (((consumed_at is not null)::int + (superseded_at is not null)::int) <= 1),
+    constraint pairing_codes_superseded_at_is_not_before_created_at
+        check (superseded_at is null or superseded_at >= created_at),
+    constraint pairing_codes_consumed_at_is_not_before_created_at
+        check (consumed_at is null or consumed_at >= created_at)
+);
+
+comment on table identity.pairing_codes is
+    'The short-lived, single-use bridge between an already-trusted session and a device that wants '
+    'to become one (ADR-0016). Creating a code supersedes its owner''s previous pending one, so a '
+    'user holds at most one live code; the partial indexes below are what make that hold under '
+    'racing creates.';
+comment on column identity.pairing_codes.expected_kind is
+    'What the initiator approved pairing, when they pinned one. A presentation whose declared kind '
+    'differs is refused exactly as an unknown code is.';
+comment on column identity.pairing_codes.failed_attempts is
+    'The durable, five-presentation brute-force budget for mismatched basic device attestation. '
+    'A code at five is refused even when a later presentation has the matching attestation.';
+comment on column identity.pairing_codes.label is
+    'A human note from the initiator ("pixel phone"), echoed nowhere but listings an operator or '
+    'the owner reads. Never used for authorization.';
+comment on column identity.pairing_codes.superseded_at is
+    'Set when a newer code replaces this one, including when the older code had already expired: '
+    'supersession is what keeps an abandoned pending row from wedging the flow behind a sweep.';
+comment on column identity.pairing_codes.consumed_by_device_id is
+    'The device the code granted, recorded on the code so an audit question — "what did THIS code '
+    'pair?" — answers from one row.';
+
+-- The lookup when a code is presented, and the uniqueness behind single-use: consuming or
+-- superseding removes the row from this index, so one digest can never be live twice.
+create unique index pairing_codes_code_hash_key
+    on identity.pairing_codes (code_hash)
+    where consumed_at is null and superseded_at is null;
+
+-- At most one pending code per user, enforced here rather than remembered in a handler: whichever
+-- of two racing creations commits second loses, and no handler has to agree.
+create unique index pairing_codes_one_pending_per_user_key
+    on identity.pairing_codes (user_id)
+    where consumed_at is null and superseded_at is null;
+
 -- =================================================================================================
 -- operations
 -- =================================================================================================

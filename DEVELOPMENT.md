@@ -39,6 +39,15 @@ authorization code reaches the owning service through a one-time record and appe
 no log and no redirect); `identity.grants` finally has a reader, and it is what authorizes a claim;
 and `identity.audit_events` finally has a writer, for both the grants and the denials.
 
+Present since ADR-0016: device pairing and lifecycle management — an authenticated primary session
+creates a ten-minute, single-use pairing code; `POST /v1/devices/pair` exchanges it for a
+registered device, a device-root secret, and the first short-lived access/refresh session pair;
+`POST /v1/sessions/refresh` rotates that pair and burns a replayed session family. `GET` and
+owner-scoped `DELETE` routes list or revoke sessions and devices, while `POST /v1/sessions/revoke-all`
+ends every session including the caller. Pairing has both the authenticated actor limit, a bounded
+unauthenticated process-wide limit, and a durable five-attempt code budget; grants and handler
+denials are recorded in `identity.audit_events`.
+
 Present since milestone 7: `GET /v1/capabilities`; the `platform_ingest` schema and the generic
 webhook adapter at `POST /v1/ingest/webhooks/{source_id}`, served by `ratatoskr-ingest` on a public
 listener of its own; and the generated public `OpenAPI` document in `openapi/openapi.json`, written
@@ -72,9 +81,7 @@ Present since milestone 4: the transactional outbox and the inbox in `operations
 grammar, a `JetStream` publisher, and the pump that moves claimed rows onto the bus. Both routes that
 accept work write their command into the outbox; the pump runs in `ratatoskr-edge` only.
 
-Absent: nothing that a milestone owns. The things in NO item are listed here rather than left to be discovered — the device credential model,
-which is the half of public authentication milestone 8 did not touch and has no ADR yet;
-the off-host copy of the backup, which `deploy/backup/` does not
+Absent: nothing that a milestone owns. The things in NO item are listed here rather than left to be discovered — the off-host copy of the backup, which `deploy/backup/` does not
 replace: its daily dump reaches NVMe and a borg archive on the second volume, and nothing leaves
 the board. Assigning any of them to a RANGE of milestones assigns them to nobody, which is how
 the `Dockerfile` stayed unowned. None of them is scaffolded, stubbed or present in the checkout.

@@ -51,6 +51,8 @@ pub enum Method {
     Get,
     /// `POST`.
     Post,
+    /// `DELETE`.
+    Delete,
 }
 
 impl Method {
@@ -60,6 +62,7 @@ impl Method {
         match self {
             Self::Get => "get",
             Self::Post => "post",
+            Self::Delete => "delete",
         }
     }
 }

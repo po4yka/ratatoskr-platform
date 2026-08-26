@@ -77,6 +77,21 @@ impl FromRequestParts<Arc<ApiState>> for Principal {
             return Err(platform_http::reject(FailureKind::RateLimited));
         }
 
+        // Liveness, best-effort and throttled to one write per interval per session (ADR-0016).
+        // It runs AFTER admission because it exists to make admitted traffic visible; a failure
+        // here is logged and never fails a request authentication already allowed.
+        let touched = platform_identity::session::touch_last_seen(
+            state.database.pool(),
+            session.session_id,
+            session.device_id,
+            jiff::Timestamp::now(),
+            LAST_SEEN_INTERVAL,
+        )
+        .await;
+        if let Err(error) = touched {
+            tracing::debug!(%error, "the liveness touch could not be written");
+        }
+
         Ok(Self {
             user_id: session.user_id,
             session_id: session.session_id,
@@ -84,6 +99,10 @@ impl FromRequestParts<Arc<ApiState>> for Principal {
         })
     }
 }
+
+/// How often an authenticated session's last-seen instant may move. One write per minute per
+/// active session is the worst case on the single host, and no settings page reads it finer.
+const LAST_SEEN_INTERVAL: jiff::SignedDuration = jiff::SignedDuration::from_secs(60);
 
 /// Hash a credential the same way authentication does.
 ///
