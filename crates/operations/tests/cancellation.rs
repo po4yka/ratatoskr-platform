@@ -125,9 +125,14 @@ async fn cancellation_requests_classify_against_current_truth() {
 /// L-7. A repeat finds its own earlier request and writes nothing new; a foreign owner is refused
 /// exactly like a missing row.
 ///
-/// The marker timestamp is compared for equality across the calls: a second acceptance must not
-/// move it, because moving it would let repeated cancels extend how long a downstream consumer
-/// should keep watching work that was asked to stop once.
+/// The marker is read back from the database after the first request and compared, byte for byte,
+/// against what the database reports after the repeat and after the refused foreign attempt: a
+/// second acceptance must not move it, because moving it would let repeated cancels extend how long
+/// a downstream consumer should keep watching work that was asked to stop once. Both sides of every
+/// comparison are values `PostgreSQL` itself returned, so the comparison is immune to `timestamptz`
+/// storing only microsecond resolution while the in-memory `jiff::Timestamp` the caller passed in
+/// carries nanoseconds — there is no local timestamp arithmetic here to drift from what the column
+/// actually stores.
 #[tokio::test]
 async fn repeated_and_foreign_cancellation_requests_write_nothing_new() {
     let harness = TestDatabase::create().await.expect("a test database");
@@ -161,6 +166,14 @@ async fn repeated_and_foreign_cancellation_requests_write_nothing_new() {
     );
     transaction.commit().await.expect("commit");
 
+    let original_marker: Option<time::OffsetDateTime> = sqlx::query_scalar(
+        "select cancellation_requested_at from operations.operations where operation_id = $1",
+    )
+    .bind(operation.operation_id)
+    .fetch_one(pool)
+    .await
+    .expect("reading the row");
+
     let later = now() + jiff::SignedDuration::from_secs(300);
     let mut transaction = pool.begin().await.expect("a transaction");
     let repeat = platform_operations::request_cancellation(
@@ -185,8 +198,7 @@ async fn repeated_and_foreign_cancellation_requests_write_nothing_new() {
     .await
     .expect("reading the row");
     assert_eq!(
-        marker.map(time::OffsetDateTime::unix_timestamp_nanos),
-        Some(first_at.as_nanosecond()),
+        marker, original_marker,
         "the repeat must not move the original marker"
     );
 
@@ -212,8 +224,7 @@ async fn repeated_and_foreign_cancellation_requests_write_nothing_new() {
     .await
     .expect("reading the row");
     assert_eq!(
-        untouched.map(time::OffsetDateTime::unix_timestamp_nanos),
-        Some(first_at.as_nanosecond()),
+        untouched, original_marker,
         "a refused caller must leave the row as it was"
     );
 

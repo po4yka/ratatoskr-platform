@@ -1,0 +1,12 @@
+## 1. Reproduce the failure
+
+- [x] 1.1 The already-failing CI test IS the failing test: `repeated_and_foreign_cancellation_requests_write_nothing_new` in `crates/operations/tests/cancellation.rs`, observed failing in `ci` / job `gate`, run 32939209335 (`https://github.com/po4yka/ratatoskr-platform/actions/runs/32939209335`), with `left: Some(1787726586532544000)`, `right: Some(1787726586532544604)` at the assertion around line 187. Confirmed the mechanism locally: `jiff::Timestamp::now()` never yields a non-zero sub-microsecond remainder on this development machine (sampled 30 consecutive calls), so the un-patched test passes here by coincidence; temporarily forcing a `+604ns` offset into the test's `now()` helper reproduced the exact same panic values against the unmodified assertions, then reverted before committing.
+
+## 2. Fix the test's expectation, not the invariant
+
+- [x] 2.1 Rewrite both assertion sites (originally lines 187-191 and 214-218) in `repeated_and_foreign_cancellation_requests_write_nothing_new` to compare the database-returned marker after the first request against the database-returned marker after the repeat, and again after the refused foreign attempt, instead of reconstructing an expected nanosecond value from the in-memory `jiff::Timestamp`. No production code changed: verified every call site of `request_cancellation` and `Cancellation::Requested` (`crates/public-api/src/operations.rs`) either re-reads the committed row (`truth()`) or only forwards the in-memory `now` into a new outbox/audit payload, never into an equality check against a stored column.
+
+## 3. Verify the repair
+
+- [x] 3.1 `PLATFORM_TEST_DATABASE_URL=postgres://platform:platform@127.0.0.1:25432/platform build-gate cargo test --locked -p ratatoskr-platform-operations --test cancellation` — all 6 tests pass, including `repeated_and_foreign_cancellation_requests_write_nothing_new`. Re-ran with the `+604ns` forced offset from task 1.1 applied on top of the fix: still passes, confirming the new assertions are immune to the precision mismatch that caused the original failure.
+- [x] 3.2 Ran the full documented local gate from `DEVELOPMENT.md` (`cargo fmt --all -- --check`, `cargo deny check`, `cargo clippy --workspace --all-targets --locked -- -D warnings`, the `wc -l` line-count check, `cargo build --workspace --locked`, `cargo test --workspace --locked`, `cargo build --workspace --locked --release`) — all pass.
