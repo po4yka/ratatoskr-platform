@@ -117,9 +117,20 @@ jobs:
         # database, and `https://otel:LEAKME@collector.example:4317` is a test asserting that a
         # credential in an OTLP endpoint is refused. Measured across all sixteen repositories: zero
         # matches, while a real host still matches.
+        #
+        # The password class also excludes `/`, and that one character is load-bearing. RFC 3986
+        # userinfo cannot carry an unescaped `/`, so nothing real is lost — but without the
+        # exclusion the pattern reads a `host:port/@handle` permalink as `user:password@host`: the
+        # port and the slash become the password, and the path's own `@` becomes the separator.
+        # `ratatoskr-threads` has four such fixtures, `threads.net:443/@handle/post/<code>`, and
+        # they turned this step red on a tree with no credential in it. Measured after the
+        # exclusion: zero matches across all seventeen repositories, while a userinfo pair in front
+        # of a real host — including a percent-encoded one — still matches. That last claim cannot
+        # be written here as an example, because this step reads its own file and a literal
+        # credential in this comment would be a true positive.
         run: |
           set -euo pipefail
-          cred='[a-z][a-z0-9+.-]*://[^/:@[:space:]"]*:[^@[:space:]"]+@'
+          cred='[a-z][a-z0-9+.-]*://[^/:@[:space:]"]*:[^@[:space:]"/]+@'
           safe='@(127\.0\.0\.1|\[::1\]|::1)([:/]|$)|@([^/[:space:]"]*\.)?(localhost|example|invalid|test|local|example\.(com|org|net))([:/]|$)'
           fake=':(\$\{?[A-Za-z_][A-Za-z0-9_]*\}?|<[^>]*>|\*+|REDACTED|CHANGEME|[A-Z][A-Z0-9_]*)@'
           hits=$(git grep -hoIE "${cred}[^[:space:]\"]*" -- . | grep -vE "$safe" | grep -vE "$fake" || true)
