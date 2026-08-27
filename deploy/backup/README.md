@@ -1,105 +1,177 @@
-# Backup, and the restore that proves it
+# Backup, off-host recovery, and the restore that proves it
 
-A backup nobody has restored is a file. This directory is a dump job, its timer, and the rehearsal
-that turns the file into a backup.
+A backup nobody has restored is a file. Platform keeps a short local recovery path for a failed
+disk and an encrypted off-host recovery path for loss of the Raspberry Pi.
 
-## What is copied, and what is not
+## Scope and recovery copies
 
-The dump is `pg_dump --format=custom` of the `ratatoskr` database. That is the whole of Platform's
-durable state: `identity`, `operations` and `platform_ingest`. Nothing else here holds anything that
-survives a restart —
+Platform state is the `ratatoskr` PostgreSQL custom dump: `identity`, `operations`, and
+`platform_ingest`. The existing daily dump writes to `/mnt/nvme/backups/ratatoskr` at 02:30; the
+host's Borg job copies `/mnt/nvme` to `/mnt/backup` at 03:00. That second volume is useful for a disk
+failure but is **not** off-host.
 
-- **`JetStream`'s store is deliberately not backed up.** A command in it is a copy of an
-  `operations.outbox` row that has not been marked published, and an event in it has already been
-  applied to the projection or is still redeliverable from the producer. Restoring a stream from a
-  backup would replay work the database says is finished, which is worse than losing it. If the
-  store is lost, delete the streams and let `ratatoskr-edge` recreate them; the outbox republishes.
-- **The nkey seed and the environment files are not backed up here.** They are credentials, and a
-  credential in the same archive as the database it opens is one theft rather than two. They are
-  regenerated (`deploy/nats/README.md`) or re-entered.
+At 04:00, `ratatoskr-offhost-backup.timer` makes a dated recovery set in one S3-compatible bucket:
 
-## Where it goes, and the ordering that matters
+- the completed PostgreSQL custom dump;
+- an export of the latest completed Borg archive; and
+- an allowlisted configuration archive: the three Platform environment files and units, NATS
+  configuration, and Platform's logrotate file.
 
-`/mnt/nvme/backups/ratatoskr`, fourteen dumps, on the NVMe device. The host's `borg` job then copies
-`/mnt/nvme` to `/mnt/backup`.
+Each object is encrypted with the configured public age recipient before upload. The Pi has no age
+private identity. The configuration archive intentionally excludes
+`/etc/ratatoskr/offhost-backup.env`, every age identity, and the NATS nkey seed: the S3 access
+credential and recovery identity are operator-held bootstrap credentials, while the nkey is
+regenerated following [`deploy/nats/README.md`](../nats/README.md).
 
-**The timer runs at 02:30 because borg runs at 03:00.** Confirmed on the machine at milestone 10:
-`borgmatic` is a `0 3 * * *` line in root's crontab, not a systemd timer, so `systemctl list-timers`
-does not show it and looking there is how somebody concludes there is no borg. A dump written after borg has already run is
-not copied anywhere until the following night, so the effective recovery point is two days old
-rather than one — the ordering `ratatoskr-workspace/docs/DEPLOYMENT_TARGET.md` records as wrong.
-Check `systemctl list-timers` before trusting the number: if borg has moved, this must move with it.
+`JetStream` is not backed up. It is a replayable delivery cache around `operations.outbox` and the
+producers' event records; restoring it could replay work the database says is complete. Service-owned
+Vault and AI blobs are also out of scope: their owners replicate them independently.
 
-**`/mnt/backup` is a second volume on the same machine.** It survives a disk failure and does not
-survive losing the board — a fire, a theft, a power supply that takes the whole thing with it. There
-is no off-host copy of anything in this system today, and this file is not the place that changes;
-it is the place that says so. Until one exists, the honest statement of the recovery point is: one
-day for a disk failure, and everything for the loss of the machine.
+## Install the Pi replication job
 
-## Installing
+The Pi needs Debian's `age`, AWS CLI v2 and Borg client. AWS CLI receives S3-compatible endpoint,
+bucket and scoped upload credentials from the root-only environment file; no remote address or secret
+is committed here.
 
 ```bash
+sudo apt-get install age awscli borgbackup
+sudo install -d -m 0700 /mnt/nvme/backups/ratatoskr/offhost-stage
 sudo install -m 0755 deploy/backup/ratatoskr-dump.sh /usr/local/bin/ratatoskr-dump.sh
-sudo install -d -m 0700 /mnt/nvme/backups/ratatoskr
-sudo cp deploy/backup/ratatoskr-backup.{service,timer} /etc/systemd/system/
+sudo install -m 0755 deploy/backup/ratatoskr-offhost-backup.sh /usr/local/bin/ratatoskr-offhost-backup.sh
+sudo install -m 0600 -o root -g root deploy/backup/offhost-backup.env.example \
+  /etc/ratatoskr/offhost-backup.env
+sudoedit /etc/ratatoskr/offhost-backup.env
+sudo cp deploy/backup/ratatoskr-backup.{service,timer} \
+  deploy/backup/ratatoskr-offhost-backup.{service,timer} /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now ratatoskr-backup.timer
-sudo systemctl start ratatoskr-backup.service   # once, now, rather than waiting for 02:30
+sudo systemctl enable --now ratatoskr-backup.timer ratatoskr-offhost-backup.timer
+sudo systemctl start ratatoskr-backup.service
 ```
 
-## The rehearsal
+Set `RATATOSKR_BORG_REPOSITORY` to the repository the existing root Borg job writes. If the host's
+03:00 Borg schedule changes or cannot finish within its window, move the 04:00 timer with it. The
+replication job fails rather than silently uploading an older archive.
 
-Run this after installing, and again after any schema change that changes a constraint. It restores into
-a scratch database on the same cluster, so it needs no second machine and touches nothing live.
+The Pi credential is limited to `ListBucket`, `GetObject`, and `PutObject` under the Platform prefix.
+It has neither `DeleteObject` nor permission to change lifecycle rules.
 
-PostgreSQL is a container on this host, so every command below enters it. `--jobs` is deliberately
-absent: `pg_restore` refuses a parallel restore from standard input, and standard input is how a
-dump on the host reaches a client inside the container. It is a small database and the serial
-restore takes seconds.
+### Remote retention is administered at the bucket
+
+Local retention is fourteen dumps; remote retention is independently ninety days. Generate the
+checked recommendation with the script (the committed
+[`offhost-lifecycle-90-days.json`](offhost-lifecycle-90-days.json) is its 90-day output):
 
 ```bash
-# 1. The newest dump, and the fact that it is readable at all.
-dump=$(sudo sh -c 'ls -1t /mnt/nvme/backups/ratatoskr/ratatoskr-*.dump | head -1')
-sudo sh -c "docker exec -i shared-postgres pg_restore --list < $dump" | tail -5
-
-# 2. A scratch database with the SAME locale. Restoring into a libc-collated database rebuilds every
-#    text index under a different collation, which is a restore that succeeds and is wrong.
-docker exec shared-postgres createdb -U postgres ratatoskr_rehearsal \
-  --template=template0 --locale-provider=icu --icu-locale=und-x-icu --encoding=UTF8
-
-# 3. The restore. `--exit-on-error` because a restore that reports success after skipping a
-#    constraint is the failure this rehearsal exists to catch.
-sudo sh -c "docker exec -i shared-postgres pg_restore -U postgres --dbname=ratatoskr_rehearsal \
-  --no-owner --exit-on-error < $dump"
-
-# 4. What must be true afterwards. Row counts are not the check — a restore that dropped a UNIQUE
-#    index would keep every row and lose the guarantee. The check is that the constraints are back.
-docker exec shared-postgres psql -U postgres -d ratatoskr_rehearsal -Atc \
-  "select count(*) from pg_constraint where connamespace::regnamespace::text
-     in ('identity','operations','platform_ingest')"
-docker exec shared-postgres psql -U postgres -d ratatoskr_rehearsal -Atc \
-  "select count(*) from pg_indexes where schemaname
-     in ('identity','operations','platform_ingest')"
-# `i` and `und-x-icu`, not `c`. A restore into a libc-collated database succeeds and rebuilds every
-# text index under a collation the deployment does not use, which is the failure mode that ends with
-# one external account mapping to two internal users.
-docker exec shared-postgres psql -U postgres -Atc \
-  "select datlocprovider, datlocale from pg_database where datname='ratatoskr_rehearsal'"
-
-# 5. Compare with the live database. Equal, or the restore is not one.
-docker exec shared-postgres psql -U postgres -d ratatoskr -Atc \
-  "select count(*) from pg_constraint where connamespace::regnamespace::text
-     in ('identity','operations','platform_ingest')"
-
-# 6. Clean up. The rehearsal database is not a second copy of anything and must not become one.
-docker exec shared-postgres dropdb -U postgres ratatoskr_rehearsal
+deploy/backup/ratatoskr-offhost-lifecycle.sh --remote-keep-days 90 \
+  > /tmp/ratatoskr-offhost-lifecycle.json
 ```
 
-If step 3 fails, the dump is not a backup and the failure is today's problem rather than the problem
-of whichever day the database is gone.
+An S3 administrator — not the Pi upload credential — applies and reads it back:
 
-Rehearsed twice: on a development PostgreSQL 17 before this file was committed, and at milestone 10
-**on the deployment target itself** — 141 constraints, 58 indexes and three operations restored into
-an ICU-collated scratch database on the host's own cluster, matching live exactly. `pg_database.datlocale` is the column that reports the locale on 17; it was
-`daticulocale` on 15 and 16, so a rehearsal script copied from an older runbook fails at step 4 with
-a message about a missing column rather than about the backup.
+```bash
+aws s3api put-bucket-lifecycle-configuration --bucket "$RECOVERY_BUCKET" \
+  --lifecycle-configuration file:///tmp/ratatoskr-offhost-lifecycle.json
+aws s3api get-bucket-lifecycle-configuration --bucket "$RECOVERY_BUCKET"
+```
+
+It expires each `postgresql/`, `borg/`, and `configuration/` prefix after 90 days and aborts
+incomplete multipart uploads after seven days. Object-lock, bucket versioning, or a second cloud are
+not required by this change; enable them only as a separately designed storage policy.
+
+### Mandatory dry-runs
+
+These commands validate inputs and show intended work without uploading, exporting Borg data, or
+creating a database:
+
+```bash
+sudo sh -c 'set -a; . /etc/ratatoskr/offhost-backup.env; set +a; \
+  /usr/local/bin/ratatoskr-offhost-backup.sh --dry-run'
+sudo /usr/local/bin/ratatoskr-offhost-lifecycle.sh --remote-keep-days 90 --dry-run > /dev/null
+```
+
+## Install the separate verifier
+
+The verifier is a recovery consumer, not a second Ratatoskr host: it runs no Platform binary,
+listener, durable Platform database, or scheduler. It is a separate Linux system with systemd,
+Docker, PostgreSQL 17 in a disposable container, `age`, and AWS CLI v2. It holds the private age
+identity outside the Pi's failure domain.
+
+```bash
+sudo apt-get install age awscli docker.io
+sudo install -d -m 0700 /var/lib/ratatoskr-offhost-drill /etc/ratatoskr
+sudo install -m 0755 deploy/backup/ratatoskr-offhost-drill.sh /usr/local/bin/ratatoskr-offhost-drill.sh
+sudo install -m 0600 -o root -g root deploy/backup/offhost-drill.env.example \
+  /etc/ratatoskr/offhost-drill.env
+sudo install -m 0600 -o root -g root /secure/offboard/offhost-recovery.agekey \
+  /etc/ratatoskr/offhost-recovery.agekey
+sudoedit /etc/ratatoskr/offhost-drill.env
+sudo docker run -d --name ratatoskr-offhost-drill-postgres --restart unless-stopped \
+  -e POSTGRES_PASSWORD=CHANGE-ME postgres:17
+sudo cp deploy/backup/ratatoskr-offhost-drill.{service,timer} /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now ratatoskr-offhost-drill.timer
+```
+
+The weekly Sunday timer verifies Saturday's UTC object. It downloads, decrypts, restores into an
+ICU-collated scratch database, checks Platform schemas and constraints, drops that database, and
+prints exactly `PASS: off-host restore drill` only after cleanup. Any failing stage prints
+`FAIL: <stage>` and returns nonzero. Test it once before relying on the timer:
+
+```bash
+sudo sh -c 'set -a; . /etc/ratatoskr/offhost-drill.env; set +a; \
+  /usr/local/bin/ratatoskr-offhost-drill.sh --dry-run'
+sudo systemctl start ratatoskr-offhost-drill.service
+sudo systemctl status ratatoskr-offhost-drill.service --no-pager
+```
+
+## Restore a replacement board from off-host copy only
+
+This procedure deliberately uses neither the failed board's NVMe nor `/mnt/backup`. It assumes a
+fresh board, a standard Platform release installation, a recovery-only S3 `GetObject` credential,
+and the off-board age identity. Do not perform the extraction commands on a live board: the
+configuration archive overwrites `/etc` paths by design.
+
+1. Install the base OS dependencies and Platform release by the normal deployment procedure, but do
+   **not** start Platform services. Install `age`, AWS CLI v2, Docker/PostgreSQL 17 and create
+   `/etc/ratatoskr` plus the NVMe directories.
+2. Export the recovery S3 environment and copy the age identity from its off-board custody to a
+   root-only temporary path. Select the recovery date and download only the remote objects:
+
+   ```bash
+   day=YYYY-MM-DD
+   base="${RATATOSKR_OFFHOST_PREFIX:-ratatoskr-platform}/$day"
+   config_key=$(aws s3api list-objects-v2 --bucket "$RATATOSKR_OFFHOST_BUCKET" \
+     --prefix "$base/configuration/" --query 'Contents[0].Key' --output text)
+   dump_key=$(aws s3api list-objects-v2 --bucket "$RATATOSKR_OFFHOST_BUCKET" \
+     --prefix "$base/postgresql/" --query 'Contents[0].Key' --output text)
+   test "$config_key" != None && test "$dump_key" != None
+   aws s3 cp "s3://$RATATOSKR_OFFHOST_BUCKET/$config_key" /root/configuration.tar.age
+   aws s3 cp "s3://$RATATOSKR_OFFHOST_BUCKET/$dump_key" /root/ratatoskr.dump.age
+   age --decrypt --identity /root/offhost-recovery.agekey --output /root/configuration.tar \
+     /root/configuration.tar.age
+   sudo tar --extract --file /root/configuration.tar --directory /
+   age --decrypt --identity /root/offhost-recovery.agekey --output /root/ratatoskr.dump \
+     /root/ratatoskr.dump.age
+   ```
+
+3. Recreate the NATS nkey and its non-backed-up seed following `deploy/nats/README.md`; restore the
+   three Platform service units and environment files from the configuration archive before any
+   Platform service starts. Recreate the PostgreSQL database/roles with
+   `deploy/postgres/01-database-and-roles.sql`, then restore the remote dump and grants:
+
+   ```bash
+   docker exec -i shared-postgres psql -U postgres -d postgres < deploy/postgres/01-database-and-roles.sql
+   sudo sh -c 'docker exec -i shared-postgres pg_restore -U postgres --dbname=ratatoskr \
+     --no-owner --exit-on-error < /root/ratatoskr.dump'
+   docker exec -i shared-postgres psql -U postgres -d ratatoskr < deploy/postgres/02-grants.sql
+   sudo systemctl enable --now ratatoskr-edge ratatoskr-ingest ratatoskr-scheduler
+   ```
+
+4. Remove the temporary decrypted files and identity when the restore is checked. The remote Borg
+   export is an additional recovery artifact; Platform state is restored from the database dump and
+   configuration archive, not from another service's blobs.
+
+Continuous WAL shipping is intentionally deferred. It would change this bounded daily recovery point
+into a continuously credentialed remote transport with its own archive retention, monitoring,
+ordering, and point-in-time recovery contract. It deserves a separate design; it is not a hidden
+fallback in this daily-copy system.

@@ -1,0 +1,13 @@
+[Unit]
+Description=Ratatoskr Platform — encrypted off-host backup replication, daily
+Documentation=https://github.com/po4yka/ratatoskr-platform/blob/main/deploy/backup/README.md
+
+[Timer]
+# The existing dump is at 02:30 and root's Borg job starts at 03:00. This window is deliberately
+# later; the host owner must move this timer with Borg if that job's schedule changes.
+OnCalendar=*-*-* 04:00:00
+Persistent=true
+RandomizedDelaySec=600
+
+[Install]
+WantedBy=timers.target

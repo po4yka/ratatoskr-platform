@@ -1,0 +1,26 @@
+[Unit]
+Description=Ratatoskr Platform — encrypted off-host backup replication
+Documentation=https://github.com/po4yka/ratatoskr-platform/blob/main/deploy/backup/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+EnvironmentFile=/etc/ratatoskr/offhost-backup.env
+ExecStart=/usr/local/bin/ratatoskr-offhost-backup.sh
+
+Nice=10
+IOSchedulingClass=idle
+CPUQuota=100%
+TimeoutStartSec=5400
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/mnt/nvme/backups/ratatoskr
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+LockPersonality=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service

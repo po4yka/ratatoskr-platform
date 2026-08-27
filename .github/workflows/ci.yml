@@ -89,6 +89,27 @@ jobs:
           docker logs nats >&2
           exit 1
 
+      # The off-host scripts are deployment code: a typo could make a timer report success while no
+      # usable recovery copy exists. The tests use a generated age identity and fake S3/Borg clients
+      # for replication, then a real PostgreSQL 17 container for the restore drill; no credential or
+      # external target enters CI.
+      - name: Lint and test off-host backup tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y age shellcheck
+          sudo install -m 0755 deploy/backup/ratatoskr-offhost-backup.sh \
+            /usr/local/bin/ratatoskr-offhost-backup.sh
+          sudo install -m 0755 deploy/backup/ratatoskr-offhost-drill.sh \
+            /usr/local/bin/ratatoskr-offhost-drill.sh
+          shellcheck deploy/backup/*.sh deploy/backup/tests/*.sh
+          systemd-analyze verify \
+            deploy/backup/ratatoskr-offhost-backup.service \
+            deploy/backup/ratatoskr-offhost-backup.timer \
+            deploy/backup/ratatoskr-offhost-drill.service \
+            deploy/backup/ratatoskr-offhost-drill.timer
+          bash deploy/backup/tests/offhost_backup_test.sh
+          bash deploy/backup/tests/offhost_drill_test.sh
+
       - run: cargo fetch --locked
 
       # Reads RustSec, the licence set, duplicate versions and the source policy. Nothing else in the

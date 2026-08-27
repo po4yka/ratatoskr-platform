@@ -22,8 +22,9 @@ which is host state no repository owns and which a reflash resets to the boot de
 | PostgreSQL data | `/mnt/nvme/ratatoskr/postgres` | the cluster, not Platform |
 | `JetStream` store | `/mnt/nvme/ratatoskr/nats` | `deploy/nats/ratatoskr.conf` |
 | Service logs | `/mnt/nvme/ratatoskr/logs` | the units, rotated by `deploy/logrotate/ratatoskr` |
-| Database dumps | `/mnt/nvme/backups/ratatoskr` | not yet written; see "What is still missing" |
-| Off-host copies | `/mnt/backup/borg` | a second volume on the SAME machine, never an off-host replica |
+| Database dumps | `/mnt/nvme/backups/ratatoskr` | daily local custom dumps and transient off-host staging |
+| Local Borg copy | `/mnt/backup/borg` | a second volume on the SAME machine, never an off-host replica |
+| Off-host copies | configured S3-compatible bucket | age-encrypted dump, Borg export, and configuration recovery set |
 
 **PostgreSQL and `JetStream` must never write to the boot device.** Their pattern is small
 synchronous fsyncs, which is the worst case for flash wear, and the SD card that wears out takes the
@@ -129,12 +130,9 @@ sudo ufw allow proto tcp from 172.19.0.0/16 to any port 9464:9466 \
 cat deploy/monitoring/promscrape.ratatoskr.yml >> /home/po4yka/monitoring/promscrape.yml
 docker kill -s HUP victoriametrics
 
-# 9. Backup. deploy/backup/README.md has the detail and the restore rehearsal; run the rehearsal
-#    once now rather than on the day it is needed.
-sudo install -m 0755 deploy/backup/ratatoskr-dump.sh /usr/local/bin/ratatoskr-dump.sh
-sudo cp deploy/backup/ratatoskr-backup.{service,timer} /etc/systemd/system/
-sudo systemctl daemon-reload && sudo systemctl enable --now ratatoskr-backup.timer
-sudo systemctl start ratatoskr-backup.service
+# 9. Backup and off-host recovery. deploy/backup/README.md owns package installation, root-only
+#    S3/age environment files, lifecycle policy, the verifier host and the remote-only restore drill.
+#    Run its mandatory dry-runs and the verifier drill before considering recovery configured.
 ```
 
 Every step is re-runnable. `create database` reports that the database exists and is skipped; every
@@ -223,10 +221,6 @@ Every row of `ARCHITECTURE.md` S16 has a publication point, and
 
 Named here rather than left to be discovered:
 
-- **An off-host copy.** `deploy/backup/` dumps daily to NVMe and the host's borg job copies that to
-  `/mnt/backup` — a second volume on the same machine. It survives a disk failure and does not
-  survive losing the board. The honest recovery point today is one day for a disk, and everything
-  for the machine.
 - **Alert rules.** Alertmanager on this host reaches a person, and no rule watches any of the series
   above. The metrics exist; the rules do not.
 - **A `ratatoskr.target`.** The three units are enabled individually; there is no single unit to

@@ -2,7 +2,7 @@
 
 > Status: Every milestone is implemented.
 > Owner: `ratatoskr-platform`  
-> Last reviewed: 2026-08-23
+> Last reviewed: 2026-08-27
 
 ## Current stage
 
@@ -77,16 +77,23 @@ lifecycle fields but not the heavy payload collections. Cancellation reaches `ca
 the owning service reports it back; a stop request is not a sign of life, and the reaper still fails
 an operation that stays silent past its staleness bound.
 
+Present since off-host recovery: the daily NVMe dump and Borg export are encrypted with an age
+recipient held off the Pi and copied to a single S3-compatible bucket through root-only environment
+files. Remote lifecycle policy is independently ninety days rather than the local fourteen dumps,
+and an off-host verifier's weekly systemd timer downloads, decrypts, and restores yesterday's dump
+into a disposable PostgreSQL 17 database. The verifier runs no Ratatoskr process; it exists only to
+prove recovery. `deploy/backup/README.md` installs both sides and gives the replacement-board
+runbook. Continuous WAL shipping remains deliberately absent: it needs a separately designed
+continuous remote transport, retention, monitoring, and point-in-time recovery contract.
+
 Present since milestone 4: the transactional outbox and the inbox in `operations`, the NATS subject
 grammar, a `JetStream` publisher, and the pump that moves claimed rows onto the bus. Both routes that
 accept work write their command into the outbox; the pump runs in `ratatoskr-edge` only.
 
-Absent: nothing that a milestone owns. The things in NO item are listed here rather than left to be discovered — the off-host copy of the backup, which `deploy/backup/` does not
-replace: its daily dump reaches NVMe and a borg archive on the second volume, and nothing leaves
-the board. Assigning any of them to a RANGE of milestones assigns them to nobody, which is how
-the `Dockerfile` stayed unowned. None of them is scaffolded, stubbed or present in the checkout.
-Stale-operation reconciliation left this list at ADR-0014: it is the reaper pass in `ratatoskr-edge`
-(ADR-0014), bounded by `RATATOSKR__OPERATIONS__STALE_AFTER_SECONDS`.
+Absent: nothing that a milestone owns. Stale-operation reconciliation left this list at ADR-0014: it
+is the reaper pass in `ratatoskr-edge` (ADR-0014), bounded by
+`RATATOSKR__OPERATIONS__STALE_AFTER_SECONDS`. Alert rules and operation-history retention remain
+unowned and absent; none is scaffolded, stubbed, or present in the checkout.
 
 ## Toolchain
 

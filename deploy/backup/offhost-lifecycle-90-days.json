@@ -1,0 +1,25 @@
+{
+  "Rules": [
+    {
+      "ID": "ratatoskr-postgresql-retention",
+      "Filter": { "Prefix": "ratatoskr-platform/*/postgresql/" },
+      "Status": "Enabled",
+      "Expiration": { "Days": 90 },
+      "AbortIncompleteMultipartUpload": { "DaysAfterInitiation": 7 }
+    },
+    {
+      "ID": "ratatoskr-borg-retention",
+      "Filter": { "Prefix": "ratatoskr-platform/*/borg/" },
+      "Status": "Enabled",
+      "Expiration": { "Days": 90 },
+      "AbortIncompleteMultipartUpload": { "DaysAfterInitiation": 7 }
+    },
+    {
+      "ID": "ratatoskr-configuration-retention",
+      "Filter": { "Prefix": "ratatoskr-platform/*/configuration/" },
+      "Status": "Enabled",
+      "Expiration": { "Days": 90 },
+      "AbortIncompleteMultipartUpload": { "DaysAfterInitiation": 7 }
+    }
+  ]
+}

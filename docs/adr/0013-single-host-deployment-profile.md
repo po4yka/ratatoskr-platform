@@ -228,5 +228,7 @@ the process then died. It now opens the file.
 - `extra_hosts: host.docker.internal:host-gateway` on the metrics stack's own service, which is the
   one change outside this repository that the scrape configuration needs.
 - A `ratatoskr.target`, so the deployment can be stopped as one thing.
-- An off-host backup destination. `deploy/backup/` dumps and restores; `/mnt/backup` is a second
-  volume on the same board.
+- ~~An off-host backup destination.~~ **Closed by the encrypted S3-compatible recovery set:** the Pi
+  uploads age-encrypted dump, Borg-export and configuration objects, while a separate verifier host
+  holds the private identity and performs the weekly restore drill. `/mnt/backup` remains a local
+  second volume and is not represented as the off-host copy.

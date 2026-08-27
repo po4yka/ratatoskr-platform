@@ -1,0 +1,13 @@
+[Unit]
+Description=Ratatoskr Platform — off-host restore drill, weekly
+Documentation=https://github.com/po4yka/ratatoskr-platform/blob/main/deploy/backup/README.md
+
+[Timer]
+# Sunday verifies Saturday's UTC recovery set. A missing object is a failed drill, not a fallback
+# to an older backup that would hide a replication outage.
+OnCalendar=Sun *-*-* 08:00:00
+Persistent=true
+RandomizedDelaySec=900
+
+[Install]
+WantedBy=timers.target
