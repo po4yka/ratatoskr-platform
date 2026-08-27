@@ -344,6 +344,7 @@ async fn attach_result(pool: &sqlx::PgPool, operation_id: Uuid) {
             target: EntityRef::parse("document:01a0153f-63e5-7010-a4c9-1fe6c43bcc40")
                 .expect("a target"),
             blob: None,
+            ai_archive_import_summary: None,
             extensions: Extensions::default(),
         },
         now(),

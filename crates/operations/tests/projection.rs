@@ -142,6 +142,7 @@ async fn a_success_report_round_trips_complete_blob_ref() {
         target: EntityRef::parse("document:018f0000-0000-7000-8000-000000000002")
             .expect("a document reference"),
         blob: Some(blob.clone()),
+        ai_archive_import_summary: None,
         extensions: Extensions::default(),
     });
     let message = Incoming {
@@ -171,6 +172,63 @@ async fn a_success_report_round_trips_complete_blob_ref() {
     harness.cleanup().await.expect("cleanup");
 
     assert_eq!(projected_blob.as_ref(), Some(&blob));
+}
+
+#[tokio::test]
+async fn an_ai_archive_import_summary_round_trips_through_the_public_projection() {
+    let harness = TestDatabase::create().await.expect("a test database");
+    let pool = harness.pool();
+    let operation = platform_operations::accept(
+        pool,
+        Uuid::now_v7(),
+        "ai_archive.import",
+        CORRELATION,
+        None,
+        now(),
+    )
+    .await
+    .expect("accepting");
+    let result = serde_json::from_value::<OperationResultRef>(serde_json::json!({
+        "result_kind": "ai_archive.import",
+        "target": "ai_archive:018f0000-0000-7000-8000-000000000131",
+        "ai_archive_import_summary": {
+            "ai_archive_id": "018f0000-0000-7000-8000-000000000131",
+            "provider": "chatgpt",
+            "completeness": "complete",
+            "conversation_count": 12,
+            "message_count": 48,
+            "asset_count": 3,
+            "gap_count": 0,
+            "warning_count": 1
+        }
+    }))
+    .expect("a valid bounded archive summary");
+    let mut succeeded = report(operation.operation_id, OperationStatus::Succeeded);
+    succeeded.results.push(result.clone());
+    let message = Incoming {
+        message_id: Uuid::now_v7(),
+        subject: Subject::new(MessageClass::Event, "platform.operation.reported.v1")
+            .expect("a subject"),
+        producer: "ratatoskr-chatgpt".to_owned(),
+        payload: serde_json::json!({
+            "event_id": Uuid::now_v7(),
+            "producer": "ratatoskr-chatgpt",
+            "payload": serde_json::to_value(succeeded).expect("the report serializes"),
+        }),
+    };
+
+    assert_eq!(
+        deliver(pool, &ProgressProjection, &message, now())
+            .await
+            .expect("delivering"),
+        Some(Outcome::Applied)
+    );
+    let snapshot = platform_operations::snapshot(pool, operation.operation_id)
+        .await
+        .expect("projecting the operation");
+    harness.cleanup().await.expect("cleanup");
+
+    assert_eq!(snapshot.results, vec![result]);
 }
 
 #[tokio::test]

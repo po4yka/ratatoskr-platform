@@ -42,6 +42,11 @@ Each route class SHALL carry declared body-size and response-header timeout budg
 - **WHEN** a downstream response does not produce headers before its route-class timeout
 - **THEN** Edge stops waiting and returns the configured timeout failure
 
+#### Scenario: A transfer exceeds its route budget
+
+- **WHEN** a proxied request body exceeds the matched route class's declared limit
+- **THEN** Edge rejects it before forwarding excess bytes downstream
+
 ### Requirement: Truthful downstream failure
 
 The proxy SHALL return 503 `edge.upstream_unavailable` for a refused listener, 504 for a response-header timeout, and a contract envelope for a non-conforming downstream error.
@@ -54,8 +59,12 @@ The proxy SHALL return 503 `edge.upstream_unavailable` for a refused listener, 5
 ### Requirement: Capability sections carry staleness
 
 Aggregated per-service capability sections SHALL come from each service's own document and carry explicit observation and staleness timestamps.
-
 #### Scenario: A capability section reports its observation time
 
 - **WHEN** Edge returns an aggregated capability section for a domain service
 - **THEN** that section includes explicit observation and staleness timestamps from the service document
+
+#### Scenario: A service capability refresh fails
+
+- **WHEN** Edge cannot refresh one service's capability document
+- **THEN** that service section remains explicit about its last observation and stale state

@@ -370,7 +370,7 @@ create table identity.audit_events (
     -- because it is the same string the client saw in `x-correlation-id` and in the error body;
     -- splitting it would make the audit trail unjoinable to a support conversation.
     constraint audit_events_correlation_id_is_namespaced
-        check (correlation_id ~ '^[a-z][a-z0-9-]{0,31}:[A-Za-z0-9._~-]{1,128}$')
+        check (correlation_id ~ '^[a-z][a-z0-9_-]{0,31}:[A-Za-z0-9][A-Za-z0-9._~:@+-]{0,255}$')
 );
 
 comment on table identity.audit_events is
@@ -636,9 +636,9 @@ create table operations.operations (
     -- The namespaced wire form from ratatoskr-contracts. The same grammar as identity.audit_events,
     -- deliberately, so an operation and its audit trail join on one string.
     constraint operations_correlation_id_is_namespaced
-        check (correlation_id ~ '^[a-z][a-z0-9-]{0,31}:[A-Za-z0-9._~-]{1,128}$'),
+        check (correlation_id ~ '^[a-z][a-z0-9_-]{0,31}:[A-Za-z0-9][A-Za-z0-9._~:@+-]{0,255}$'),
     constraint operations_causation_id_is_namespaced
-        check (causation_id is null or causation_id ~ '^[a-z][a-z0-9-]{0,31}:[A-Za-z0-9._~-]{1,128}$'),
+        check (causation_id is null or causation_id ~ '^[a-z][a-z0-9_-]{0,31}:[A-Za-z0-9][A-Za-z0-9._~:@+-]{0,255}$'),
     constraint operations_idempotency_key_is_bounded
         check (idempotency_key is null or length(idempotency_key) between 1 and 255),
     constraint operations_status_changed_at_is_not_before_accepted_at
@@ -822,9 +822,9 @@ create table operations.operation_results (
     -- deriving one from the other would fabricate a contract value at projection time.
     constraint operation_results_result_kind_is_a_dotted_name
         check (result_kind ~ '^[a-z][a-z0-9_]{0,31}(\.[a-z][a-z0-9_]{0,31}){1,3}$'),
-    -- The namespaced entity reference from ratatoskr-contracts, e.g. `document:<uuid7>`.
+    -- The namespaced entity reference from ratatoskr-contracts, e.g. `ai_archive:<uuid7>`.
     constraint operation_results_target_is_namespaced
-        check (target ~ '^[a-z][a-z0-9-]{0,31}:[A-Za-z0-9._~-]{1,128}$'),
+        check (target ~ '^[a-z][a-z0-9_-]{0,31}:[A-Za-z0-9][A-Za-z0-9._~:@+-]{0,255}$'),
     constraint operation_results_payload_is_an_object
         check (jsonb_typeof(payload) = 'object')
 );

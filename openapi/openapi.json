@@ -1,6 +1,121 @@
 {
   "components": {
     "schemas": {
+      "AiArchiveCompleteness": {
+        "description": "Whether one import obtained the whole export, stated per `docs/ARCHITECTURE.md` S8.3.\n\n**Closed on purpose**: indexing depth, retention and re-import scheduling hang off this\nstate, so an unrecognized value must stop processing rather than be read as \"whole enough\".\nCompleteness is evidence-based: a parser may not mark an import `complete` merely because it\nparsed every file it knows about.",
+        "oneOf": [
+          {
+            "const": "complete",
+            "description": "Every record parsed and every referenced asset was stored.",
+            "type": "string"
+          },
+          {
+            "const": "conversations_complete",
+            "description": "Every conversation record parsed; some assets are missing or were refused.",
+            "type": "string"
+          },
+          {
+            "const": "structurally_partial",
+            "description": "Some records did not parse or were not present; the gaps say which.",
+            "type": "string"
+          },
+          {
+            "const": "assets_partial",
+            "description": "Records parsed but asset storage was incomplete.",
+            "type": "string"
+          },
+          {
+            "const": "unknown",
+            "description": "The parser could not determine what the export contained at all.",
+            "type": "string"
+          },
+          {
+            "const": "failed_validation",
+            "description": "The export failed an integrity check before parsing could be trusted.",
+            "type": "string"
+          }
+        ]
+      },
+      "AiArchiveId": {
+        "description": "Identity of one import of a provider AI account export. Bare canonical lowercase hyphenated UUID; not namespaced.",
+        "examples": [
+          "018f0000-0000-7000-8000-000000000001"
+        ],
+        "format": "uuid",
+        "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+        "title": "AiArchiveId",
+        "type": "string"
+      },
+      "AiArchiveOperationSummary": {
+        "additionalProperties": false,
+        "description": "The privacy-safe import outcome that an operation result may expose to a client.\n\nIt carries only the immutable archive identity, provider, exact completeness classification,\nand aggregate counts; gap and warning details remain on the owning archive report.",
+        "properties": {
+          "ai_archive_id": {
+            "$ref": "#/components/schemas/AiArchiveId",
+            "description": "The immutable archive import produced by the operation."
+          },
+          "asset_count": {
+            "description": "Number of stored asset references in this import.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "completeness": {
+            "$ref": "#/components/schemas/AiArchiveCompleteness",
+            "description": "The producer's exact evidence-based import completeness classification."
+          },
+          "conversation_count": {
+            "description": "Number of normalized conversations in this import.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "gap_count": {
+            "description": "Number of known archive-level gaps in this import.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "message_count": {
+            "description": "Number of normalized messages in this import.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "provider": {
+            "$ref": "#/components/schemas/AiProvider",
+            "description": "The provider whose export the archive represents."
+          },
+          "warning_count": {
+            "description": "Number of non-gap warnings produced while importing this archive.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "ai_archive_id",
+          "provider",
+          "completeness",
+          "conversation_count",
+          "message_count",
+          "asset_count",
+          "gap_count",
+          "warning_count"
+        ],
+        "type": "object"
+      },
+      "AiProvider": {
+        "description": "The AI provider an archive came from, e.g. `chatgpt`, `claude`.\n\n**Open on purpose.** A validated token, not an enum: a provider added by a later milestone\nmust not break a running consumer, and no consumer may assume the vocabulary is\nexhaustive. Branch on equality with known tokens; treat everything else generically. The\ngrammar is the event-type segment grammar (`EventType::SEGMENT_PATTERN`), so one\nsnake_case alphabet covers both.",
+        "examples": [
+          "chatgpt",
+          "claude"
+        ],
+        "maxLength": 32,
+        "pattern": "^[a-z][a-z0-9_]{0,31}$",
+        "title": "AiProvider",
+        "type": "string"
+      },
       "BlobOwner": {
         "description": "Deployment identity of the service that owns and resolves a blob.",
         "examples": [
@@ -487,6 +602,17 @@
         "additionalProperties": true,
         "description": "A typed pointer to something the operation produced.\n\nA pointer, never inlined content: an operation may produce megabytes, and\n`ARCHITECTURE.md` S14 requires user content to be separable from metadata so telemetry can\nomit it.",
         "properties": {
+          "ai_archive_import_summary": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AiArchiveOperationSummary"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Privacy-safe summary of an imported AI archive when this result is `ai_archive.import`."
+          },
           "blob": {
             "anyOf": [
               {
@@ -516,7 +642,7 @@
       },
       "OperationSnapshot": {
         "additionalProperties": true,
-        "description": "A point-in-time public view of a long-running operation (`ARCHITECTURE.md` S5.4).\n\nNamed `OperationSnapshot`, not `Operation`, because this repository owns wire representations,\nnot entities (`ARCHITECTURE.md` S15.1, S15.12). Two snapshots of the same `operation_id` at\ndifferent `status_changed_at` are both valid and are not expected to be equal.\n\nNo `schema_version` field: S5.4's field list does not include one, and the envelope already\ncarries the envelope major. A third version axis is a compatibility hazard, not a feature.\n\n`Deserialize` is hand-written (the **only** hand-written `Deserialize` in this repository)\nbecause the invariants below are cross-field and serde has no validation hook. It parses a\nprivate mirror struct and then checks. A field added to the public struct and not the mirror\nwould be silently dropped; test `O-2` (byte round-trip of a fixture carrying every field)\nfails immediately if that happens, and a source comment points at it.\n\n# Cross-field invariants\n\nEvery one is re-checkable through [`OperationSnapshot::validate`]:\n\n- **I1** `terminated_at` is present exactly when `status.is_terminal()`.\n- **I2** `failed` requires at least one error.\n- **I3** `succeeded` forbids errors.\n- **I4** `partially_succeeded` requires at least one warning or error.\n- **I5** `status_changed_at` and `terminated_at` are never earlier than `accepted_at`.",
+        "description": "A point-in-time public view of a long-running operation (`ARCHITECTURE.md` S5.4).\n\nNamed `OperationSnapshot`, not `Operation`, because this repository owns wire representations,\nnot entities (`ARCHITECTURE.md` S15.1, S15.12). Two snapshots of the same `operation_id` at\ndifferent `status_changed_at` are both valid and are not expected to be equal.\n\nNo `schema_version` field: S5.4's field list does not include one, and the envelope already\ncarries the envelope major. A third version axis is a compatibility hazard, not a feature.\n\n`Deserialize` is hand-written (one of the two hand-written `Deserialize` impls in this\nrepository, beside `ratatoskr-social-contracts`'s snapshot) because the invariants below are\ncross-field and serde has no validation hook. It parses a\nprivate mirror struct and then checks. A field added to the public struct and not the mirror\nwould be silently dropped; test `O-2` (byte round-trip of a fixture carrying every field)\nfails immediately if that happens, and a source comment points at it.\n\n# Cross-field invariants\n\nEvery one is re-checkable through [`OperationSnapshot::validate`]:\n\n- **I1** `terminated_at` is present exactly when `status.is_terminal()`.\n- **I2** `failed` requires at least one error.\n- **I3** `succeeded` forbids errors.\n- **I4** `partially_succeeded` requires at least one warning or error.\n- **I5** `status_changed_at` and `terminated_at` are never earlier than `accepted_at`.\n- **I6** every result satisfies its own typed-field association constraints.",
         "properties": {
           "accepted_at": {
             "$ref": "#/components/schemas/WireTimestamp",

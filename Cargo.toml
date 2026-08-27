@@ -53,10 +53,10 @@ ratatoskr-platform-http      = { version = "0.1.0", path = "crates/http" }
 # distinct packages, so `EntityRef` from one would not unify with `EntityRef` from the other and the
 # compiler error would be baffling.
 # Replaced by a version requirement when contracts milestone 10 publishes.
-ratatoskr-identifiers     = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "d56c6891ce9b4fca2c65d43205080d9a666ab5a0" }
-ratatoskr-error-contracts = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "d56c6891ce9b4fca2c65d43205080d9a666ab5a0" }
-ratatoskr-event-envelope  = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "d56c6891ce9b4fca2c65d43205080d9a666ab5a0" }
-ratatoskr-operation-contracts = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "d56c6891ce9b4fca2c65d43205080d9a666ab5a0" }
+ratatoskr-identifiers     = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "33fd9991f1bb5c39fe779dff1369218a9e28e7e4" }
+ratatoskr-error-contracts = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "33fd9991f1bb5c39fe779dff1369218a9e28e7e4" }
+ratatoskr-event-envelope  = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "33fd9991f1bb5c39fe779dff1369218a9e28e7e4" }
+ratatoskr-operation-contracts = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "33fd9991f1bb5c39fe779dff1369218a9e28e7e4" }
 
 # ---- persistence ----
 # No `migrate` feature: the schema is one file, `include_str!`d into the binary by
