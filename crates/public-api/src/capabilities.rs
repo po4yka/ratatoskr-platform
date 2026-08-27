@@ -43,6 +43,9 @@ pub struct CapabilityDocument {
     /// The capabilities available to the caller right now, sorted, so two consecutive responses
     /// from an unchanged deployment are byte-identical.
     pub capabilities: Vec<&'static str>,
+    /// Service-owned capability documents last sampled by Edge. Each section states whether it is
+    /// stale instead of fabricating an empty success when its loopback owner is absent.
+    pub services: Vec<crate::gateway::ServiceCapabilities>,
 }
 
 /// The client-version floors.
@@ -103,6 +106,7 @@ pub async fn read(
         .map(Capability::as_str)
         .collect();
 
+    let services = state.gateway.capabilities().await;
     (
         http::StatusCode::OK,
         Json(CapabilityDocument {
@@ -112,6 +116,7 @@ pub async fn read(
                 mobile: MINIMUM_MOBILE,
             },
             capabilities,
+            services,
         }),
     )
         .into_response()

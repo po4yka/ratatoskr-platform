@@ -17,6 +17,28 @@ RATATOSKR__ADMIN__BIND=0.0.0.0:9464
 # cloudflared is ever moved into a container this becomes 0.0.0.0 and the unit's IPAddressAllow=
 # becomes the only thing between the public API and the LAN.
 RATATOSKR__PUBLIC__BIND=127.0.0.1:8080
+# The gateway's transfer and stream budgets are the public listener's ceiling; individual route
+# classes are narrowed below and enforced before any loopback request starts.
+RATATOSKR__PUBLIC__REQUEST_TIMEOUT_SECONDS=300
+RATATOSKR__PUBLIC__MAX_BODY_BYTES=104857600
+
+# Domain APIs are loopback-only. Edge owns the public prefixes, validates the session and mints
+# only x-ratatoskr-user-id, optional x-ratatoskr-device-id and x-correlation-id for each request.
+RATATOSKR__GATEWAY__ROUTES__KNOWLEDGE__PREFIX=/v1/k
+RATATOSKR__GATEWAY__ROUTES__KNOWLEDGE__LISTENER=127.0.0.1:8091
+RATATOSKR__GATEWAY__ROUTES__KNOWLEDGE__CLASS=stream
+RATATOSKR__GATEWAY__ROUTES__GITHUB__PREFIX=/v1/gh
+RATATOSKR__GATEWAY__ROUTES__GITHUB__LISTENER=127.0.0.1:8092
+RATATOSKR__GATEWAY__ROUTES__GITHUB__CLASS=control
+RATATOSKR__GATEWAY__ROUTES__VAULT__PREFIX=/v1/vault
+RATATOSKR__GATEWAY__ROUTES__VAULT__LISTENER=127.0.0.1:8093
+RATATOSKR__GATEWAY__ROUTES__VAULT__CLASS=transfer
+RATATOSKR__GATEWAY__ROUTES__SOCIAL__PREFIX=/v1/social
+RATATOSKR__GATEWAY__ROUTES__SOCIAL__LISTENER=127.0.0.1:8094
+RATATOSKR__GATEWAY__ROUTES__SOCIAL__CLASS=stream
+RATATOSKR__GATEWAY__ROUTES__AI__PREFIX=/v1/ai
+RATATOSKR__GATEWAY__ROUTES__AI__LISTENER=127.0.0.1:8095
+RATATOSKR__GATEWAY__ROUTES__AI__CLASS=stream
 
 # The whole URL is a secret: a PostgreSQL URL carries its password in the user information.
 RATATOSKR__DATABASE__URL=postgres://ratatoskr_edge:CHANGE-ME@127.0.0.1:5432/ratatoskr

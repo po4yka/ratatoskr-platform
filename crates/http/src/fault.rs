@@ -90,6 +90,15 @@ impl std::error::Error for UnmappedStatus {}
 #[derive(Debug, Clone, Copy)]
 pub struct AuthoredFailure(pub FailureKind);
 
+/// A response whose body was validated as a contract `ErrorEnvelope` at an internal boundary.
+///
+/// `observe` normally replaces every failing body, which is how a public Axum rejection cannot
+/// leak a framework response. A reverse proxy is different: it may receive a *validated* envelope
+/// from a service that owns the error code. This private marker lets that one boundary preserve the
+/// body without creating a second `ErrorEnvelope` construction site.
+#[derive(Debug, Clone, Copy)]
+struct ValidatedContractError;
+
 /// Refuse a request with a named failure.
 ///
 /// The body is empty on purpose: the middleware renders the envelope, so there is still exactly one
@@ -100,6 +109,23 @@ pub fn reject(kind: FailureKind) -> Response {
     *response.status_mut() = kind.fault().status;
     response.extensions_mut().insert(AuthoredFailure(kind));
     response
+}
+
+/// Preserve a response only after the caller has validated its body as an `ErrorEnvelope`.
+///
+/// This is intentionally not a general "skip fault rendering" switch: callers can retain a
+/// downstream error body only by using the named contract-boundary operation.
+#[must_use]
+pub fn preserve_contract_error(mut response: Response) -> Response {
+    response.extensions_mut().insert(ValidatedContractError);
+    response
+}
+
+pub(crate) fn is_preserved_contract_error(response: &Response) -> bool {
+    response
+        .extensions()
+        .get::<ValidatedContractError>()
+        .is_some()
 }
 
 /// The failure a response represents.

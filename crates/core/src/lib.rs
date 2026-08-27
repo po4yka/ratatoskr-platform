@@ -21,7 +21,8 @@ pub mod role;
 
 pub use crate::capability::{Capability, Deployment, Requirement};
 pub use crate::config::{
-    BusConfig, ConfigError, DatabaseConfig, IdentityConfig, PlatformConfig, Violation,
+    BusConfig, ConfigError, DatabaseConfig, GatewayConfig, GatewayRouteBudget, GatewayRouteBudgets,
+    GatewayRouteClass, GatewayRouteConfig, IdentityConfig, PlatformConfig, Violation,
 };
 pub use crate::error::{FailureKind, PlatformError, PublicFault, Subsystem};
 pub use crate::role::RuntimeRole;

@@ -43,16 +43,15 @@ fn every_failure_kind_has_a_parsable_error_code_in_the_platform_context() {
         let reparsed = ErrorCode::parse(fault.code.as_str())
             .unwrap_or_else(|error| panic!("{} must parse: {error}", fault.code.as_str()));
         assert_eq!(&reparsed, &fault.code);
-        assert_eq!(
-            fault.code.bounded_context(),
-            "platform",
-            "{} must be owned by this bounded context",
+        assert!(
+            matches!(fault.code.bounded_context(), "platform" | "edge"),
+            "{} must be owned by Platform or its public Edge boundary",
             fault.code.as_str()
         );
-        assert_eq!(
-            fault.code.as_str().split('.').count(),
-            3,
-            "{} must be three segments",
+        let segments = fault.code.as_str().split('.').count();
+        assert!(
+            segments == 3 || (fault.code.bounded_context() == "edge" && segments == 2),
+            "{} must be a platform three-segment or Edge two-segment code",
             fault.code.as_str()
         );
     }
@@ -173,6 +172,27 @@ fn the_status_and_retryability_table_is_pinned() {
             "platform.limit.overloaded",
             true,
             "The service is busy. Try again shortly.",
+        ),
+        (
+            FailureKind::UpstreamUnavailable,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "edge.upstream_unavailable",
+            true,
+            "The requested service is temporarily unavailable.",
+        ),
+        (
+            FailureKind::UpstreamInvalidResponse,
+            StatusCode::BAD_GATEWAY,
+            "edge.upstream_invalid_response",
+            true,
+            "The requested service returned an invalid response.",
+        ),
+        (
+            FailureKind::UpstreamTimeout,
+            StatusCode::GATEWAY_TIMEOUT,
+            "edge.upstream_timeout",
+            true,
+            "The requested service took too long to respond.",
         ),
     ];
     assert_eq!(

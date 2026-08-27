@@ -108,7 +108,7 @@ fn names(body: &serde_json::Value) -> Vec<String> {
         .collect()
 }
 
-/// P-1. The response is exactly the three members `ARCHITECTURE.md` S12 fixes, and no fourth.
+/// P-1. The response carries Platform's fixed members plus the explicitly stale service sections.
 ///
 /// The shape is a contract with every client, so a member added by accident — a health field, a
 /// service name, a count — is a leak or a promise, and both are worth failing a build over.
@@ -126,12 +126,18 @@ async fn the_document_is_the_shape_s12_fixes_and_nothing_more() {
     members.sort_unstable();
     assert_eq!(
         members,
-        ["api_version", "capabilities", "minimum_client_versions"],
-        "S12 fixes these three members: {body}"
+        [
+            "api_version",
+            "capabilities",
+            "minimum_client_versions",
+            "services"
+        ],
+        "S12 fixes these members: {body}"
     );
     assert_eq!(body["api_version"], "1.0");
     assert_eq!(body["minimum_client_versions"]["web"], "1.0");
     assert_eq!(body["minimum_client_versions"]["mobile"], "1.0");
+    assert!(body["services"].as_array().expect("an array").is_empty());
 }
 
 /// P-2. A whole deployment reports the capability it can honour.

@@ -22,6 +22,8 @@ pub struct Principal {
     pub user_id: Uuid,
     /// The session that authenticated.
     pub session_id: Uuid,
+    /// The registered device, present only for a device credential.
+    pub device_id: Option<Uuid>,
     /// How that session was established.
     pub kind: SessionKind,
 }
@@ -95,6 +97,7 @@ impl FromRequestParts<Arc<ApiState>> for Principal {
         Ok(Self {
             user_id: session.user_id,
             session_id: session.session_id,
+            device_id: session.device_id,
             kind: session.kind,
         })
     }

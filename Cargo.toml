@@ -74,6 +74,9 @@ axum       = { version = "0.8.9", default-features = false, features = ["http1",
 tower      = "0.5.3"
 tower-http = { version = "0.7.0", default-features = false, features = ["catch-panic", "limit", "timeout"] }
 http       = "1.5.0"
+http-body-util = "0.1.5"
+hyper          = { version = "1.11.0", features = ["client", "http1"] }
+hyper-util     = { version = "0.1.20", features = ["client-legacy", "tokio", "http1"] }
 
 # ---- configuration ----
 figment = { version = "0.10.19", features = ["env"] }
@@ -141,9 +144,6 @@ serde_json = "1.0.151"
 thiserror  = "2.0.20"
 
 # ---- dev only ----
-http-body-util = "0.1.5"
-hyper          = { version = "1.11.0", features = ["client", "http1"] }
-hyper-util     = { version = "0.1.20", features = ["client-legacy", "tokio", "http1"] }
 
 [workspace.lints.rust]
 unsafe_code                   = "forbid"

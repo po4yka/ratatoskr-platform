@@ -200,6 +200,7 @@ impl platform_http::PublicRoutes for EdgeRoutes {
                 public.actor_requests_per_minute,
             ));
         }
+        state.gateway = platform_public_api::gateway::Gateway::from_config(&config.gateway);
 
         // Shared with the observer rather than moved into the router, so the capability gauges are
         // computed from the SAME state the route reports (ADR-0008: one source for that fact, or
@@ -293,6 +294,7 @@ fn spawn_observer(
             ticker.tick().await;
             let now = jiff::Timestamp::now();
             platform_public_api::capabilities::sample(&state);
+            state.gateway.refresh_capabilities().await;
             if let Err(error) = platform_eventing::observe::sample(&pool, now).await {
                 tracing::warn!(%error, "the outbox and inbox gauges could not be sampled");
             }

@@ -30,7 +30,8 @@ use figment::providers::{Env, Serialized};
 
 pub use crate::config::model::{
     AdminConfig, BusConfig, DEFAULT_ACTOR_REQUESTS_PER_MINUTE, DEFAULT_STALE_AFTER_SECONDS,
-    DatabaseConfig, EVENT_RETENTION_DAYS, IdentityConfig, LogFormat, OperationsConfig, OtlpConfig,
+    DatabaseConfig, EVENT_RETENTION_DAYS, GatewayConfig, GatewayRouteBudget, GatewayRouteBudgets,
+    GatewayRouteClass, GatewayRouteConfig, IdentityConfig, LogFormat, OperationsConfig, OtlpConfig,
     PlatformConfig, PublicConfig, RetentionConfig, ShutdownConfig, TelemetryConfig,
 };
 pub use crate::config::validate::{SHUTDOWN_CEILING_SECONDS, Violation};
@@ -122,6 +123,7 @@ impl PlatformConfig {
                 max_concurrent_requests: model::default_max_concurrent_requests(),
                 actor_requests_per_minute: model::default_actor_requests_per_minute(),
             }),
+            gateway: GatewayConfig::default(),
             // Windows that are safe on the smallest deployment: long enough that nothing is lost
             // to a weekend outage, short enough that no mechanical table grows without end.
             retention: RetentionConfig::default(),

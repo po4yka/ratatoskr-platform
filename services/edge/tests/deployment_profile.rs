@@ -186,3 +186,39 @@ fn the_bus_profile_names_the_streams_the_code_declares() {
         platform_eventing::EVENT_SUBJECTS,
     );
 }
+
+/// D-7. Domain services have only their workspace-allocated loopback listeners; Edge is the sole
+/// public composition point and its template names every prefix/port/class explicitly.
+#[test]
+fn edge_profile_declares_the_canonical_domain_gateway_table() {
+    let text = environment(RuntimeRole::Edge);
+    assert_eq!(
+        setting(&text, "RATATOSKR__PUBLIC__MAX_BODY_BYTES").as_deref(),
+        Some("104857600")
+    );
+    assert_eq!(
+        setting(&text, "RATATOSKR__PUBLIC__REQUEST_TIMEOUT_SECONDS").as_deref(),
+        Some("300")
+    );
+    for (service, prefix, listener, class) in [
+        ("KNOWLEDGE", "/v1/k", "127.0.0.1:8091", "stream"),
+        ("GITHUB", "/v1/gh", "127.0.0.1:8092", "control"),
+        ("VAULT", "/v1/vault", "127.0.0.1:8093", "transfer"),
+        ("SOCIAL", "/v1/social", "127.0.0.1:8094", "stream"),
+        ("AI", "/v1/ai", "127.0.0.1:8095", "stream"),
+    ] {
+        let root = format!("RATATOSKR__GATEWAY__ROUTES__{service}");
+        assert_eq!(
+            setting(&text, &format!("{root}__PREFIX")).as_deref(),
+            Some(prefix)
+        );
+        assert_eq!(
+            setting(&text, &format!("{root}__LISTENER")).as_deref(),
+            Some(listener)
+        );
+        assert_eq!(
+            setting(&text, &format!("{root}__CLASS")).as_deref(),
+            Some(class)
+        );
+    }
+}

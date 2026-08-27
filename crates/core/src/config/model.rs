@@ -27,6 +27,10 @@ pub struct PlatformConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub public: Option<PublicConfig>,
 
+    /// The loopback domain-service APIs that Edge composes into its public listener.
+    #[serde(default)]
+    pub gateway: GatewayConfig,
+
     /// The `PostgreSQL` connection. Optional until the first route that reads persisted data, which
     /// is milestone 5; a binary configured without it starts, serves its probes, and reports no
     /// database check. That is deliberately not "degraded": at milestone 2 and 3 no request path
@@ -63,6 +67,121 @@ pub struct PlatformConfig {
 
     /// Logging, filtering and span export.
     pub telemetry: TelemetryConfig,
+}
+
+/// The route table and its class budgets for Edge's domain-service gateway.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct GatewayConfig {
+    /// One route per bounded-context service, keyed by its stable service name.
+    #[serde(default)]
+    pub routes: BTreeMap<String, GatewayRouteConfig>,
+    /// Finite body and response-header budgets selected by each route's traffic class.
+    #[serde(default)]
+    pub budgets: GatewayRouteBudgets,
+}
+
+/// The three bounded traffic budgets Edge understands.
+///
+/// A service picks a class rather than independently inventing limits. That preserves a small,
+/// reviewable deployment surface while still making the actual limits explicit configuration.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GatewayRouteBudgets {
+    /// Small control-plane calls.
+    #[serde(default = "default_gateway_control_budget")]
+    pub control: GatewayRouteBudget,
+    /// Server-sent event streams. The timeout covers response headers, not the open event body.
+    #[serde(default = "default_gateway_stream_budget")]
+    pub stream: GatewayRouteBudget,
+    /// Resumable uploads and downloads.
+    #[serde(default = "default_gateway_transfer_budget")]
+    pub transfer: GatewayRouteBudget,
+}
+
+impl Default for GatewayRouteBudgets {
+    fn default() -> Self {
+        Self {
+            control: default_gateway_control_budget(),
+            stream: default_gateway_stream_budget(),
+            transfer: default_gateway_transfer_budget(),
+        }
+    }
+}
+
+/// One route-class request body and response-header budget.
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GatewayRouteBudget {
+    /// The largest request body this class may forward without buffering it.
+    pub max_body_bytes: u64,
+    /// The maximum wait for downstream response headers. A streaming response body is not timed out.
+    pub response_timeout_seconds: u64,
+}
+
+impl GatewayRouteBudgets {
+    /// The budget selected by one route class.
+    #[must_use]
+    pub const fn for_class(&self, class: GatewayRouteClass) -> GatewayRouteBudget {
+        match class {
+            GatewayRouteClass::Control => self.control,
+            GatewayRouteClass::Stream => self.stream,
+            GatewayRouteClass::Transfer => self.transfer,
+        }
+    }
+}
+
+const fn default_gateway_control_budget() -> GatewayRouteBudget {
+    GatewayRouteBudget {
+        max_body_bytes: 1_048_576,
+        response_timeout_seconds: 15,
+    }
+}
+
+const fn default_gateway_stream_budget() -> GatewayRouteBudget {
+    GatewayRouteBudget {
+        max_body_bytes: 1_048_576,
+        response_timeout_seconds: 300,
+    }
+}
+
+const fn default_gateway_transfer_budget() -> GatewayRouteBudget {
+    GatewayRouteBudget {
+        max_body_bytes: 104_857_600,
+        response_timeout_seconds: 300,
+    }
+}
+
+/// One loopback domain-service API Edge may proxy to.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GatewayRouteConfig {
+    /// The public prefix Edge owns for this service.
+    pub prefix: String,
+    /// The service's loopback-only listener.
+    pub listener: SocketAddr,
+    /// The bounded request class for this path family.
+    #[serde(default)]
+    pub class: Option<GatewayRouteClass>,
+    /// The service-owned capability document path on `listener`.
+    #[serde(default = "default_capabilities_path")]
+    pub capabilities_path: String,
+}
+
+/// The distinct traffic shapes the gateway enforces.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GatewayRouteClass {
+    /// Small request/response control APIs.
+    Control,
+    /// Long-lived server-sent event streams.
+    Stream,
+    /// Streaming uploads and downloads.
+    Transfer,
+}
+
+fn default_capabilities_path() -> String {
+    "/v1/capabilities".to_owned()
 }
 
 /// The stale-operation reconciliation window (`ADR-0014`).

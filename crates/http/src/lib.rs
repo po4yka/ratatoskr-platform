@@ -42,7 +42,7 @@ use tokio::net::TcpListener;
 use tracing::field::Empty;
 
 pub use crate::admin::admin_router;
-pub use crate::fault::{AuthoredFailure, reject};
+pub use crate::fault::{AuthoredFailure, preserve_contract_error, reject};
 pub use crate::lifecycle::{Check, CheckName, CheckReason, CheckState, HttpState, RuntimeState};
 pub use crate::limit::{ActorLimiter, Concurrency};
 pub use crate::observe::{RequestContext, public_router};

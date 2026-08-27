@@ -60,12 +60,20 @@
           "minimum_client_versions": {
             "$ref": "#/components/schemas/MinimumClientVersions",
             "description": "The oldest client release per surface that this API still answers correctly."
+          },
+          "services": {
+            "description": "Service-owned capability documents last sampled by Edge. Each section states whether it is\nstale instead of fabricating an empty success when its loopback owner is absent.",
+            "items": {
+              "$ref": "#/components/schemas/ServiceCapabilities"
+            },
+            "type": "array"
           }
         },
         "required": [
           "api_version",
           "minimum_client_versions",
-          "capabilities"
+          "capabilities",
+          "services"
         ],
         "type": "object"
       },
@@ -934,6 +942,42 @@
         "pattern": "^[^\\x00-\\x1f\\x7f]{1,1024}$",
         "title": "SafeMessage",
         "type": "string"
+      },
+      "ServiceCapabilities": {
+        "description": "A service-owned document observed through its loopback capability endpoint.",
+        "properties": {
+          "document": {
+            "description": "The service's own capability document, opaque to Edge."
+          },
+          "observed_at": {
+            "description": "RFC 3339 timestamp of the last successful observation, if one exists.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "service": {
+            "description": "Stable configured service name.",
+            "type": "string"
+          },
+          "stale": {
+            "description": "Whether the most recent refresh failed.",
+            "type": "boolean"
+          },
+          "stale_since": {
+            "description": "RFC 3339 timestamp when the current stale period began, if stale.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "service",
+          "document",
+          "stale"
+        ],
+        "type": "object"
       },
       "SessionDeviceRef": {
         "description": "A device reference inside [`SessionSummary`].",

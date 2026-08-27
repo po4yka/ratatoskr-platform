@@ -157,20 +157,21 @@ pub(crate) async fn observe(
 
         // Literally `>= 400`, not `is_client_error() || is_server_error()`: a status outside
         // both classes must not escape the public listener without an envelope either.
-        let mut response = if status.as_u16() >= 400 {
-            let error = fault::classify(&response);
-            span.record("error.code", error.fault().code.as_str());
-            // The completion event, at the level the taxonomy chose, with the full source chain.
-            error.log();
-            fault::render(&error, &context)
-        } else {
-            tracing::info!(
-                status = status.as_u16(),
-                duration_ms = duration_ms(elapsed),
-                "request completed"
-            );
-            response
-        };
+        let mut response =
+            if status.as_u16() >= 400 && !fault::is_preserved_contract_error(&response) {
+                let error = fault::classify(&response);
+                span.record("error.code", error.fault().code.as_str());
+                // The completion event, at the level the taxonomy chose, with the full source chain.
+                error.log();
+                fault::render(&error, &context)
+            } else {
+                tracing::info!(
+                    status = status.as_u16(),
+                    duration_ms = duration_ms(elapsed),
+                    "request completed"
+                );
+                response
+            };
 
         // A rendering of an EntityRef is visible ASCII by grammar, so the fallible conversion
         // cannot fail; a response without the header would still be served rather than dropped.

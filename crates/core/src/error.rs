@@ -200,12 +200,18 @@ pub enum FailureKind {
     /// because a queue on a host with four shared cores converts a load spike into a timeout for
     /// every request instead of a refusal for some.
     Overloaded,
+    /// A configured domain-service listener could not be reached.
+    UpstreamUnavailable,
+    /// A domain service answered an error that is not a Ratatoskr contract envelope.
+    UpstreamInvalidResponse,
+    /// A reachable domain service did not produce response headers within its route budget.
+    UpstreamTimeout,
 }
 
 impl FailureKind {
     /// Every kind, in status order. The array length is the documented count, so adding a variant
     /// without updating it does not compile.
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 14] = [
         Self::RouteNotFound,
         Self::MethodNotAllowed,
         Self::PayloadTooLarge,
@@ -217,6 +223,9 @@ impl FailureKind {
         Self::IdempotencyConflict,
         Self::RateLimited,
         Self::Overloaded,
+        Self::UpstreamUnavailable,
+        Self::UpstreamInvalidResponse,
+        Self::UpstreamTimeout,
     ];
 
     /// The kinds a response can arrive as with no handler involved: axum's own routing and
@@ -252,6 +261,9 @@ impl FailureKind {
             Self::IdempotencyConflict => &IDEMPOTENCY_CONFLICT,
             Self::RateLimited => &RATE_LIMITED,
             Self::Overloaded => &OVERLOADED,
+            Self::UpstreamUnavailable => &UPSTREAM_UNAVAILABLE,
+            Self::UpstreamInvalidResponse => &UPSTREAM_INVALID_RESPONSE,
+            Self::UpstreamTimeout => &UPSTREAM_TIMEOUT,
         }
     }
 }
@@ -313,6 +325,38 @@ static OVERLOADED: LazyLock<PublicFault> = LazyLock::new(|| {
         StatusCode::SERVICE_UNAVAILABLE,
         "platform.limit.overloaded",
         "The service is busy. Try again shortly.",
+        true,
+    )
+});
+
+/// `edge.upstream_unavailable` — 503. The route exists but its configured owner is absent.
+static UPSTREAM_UNAVAILABLE: LazyLock<PublicFault> = LazyLock::new(|| {
+    entry(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "edge.upstream_unavailable",
+        "The requested service is temporarily unavailable.",
+        true,
+    )
+});
+
+/// `edge.upstream_invalid_response` — 502. Edge could reach the configured service, but it did
+/// not answer the shared error contract and is therefore not safe to pass through.
+static UPSTREAM_INVALID_RESPONSE: LazyLock<PublicFault> = LazyLock::new(|| {
+    entry(
+        StatusCode::BAD_GATEWAY,
+        "edge.upstream_invalid_response",
+        "The requested service returned an invalid response.",
+        true,
+    )
+});
+
+/// `edge.upstream_timeout` — 504. The route's own header budget elapsed; this is distinct from a
+/// client-side request timeout because retrying the same request may succeed after the service recovers.
+static UPSTREAM_TIMEOUT: LazyLock<PublicFault> = LazyLock::new(|| {
+    entry(
+        StatusCode::GATEWAY_TIMEOUT,
+        "edge.upstream_timeout",
+        "The requested service took too long to respond.",
         true,
     )
 });

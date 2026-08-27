@@ -18,16 +18,18 @@
 use std::sync::Arc;
 
 use axum::Router;
-use axum::routing::{MethodRouter, delete, get, post};
+use axum::routing::{MethodRouter, any, delete, get, post};
 use platform_api_doc::{ApiSurface, RouteDoc};
 use platform_http::RuntimeState;
 use platform_persistence::Database;
+use tower_http::limit::RequestBodyLimitLayer;
 
 pub mod auth;
 pub mod capabilities;
 pub mod captures;
 pub mod credentials;
 pub mod devices;
+pub mod gateway;
 pub mod oauth;
 pub mod operations;
 pub mod sessions;
@@ -72,6 +74,8 @@ pub struct ApiState {
     /// are attacker-controlled, so one process-wide bucket is the only honest identity before a
     /// pairing code has authenticated anything.
     pub pairing_limit: Arc<platform_http::ActorLimiter>,
+    /// The configured loopback domain-service route table.
+    pub gateway: gateway::Gateway,
 }
 
 impl ApiState {
@@ -98,6 +102,7 @@ impl ApiState {
             bus_configured,
             assertion_key: None,
             oauth_completion_url: None,
+            gateway: gateway::Gateway::disabled(),
         }
     }
 
@@ -220,12 +225,24 @@ fn table() -> Vec<Endpoint> {
 
 /// The public routes.
 pub fn routes(state: Arc<ApiState>) -> Router {
-    table()
-        .into_iter()
-        .fold(Router::new(), |router, endpoint| {
-            router.route(endpoint.doc.path, endpoint.handler)
-        })
-        .with_state(state)
+    let router = table().into_iter().fold(Router::new(), |router, endpoint| {
+        router.route(endpoint.doc.path, endpoint.handler)
+    });
+    let router = state
+        .gateway
+        .routes()
+        .values()
+        .fold(router, |router, route| {
+            let Some(budget) = state.gateway.budget(route) else {
+                return router;
+            };
+            let limit = usize::try_from(budget.max_body_bytes).unwrap_or(usize::MAX);
+            let handler = any(gateway::proxy).layer(RequestBodyLimitLayer::new(limit));
+            router
+                .route(&route.prefix, handler.clone())
+                .route(&format!("{}/{{*tail}}", route.prefix), handler)
+        });
+    router.with_state(state)
 }
 
 /// This listener's half of the generated `OpenAPI` document.

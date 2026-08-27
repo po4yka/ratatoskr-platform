@@ -17,7 +17,9 @@
 use figment::providers::Serialized;
 use figment::{Figment, Jail};
 use platform_core::RuntimeRole;
-use platform_core::config::{self, ConfigError, PlatformConfig, Violation};
+use platform_core::config::{
+    self, ConfigError, GatewayRouteClass, GatewayRouteConfig, PlatformConfig, Violation,
+};
 
 /// The violations `load` reports for `role`, or a panic if the configuration was accepted.
 fn violations(role: RuntimeRole) -> Vec<Violation> {
@@ -31,6 +33,45 @@ fn violations(role: RuntimeRole) -> Vec<Violation> {
 /// Whether a violation set names `key`.
 fn names(found: &[Violation], key: &str) -> bool {
     found.iter().any(|violation| violation.key == key)
+}
+
+/// Gateway route-table mistakes must stop Edge before it binds its only public listener.
+///
+/// RED expectation: validation does not yet inspect `gateway.routes`, so `load_from` accepts this
+/// unrecognised service and the `expect_err` assertion fails.
+#[test]
+fn gateway_rejects_unknown_service_colliding_prefix_and_missing_budget_class() {
+    let mut configured = PlatformConfig::defaults(RuntimeRole::Edge);
+    configured.gateway.routes.insert(
+        "knowledge".to_owned(),
+        GatewayRouteConfig {
+            prefix: "/v1/k".to_owned(),
+            listener: "127.0.0.1:8091".parse().unwrap(),
+            class: Some(GatewayRouteClass::Control),
+            capabilities_path: "/v1/capabilities".to_owned(),
+        },
+    );
+    configured.gateway.routes.insert(
+        "not-a-service".to_owned(),
+        GatewayRouteConfig {
+            prefix: "/v1/k".to_owned(),
+            listener: "127.0.0.1:8099".parse().unwrap(),
+            class: None,
+            capabilities_path: "/v1/capabilities".to_owned(),
+        },
+    );
+
+    let error = config::load_from(
+        RuntimeRole::Edge,
+        Figment::from(Serialized::defaults(configured)),
+    )
+    .expect_err("gateway must reject the invalid route table");
+    let ConfigError::Invalid(found) = error else {
+        panic!("expected semantic gateway validation failure");
+    };
+    assert!(names(&found, "gateway.routes.service"));
+    assert!(names(&found, "gateway.routes.prefix"));
+    assert!(names(&found, "gateway.routes.class"));
 }
 
 /// C-7. `ARCHITECTURE.md` S18: the edge role serves the public API, so a missing public listener is

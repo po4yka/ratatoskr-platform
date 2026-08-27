@@ -133,8 +133,146 @@ pub(crate) fn validate(role: RuntimeRole, config: &PlatformConfig) -> Vec<Violat
     found.extend(retention_violations(config));
     found.extend(limit_violations(config));
     found.extend(operations_violations(config));
+    found.extend(gateway_violations(role, config));
 
     found
+}
+
+/// V20 — Edge is the only public composition point, and each joined service has one canonical
+/// prefix and loopback port from the workspace deployment contract.
+fn gateway_violations(role: RuntimeRole, config: &PlatformConfig) -> Vec<Violation> {
+    let mut found = Vec::new();
+    if role != RuntimeRole::Edge && !config.gateway.routes.is_empty() {
+        found.push(Violation {
+            key: "gateway.routes",
+            env_var: "RATATOSKR__GATEWAY__ROUTES",
+            rule: "may be configured only for ratatoskr-edge; clients reach domain APIs through Edge",
+        });
+    }
+
+    let mut prefixes = std::collections::BTreeSet::new();
+    found.extend(gateway_budget_violations(&config.gateway.budgets));
+    for (service, route) in &config.gateway.routes {
+        gateway_route_violations(config, service, route, &mut found, &mut prefixes);
+    }
+    found
+}
+
+fn gateway_budget_violations(budgets: &crate::config::GatewayRouteBudgets) -> Vec<Violation> {
+    let mut found = Vec::new();
+    for (key, env_var, budget) in [
+        (
+            "gateway.budgets.control",
+            "RATATOSKR__GATEWAY__BUDGETS__CONTROL",
+            budgets.control,
+        ),
+        (
+            "gateway.budgets.stream",
+            "RATATOSKR__GATEWAY__BUDGETS__STREAM",
+            budgets.stream,
+        ),
+        (
+            "gateway.budgets.transfer",
+            "RATATOSKR__GATEWAY__BUDGETS__TRANSFER",
+            budgets.transfer,
+        ),
+    ] {
+        if !(1024..=104_857_600).contains(&budget.max_body_bytes) {
+            found.push(Violation {
+                key,
+                env_var,
+                rule: "must be 1024..=104857600 for every gateway route class",
+            });
+        }
+        if !(1..=300).contains(&budget.response_timeout_seconds) {
+            found.push(Violation {
+                key,
+                env_var,
+                rule: "must be 1..=300 for every gateway route class",
+            });
+        }
+    }
+    found
+}
+
+fn gateway_route_violations(
+    config: &PlatformConfig,
+    service: &str,
+    route: &crate::config::GatewayRouteConfig,
+    found: &mut Vec<Violation>,
+    prefixes: &mut std::collections::BTreeSet<String>,
+) {
+    if !prefixes.insert(route.prefix.clone()) {
+        found.push(Violation {
+            key: "gateway.routes.prefix",
+            env_var: "RATATOSKR__GATEWAY__ROUTES",
+            rule: "must be unique across the gateway route table",
+        });
+    }
+    if route.class.is_none() {
+        found.push(Violation {
+            key: "gateway.routes.class",
+            env_var: "RATATOSKR__GATEWAY__ROUTES",
+            rule: "must select control, stream, or transfer so Edge can enforce a finite budget",
+        });
+    }
+    let Some((prefix, port)) = gateway_service(service) else {
+        found.push(Violation {
+            key: "gateway.routes.service",
+            env_var: "RATATOSKR__GATEWAY__ROUTES",
+            rule: "must name one of knowledge, github, vault, social, ai",
+        });
+        return;
+    };
+    if route.prefix != prefix {
+        found.push(Violation {
+            key: "gateway.routes.prefix",
+            env_var: "RATATOSKR__GATEWAY__ROUTES",
+            rule: "must be the service's unique canonical /v1 prefix",
+        });
+    }
+    if !route.listener.ip().is_loopback() || route.listener.port() != port {
+        found.push(Violation {
+            key: "gateway.routes.listener",
+            env_var: "RATATOSKR__GATEWAY__ROUTES",
+            rule: "must be the service's allocated loopback listener from DEPLOYMENT_TARGET.md",
+        });
+    }
+    if route.capabilities_path != "/v1/capabilities" {
+        found.push(Violation {
+            key: "gateway.routes.capabilities_path",
+            env_var: "RATATOSKR__GATEWAY__ROUTES",
+            rule: "must be /v1/capabilities so aggregation reads the service-owned document",
+        });
+    }
+    if let (Some(public), Some(class)) = (config.public.as_ref(), route.class) {
+        let budget = config.gateway.budgets.for_class(class);
+        if public.max_body_bytes < budget.max_body_bytes {
+            found.push(Violation {
+                key: "public.max_body_bytes",
+                env_var: "RATATOSKR__PUBLIC__MAX_BODY_BYTES",
+                rule: "must be at least the largest configured gateway route body budget",
+            });
+        }
+        if public.request_timeout_seconds < budget.response_timeout_seconds {
+            found.push(Violation {
+                key: "public.request_timeout_seconds",
+                env_var: "RATATOSKR__PUBLIC__REQUEST_TIMEOUT_SECONDS",
+                rule: "must be at least the largest configured gateway response-header budget",
+            });
+        }
+    }
+}
+
+fn gateway_service(service: &str) -> Option<(&'static str, u16)> {
+    match service {
+        "knowledge" => Some(("/v1/k", 8091)),
+        "github" => Some(("/v1/gh", 8092)),
+        "vault" => Some(("/v1/vault", 8093)),
+        "social" => Some(("/v1/social", 8094)),
+        "ai" => Some(("/v1/ai", 8095)),
+        _ => None,
+    }
 }
 
 /// V19 — the reconciliation rule (ADR-0014).
