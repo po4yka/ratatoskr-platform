@@ -280,6 +280,11 @@ pub async fn ensure(
 /// Ensures the fixed social browser-capture durables exist on a Platform-owned command stream.
 ///
 /// The implementation follows the failing broker test added with this consumer inventory.
+///
+/// # Errors
+///
+/// Returns an [`EventingError`] when the command stream or a fixed durable cannot be obtained or
+/// its configuration differs from the closed provider filter and explicit-ack contract.
 pub async fn ensure_social_capture_consumers(
     context: &jetstream::Context,
     stream_name: &str,
