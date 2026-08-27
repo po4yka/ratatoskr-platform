@@ -19,7 +19,10 @@
 use std::time::Duration;
 
 use async_nats::jetstream;
-use platform_eventing::{NatsPublisher, StreamSpec, StreamState, WhenFull};
+use platform_eventing::{
+    NatsPublisher, SOCIAL_CAPTURE_CONSUMERS, StreamSpec, StreamState, WhenFull,
+    ensure_social_capture_consumers,
+};
 use uuid::Uuid;
 
 /// The broker the suite talks to. Matches `compose.yaml`.
@@ -202,7 +205,7 @@ async fn an_existing_stream_with_other_limits_is_reported_not_silently_accepted(
         .expect("the legacy stream");
 
     let state = publisher
-        .ensure_stream(&StreamSpec::commands(&name, vec![format!("{name}.>")]))
+        .ensure_stream(&StreamSpec::commands(&name, vec!["cmd.>".to_owned()]))
         .await
         .expect("declaring");
 
@@ -242,4 +245,48 @@ fn the_stream_keeps_messages_for_exactly_the_documented_window() {
         std::time::Duration::from_secs(platform_core::config::EVENT_RETENTION_DAYS * 24 * 3600),
     );
     assert_eq!(StreamSpec::command_stream().max_age, spec.max_age);
+}
+
+/// S-7. Provider identities never create a consumer: Edge fixes every durable/filter pair before
+/// the providers start, so an identity with only `INFO` and `MSG.NEXT` permission cannot widen its
+/// command visibility.
+#[tokio::test]
+async fn edge_preprovisions_each_fixed_social_browser_capture_consumer() {
+    let publisher = NatsPublisher::connect(&nats_url())
+        .await
+        .expect("a broker; docker compose up -d");
+    let name = format!("t_{}", Uuid::now_v7().simple());
+    publisher
+        .ensure_stream(&StreamSpec::commands(&name, vec![format!("{name}.>")]))
+        .await
+        .expect("the isolated command stream");
+
+    ensure_social_capture_consumers(publisher.context(), &name)
+        .await
+        .expect("Edge preprovisions provider durables");
+    let stream = publisher
+        .context()
+        .get_stream(&name)
+        .await
+        .expect("the stream");
+    for spec in SOCIAL_CAPTURE_CONSUMERS {
+        let consumer: jetstream::consumer::PullConsumer = stream
+            .get_consumer(spec.durable_name)
+            .await
+            .expect("the provider durable exists");
+        assert_eq!(
+            consumer.cached_info().config.filter_subject,
+            spec.filter_subject
+        );
+        assert_eq!(
+            consumer.cached_info().config.durable_name.as_deref(),
+            Some(spec.durable_name)
+        );
+    }
+
+    publisher
+        .context()
+        .delete_stream(&name)
+        .await
+        .expect("cleaning up");
 }
