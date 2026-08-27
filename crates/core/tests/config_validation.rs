@@ -49,6 +49,7 @@ fn gateway_rejects_unknown_service_colliding_prefix_and_missing_budget_class() {
             listener: "127.0.0.1:8091".parse().unwrap(),
             class: Some(GatewayRouteClass::Control),
             capabilities_path: "/v1/capabilities".to_owned(),
+            archive_receipt_path: "/v1/ai-archives/receipt".to_owned(),
         },
     );
     configured.gateway.routes.insert(
@@ -58,6 +59,7 @@ fn gateway_rejects_unknown_service_colliding_prefix_and_missing_budget_class() {
             listener: "127.0.0.1:8099".parse().unwrap(),
             class: None,
             capabilities_path: "/v1/capabilities".to_owned(),
+            archive_receipt_path: "/v1/ai-archives/receipt".to_owned(),
         },
     );
 
@@ -72,6 +74,37 @@ fn gateway_rejects_unknown_service_colliding_prefix_and_missing_budget_class() {
     assert!(names(&found, "gateway.routes.service"));
     assert!(names(&found, "gateway.routes.prefix"));
     assert!(names(&found, "gateway.routes.class"));
+}
+
+#[test]
+fn gateway_accepts_configured_chatgpt_and_claude_transfer_receivers() {
+    let mut configured = PlatformConfig::defaults(RuntimeRole::Edge);
+    let public = configured
+        .public
+        .as_mut()
+        .expect("Edge has a public listener");
+    public.max_body_bytes = 104_857_600;
+    public.request_timeout_seconds = 300;
+    for (service, prefix, listener) in [
+        ("chatgpt", "/v1/chatgpt", "127.0.0.1:8096"),
+        ("claude", "/v1/claude", "127.0.0.1:8097"),
+    ] {
+        configured.gateway.routes.insert(
+            service.to_owned(),
+            GatewayRouteConfig {
+                prefix: prefix.to_owned(),
+                listener: listener.parse().expect("an allocated loopback listener"),
+                class: Some(GatewayRouteClass::Transfer),
+                capabilities_path: "/v1/capabilities".to_owned(),
+                archive_receipt_path: "/v1/ai-archives/receipt".to_owned(),
+            },
+        );
+    }
+    config::load_from(
+        RuntimeRole::Edge,
+        Figment::from(Serialized::defaults(configured)),
+    )
+    .expect("the configured archive receivers are a valid Edge route table");
 }
 
 /// C-7. `ARCHITECTURE.md` S18: the edge role serves the public API, so a missing public listener is

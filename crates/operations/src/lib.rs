@@ -12,6 +12,10 @@
 
 use platform_persistence::PersistenceError;
 
+pub use crate::archive::{
+    AiArchiveAcceptance, fail_ai_archive_delivery, find_ai_archive_acceptance,
+    record_ai_archive_acceptance,
+};
 pub use crate::cancel::{Cancellation, request_cancellation};
 pub use crate::list::{ListScope, Page, list_operations};
 pub use crate::projection::ProgressProjection;
@@ -26,6 +30,7 @@ use sqlx::{PgExecutor, Row as _};
 use crate::transition::Transition;
 use uuid::Uuid;
 
+pub mod archive;
 pub mod cancel;
 pub mod list;
 pub mod projection;

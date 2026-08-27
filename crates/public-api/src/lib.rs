@@ -18,12 +18,13 @@
 use std::sync::Arc;
 
 use axum::Router;
-use axum::routing::{MethodRouter, any, delete, get, post};
+use axum::routing::{MethodRouter, any, delete, get, post, put};
 use platform_api_doc::{ApiSurface, RouteDoc};
 use platform_http::RuntimeState;
 use platform_persistence::Database;
 use tower_http::limit::RequestBodyLimitLayer;
 
+pub mod archives;
 pub mod auth;
 pub mod capabilities;
 pub mod captures;
@@ -153,6 +154,14 @@ fn table() -> Vec<Endpoint> {
             handler: post(captures::submit),
         },
         Endpoint {
+            doc: archives::PREPARE_DOC,
+            handler: post(archives::prepare),
+        },
+        Endpoint {
+            doc: archives::UPLOAD_DOC,
+            handler: put(archives::upload),
+        },
+        Endpoint {
             doc: operations::DOC,
             handler: get(operations::read),
         },
@@ -228,6 +237,9 @@ pub fn routes(state: Arc<ApiState>) -> Router {
     let router = table().into_iter().fold(Router::new(), |router, endpoint| {
         router.route(endpoint.doc.path, endpoint.handler)
     });
+    let upload_limit =
+        usize::try_from(state.gateway.transfer_budget().max_body_bytes).unwrap_or(usize::MAX);
+    let router = router.layer(RequestBodyLimitLayer::new(upload_limit));
     let router = state
         .gateway
         .routes()
@@ -261,6 +273,8 @@ pub fn surface() -> ApiSurface {
 fn register_schemas(generator: &mut schemars::SchemaGenerator) {
     generator.subschema_for::<captures::SubmitCapture>();
     generator.subschema_for::<captures::CaptureAccepted>();
+    generator.subschema_for::<archives::PrepareArchive>();
+    generator.subschema_for::<archives::ArchivePrepared>();
     generator.subschema_for::<capabilities::CapabilityDocument>();
     generator.subschema_for::<sessions::ExchangeAssertion>();
     generator.subschema_for::<sessions::SessionMinted>();

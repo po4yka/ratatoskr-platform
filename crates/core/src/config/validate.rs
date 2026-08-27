@@ -220,7 +220,7 @@ fn gateway_route_violations(
         found.push(Violation {
             key: "gateway.routes.service",
             env_var: "RATATOSKR__GATEWAY__ROUTES",
-            rule: "must name one of knowledge, github, vault, social, ai",
+            rule: "must name one of knowledge, github, vault, social, ai, chatgpt, claude",
         });
         return;
     };
@@ -243,6 +243,13 @@ fn gateway_route_violations(
             key: "gateway.routes.capabilities_path",
             env_var: "RATATOSKR__GATEWAY__ROUTES",
             rule: "must be /v1/capabilities so aggregation reads the service-owned document",
+        });
+    }
+    if route.archive_receipt_path != "/v1/ai-archives/receipt" {
+        found.push(Violation {
+            key: "gateway.routes.archive_receipt_path",
+            env_var: "RATATOSKR__GATEWAY__ROUTES",
+            rule: "must be /v1/ai-archives/receipt so archive delivery has one bounded service-owned path",
         });
     }
     if let (Some(public), Some(class)) = (config.public.as_ref(), route.class) {
@@ -271,6 +278,8 @@ fn gateway_service(service: &str) -> Option<(&'static str, u16)> {
         "vault" => Some(("/v1/vault", 8093)),
         "social" => Some(("/v1/social", 8094)),
         "ai" => Some(("/v1/ai", 8095)),
+        "chatgpt" => Some(("/v1/chatgpt", 8096)),
+        "claude" => Some(("/v1/claude", 8097)),
         _ => None,
     }
 }

@@ -116,6 +116,30 @@
         "title": "AiProvider",
         "type": "string"
       },
+      "ArchivePrepared": {
+        "description": "A durable operation plus the only upload path that may deliver its archive.",
+        "properties": {
+          "operation_id": {
+            "description": "The operation to poll for importer processing and completeness.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "status": {
+            "description": "Edge has durably accepted metadata only; it has not received the archive bytes yet.",
+            "type": "string"
+          },
+          "upload_path": {
+            "description": "Relative operation-bound endpoint to which the archive bytes may be streamed with `PUT`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation_id",
+          "status",
+          "upload_path"
+        ],
+        "type": "object"
+      },
       "BlobOwner": {
         "description": "Deployment identity of the service that owns and resolves a blob.",
         "examples": [
@@ -961,6 +985,25 @@
         ],
         "type": "object"
       },
+      "PrepareArchive": {
+        "description": "Digest-first archive metadata. The body bytes arrive only at the operation-bound upload path.",
+        "properties": {
+          "byte_size": {
+            "description": "Exact number of bytes that will be delivered.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "sha256": {
+            "description": "Lowercase hexadecimal SHA-256 of the exact bytes that will be delivered.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sha256",
+          "byte_size"
+        ],
+        "type": "object"
+      },
       "ProgressPercent": {
         "description": "Completion estimate in whole percent, 0..=100 inclusive. Integer, never floating point, so canonical serialization is platform-independent. Absence means the producer cannot estimate, never zero.",
         "examples": [
@@ -1357,6 +1400,195 @@
   "jsonSchemaDialect": "https://json-schema.org/draft/2020-12/schema",
   "openapi": "3.1.0",
   "paths": {
+    "/v1/ai-archives/{provider}": {
+      "post": {
+        "description": "Accepts immutable metadata for a registered export-agent archive and returns the operation-bound upload path. It does not mean that archive bytes have been received or imported.",
+        "operationId": "prepareAiArchive",
+        "parameters": [
+          {
+            "description": "`chatgpt` or `claude`.",
+            "in": "path",
+            "name": "provider",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "A client-chosen 1 to 255 character replay key.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PrepareArchive"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArchivePrepared"
+                }
+              }
+            },
+            "description": "Metadata accepted durably; upload bytes to the returned path."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The metadata or idempotency header is invalid."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No credential, or one that does not authenticate here."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The provider is unsupported or this is not a registered export-agent device."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The idempotency key is in use for different metadata."
+          }
+        },
+        "security": [
+          {
+            "sessionBearer": []
+          }
+        ],
+        "summary": "Prepare an AI archive import",
+        "tags": [
+          "ai-archives"
+        ]
+      }
+    },
+    "/v1/ai-archives/{provider}/{operation_id}/content": {
+      "put": {
+        "description": "Streams bytes to the configured provider importer. Edge injects the operation, digest and size claims; callers cannot set them.",
+        "operationId": "uploadAiArchiveContent",
+        "parameters": [
+          {
+            "description": "The provider selected during preparation.",
+            "in": "path",
+            "name": "provider",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The prepared operation identifier.",
+            "in": "path",
+            "name": "operation_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "format": "binary",
+                "type": "string"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "The importer accepted the streamed archive for asynchronous processing."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No credential, or one that does not authenticate here."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The operation is not a deliverable archive owned by this device."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The configured importer could not be reached; the operation is marked failed with a safe retryable diagnostic."
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The configured importer did not respond within its bounded receipt budget."
+          }
+        },
+        "security": [
+          {
+            "sessionBearer": []
+          }
+        ],
+        "summary": "Deliver prepared AI archive bytes",
+        "tags": [
+          "ai-archives"
+        ]
+      }
+    },
     "/v1/capabilities": {
       "get": {
         "description": "Returns the API version, the client-version floors, and the capabilities available to the caller.\n\nA capability is a stable name a client gates a feature on. It appears when this deployment has the components that capability needs, those components answered their last health probe, and the caller is authorized for it. It disappears the moment any of the three stops holding, so a client must read this on every session rather than caching it across deployments.\n\nThe array is sorted and its vocabulary is closed: a name that is absent is a name this deployment cannot honour, never a name it forgot to mention. Treat an unfamiliar name as a feature this client does not implement, and a familiar name that is absent as a feature to hide.",

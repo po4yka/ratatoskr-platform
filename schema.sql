@@ -684,6 +684,36 @@ create unique index operations_idempotency_key_scope_key
     where idempotency_key is not null;
 
 -- ---------------------------------------------------------------------------------------------
+-- ai_archive_acceptances
+-- ---------------------------------------------------------------------------------------------
+
+-- Edge owns this narrow receipt binding, not the archive bytes or parsed archive state.  It lets
+-- the public upload path prove that the bytes it forwards belong to the operation accepted for the
+-- device, provider and immutable digest.
+create table operations.ai_archive_acceptances (
+    operation_id  uuid        primary key references operations.operations (operation_id) on delete cascade,
+    owner_user_id uuid        not null,
+    provider      text        not null,
+    sha256        text        not null,
+    byte_size     bigint      not null,
+    accepted_at   timestamptz not null,
+
+    constraint ai_archive_acceptances_provider_is_supported
+        check (provider in ('chatgpt', 'claude')),
+    constraint ai_archive_acceptances_sha256_is_lower_hex
+        check (sha256 ~ '^[a-f0-9]{64}$'),
+    constraint ai_archive_acceptances_byte_size_is_positive
+        check (byte_size > 0)
+);
+
+comment on table operations.ai_archive_acceptances is
+    'The edge-owned binding from a durable ai_archive import operation to its provider, digest and '
+    'declared byte length. It deliberately stores no archive bytes, source paths or parser state.';
+
+create index ai_archive_acceptances_owner_operation_idx
+    on operations.ai_archive_acceptances (owner_user_id, operation_id);
+
+-- ---------------------------------------------------------------------------------------------
 -- The transition guard
 -- ---------------------------------------------------------------------------------------------
 

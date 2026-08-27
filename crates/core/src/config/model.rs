@@ -170,6 +170,10 @@ pub struct GatewayRouteConfig {
     /// The service-owned capability document path on `listener`.
     #[serde(default = "default_capabilities_path")]
     pub capabilities_path: String,
+    /// The loopback-only receipt path that receives an archive after Edge has bound it to an
+    /// operation. This remains service-owned rather than client-controlled.
+    #[serde(default = "default_archive_receipt_path")]
+    pub archive_receipt_path: String,
 }
 
 /// The distinct traffic shapes the gateway enforces.
@@ -186,6 +190,10 @@ pub enum GatewayRouteClass {
 
 fn default_capabilities_path() -> String {
     "/v1/capabilities".to_owned()
+}
+
+fn default_archive_receipt_path() -> String {
+    "/v1/ai-archives/receipt".to_owned()
 }
 
 /// The stale-operation reconciliation window (`ADR-0014`).

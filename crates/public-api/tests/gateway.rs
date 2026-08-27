@@ -67,6 +67,7 @@ fn gateway(listener: std::net::SocketAddr, class: GatewayRouteClass) -> GatewayC
                 listener,
                 class: Some(class),
                 capabilities_path: "/v1/capabilities".to_owned(),
+                archive_receipt_path: "/v1/ai-archives/receipt".to_owned(),
             },
         )]),
         ..GatewayConfig::default()
@@ -473,6 +474,7 @@ async fn two_downstream_services_are_routed_by_their_public_prefixes() {
             listener: github_address,
             class: Some(GatewayRouteClass::Control),
             capabilities_path: "/v1/capabilities".to_owned(),
+            archive_receipt_path: "/v1/ai-archives/receipt".to_owned(),
         },
     );
     let harness = TestDatabase::create().await.expect("a test database");

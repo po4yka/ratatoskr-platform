@@ -447,6 +447,7 @@ async fn every_documented_path_is_served() {
         let method = match route.method {
             platform_api_doc::Method::Get => "GET",
             platform_api_doc::Method::Post => "POST",
+            platform_api_doc::Method::Put => "PUT",
             platform_api_doc::Method::Delete => "DELETE",
         };
         let request = Request::builder()

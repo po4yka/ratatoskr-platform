@@ -151,8 +151,9 @@ fn oversized() -> Request<Body> {
 
 /// Every permitted `ErrorEnvelope::new` site, with the reason it is permitted. Adding a row here is
 /// a deliberate act a reviewer sees; adding a construction site without one fails F-1.
-const ALLOWED_ENVELOPE_SITES: [&str; 2] = [
+const ALLOWED_ENVELOPE_SITES: [&str; 3] = [
     "crates/http/src/fault.rs",
+    "crates/operations/src/archive.rs",
     "crates/operations/src/reconcile.rs",
 ];
 
@@ -172,6 +173,8 @@ const ALLOWED_ENVELOPE_SITES: [&str; 2] = [
 ///   * `crates/operations/src/reconcile.rs` authors Platform's own stale-operation diagnostic. It
 ///     is data inside a successful operation snapshot, not the response to an HTTP failure, and
 ///     routing it through `fault.rs` would map it onto a `FailureKind` that does not describe it.
+///   * `crates/operations/src/archive.rs` authors the generic safe diagnostic for an importer delivery
+///     that Edge observed fail. It is stored operation data, never an HTTP response body.
 #[test]
 fn error_envelope_is_constructed_in_exactly_one_place() {
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");

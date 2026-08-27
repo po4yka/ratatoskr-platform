@@ -44,13 +44,15 @@ pub struct ApiSurface {
     pub register: fn(&mut schemars::SchemaGenerator),
 }
 
-/// The HTTP method of a route. Two, because two are served.
+/// The HTTP method of a route.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Method {
     /// `GET`.
     Get,
     /// `POST`.
     Post,
+    /// `PUT`.
+    Put,
     /// `DELETE`.
     Delete,
 }
@@ -62,6 +64,7 @@ impl Method {
         match self {
             Self::Get => "get",
             Self::Post => "post",
+            Self::Put => "put",
             Self::Delete => "delete",
         }
     }
@@ -154,6 +157,9 @@ pub struct Parameter {
 pub enum Payload {
     /// `application/json`, described by the named schema component.
     Json(&'static str),
+    /// Opaque streaming bytes. The receiving service, not the `OpenAPI` schema, validates the
+    /// digest and declared size while it stores the body.
+    Binary,
     /// `text/event-stream`. Deliberately unschematised: an SSE body is a framed sequence, and
     /// `OpenAPI` has no vocabulary for one. The event names and their JSON shape are described in
     /// the route's own text, which is the honest place for something the format cannot express.
@@ -412,6 +418,11 @@ fn content(payload: Payload) -> Value {
         Payload::Json(name) => json!({
             "application/json": {
                 "schema": { "$ref": format!("#/components/schemas/{name}") },
+            },
+        }),
+        Payload::Binary => json!({
+            "application/octet-stream": {
+                "schema": { "type": "string", "format": "binary" },
             },
         }),
         Payload::EventStream => json!({

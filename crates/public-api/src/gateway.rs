@@ -39,6 +39,18 @@ pub struct ServiceCapabilities {
     pub stale_since: Option<String>,
 }
 
+/// One operation-bound archive delivery after Edge has authenticated the device and read its
+/// immutable receipt binding.
+pub(crate) struct ArchiveReceipt<'a> {
+    pub(crate) provider: &'a str,
+    pub(crate) principal: Principal,
+    pub(crate) correlation_id: &'a str,
+    pub(crate) operation_id: uuid::Uuid,
+    pub(crate) sha256: &'a str,
+    pub(crate) byte_size: i64,
+    pub(crate) request: Request,
+}
+
 /// The reusable HTTP client and immutable route table for one Edge process.
 #[derive(Clone)]
 pub struct Gateway {
@@ -92,6 +104,20 @@ impl Gateway {
     #[must_use]
     pub fn budget(&self, route: &GatewayRouteConfig) -> Option<GatewayRouteBudget> {
         route.class.map(|class| self.budgets.for_class(class))
+    }
+
+    /// The fixed transfer budget used by the operation-bound binary receipt endpoints.
+    #[must_use]
+    pub const fn transfer_budget(&self) -> GatewayRouteBudget {
+        self.budgets.transfer
+    }
+
+    /// Whether a configured transfer-class receiver can accept an archive for this provider.
+    #[must_use]
+    pub fn has_archive_receiver(&self, provider: &str) -> bool {
+        self.routes.get(provider).is_some_and(|route| {
+            route.class == Some(platform_core::config::GatewayRouteClass::Transfer)
+        })
     }
 
     /// Read the last sampled service documents without doing request-path fan-out.
@@ -179,6 +205,60 @@ impl Gateway {
         self.routes
             .values()
             .find(|route| path == route.prefix || path.starts_with(&format!("{}/", route.prefix)))
+    }
+
+    /// Stream a prepared archive to the receiving service's fixed receipt endpoint.
+    ///
+    /// The caller cannot choose its destination or its operation identity. Edge looks up both from
+    /// durable preparation metadata and injects them only after removing client-supplied reserved
+    /// headers.
+    pub(crate) async fn forward_archive_receipt(&self, receipt: ArchiveReceipt<'_>) -> Response {
+        let ArchiveReceipt {
+            provider,
+            principal,
+            correlation_id,
+            operation_id,
+            sha256,
+            byte_size,
+            request,
+        } = receipt;
+        let Some(route) = self.routes.get(provider) else {
+            return platform_http::reject(FailureKind::UpstreamUnavailable);
+        };
+        let Some(budget) = self.budget(route) else {
+            return platform_http::reject(FailureKind::UpstreamUnavailable);
+        };
+        let uri: Uri =
+            match format!("http://{}{}", route.listener, route.archive_receipt_path).parse() {
+                Ok(uri) => uri,
+                Err(_) => return platform_http::reject(FailureKind::UpstreamUnavailable),
+            };
+        let (parts, body) = request.into_parts();
+        let Ok(mut upstream) = hyper::Request::builder()
+            .method(parts.method)
+            .uri(uri)
+            .body(body)
+        else {
+            return platform_http::reject(FailureKind::UpstreamUnavailable);
+        };
+        let headers = forwarded_headers(&parts.headers, principal, correlation_id);
+        *upstream.headers_mut() = archive_headers(headers, operation_id, sha256, byte_size);
+        match tokio::time::timeout(
+            Duration::from_secs(budget.response_timeout_seconds),
+            self.client.request(upstream),
+        )
+        .await
+        {
+            Ok(Ok(response)) => response_from_upstream(response).await,
+            Ok(Err(_)) => {
+                tracing::warn!(provider, "archive importer could not be reached");
+                platform_http::reject(FailureKind::UpstreamUnavailable)
+            }
+            Err(_) => {
+                tracing::warn!(provider, "archive importer response headers timed out");
+                platform_http::reject(FailureKind::UpstreamTimeout)
+            }
+        }
     }
 }
 
@@ -288,6 +368,26 @@ fn forwarded_headers(headers: &HeaderMap, principal: Principal, correlation_id: 
     }
     insert(&mut forwarded, "x-correlation-id", correlation_id);
     forwarded
+}
+
+fn archive_headers(
+    mut headers: HeaderMap,
+    operation_id: uuid::Uuid,
+    sha256: &str,
+    byte_size: i64,
+) -> HeaderMap {
+    insert(
+        &mut headers,
+        "x-ratatoskr-operation-id",
+        &operation_id.to_string(),
+    );
+    insert(&mut headers, "x-ratatoskr-archive-sha256", sha256);
+    insert(
+        &mut headers,
+        "x-ratatoskr-archive-byte-size",
+        &byte_size.to_string(),
+    );
+    headers
 }
 
 /// Remove hop-by-hop fields from a downstream response and prevent a domain service from minting
