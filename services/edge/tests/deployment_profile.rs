@@ -47,6 +47,18 @@ fn environment(role: RuntimeRole) -> String {
     deploy(&format!("systemd/{}.conf.example", role.as_str()))
 }
 
+/// The permission stanza for one NKey identity, delimited by its public-key placeholder.
+fn nkey_stanza<'a>(config: &'a str, identity: &str) -> &'a str {
+    let start = config
+        .find(identity)
+        .unwrap_or_else(|| panic!("missing {identity} identity"));
+    let after = &config[start..];
+    let end = after
+        .find("\n        {\n            nkey:")
+        .unwrap_or(after.len());
+    &after[..end]
+}
+
 /// D-1. Every unit's stop timeout EXCEEDS the shutdown ceiling the configuration accepts.
 ///
 /// systemd's default `TimeoutStopSec` is 90 seconds and rule V6 accepts `drain + grace` up to 120,
@@ -185,6 +197,62 @@ fn the_bus_profile_names_the_streams_the_code_declares() {
          directly",
         platform_eventing::EVENT_SUBJECTS,
     );
+}
+
+/// Every social owner has a distinct, least-privilege NATS identity rather than sharing Edge's
+/// broad command publishing credential.
+#[test]
+fn social_owner_bus_identities_are_limited_to_their_capture_subjects() {
+    let raw = deploy("nats/ratatoskr.conf");
+    let config: String = raw
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.starts_with('#'))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let readme = deploy("nats/README.md");
+
+    for (identity, subject) in [
+        ("RATATOSKR_X", "cmd.x.capture.requested.v1"),
+        ("RATATOSKR_INSTAGRAM", "cmd.instagram.capture.requested.v1"),
+        ("RATATOSKR_THREADS", "cmd.threads.capture.requested.v1"),
+    ] {
+        let stanza = nkey_stanza(&config, identity);
+        assert!(
+            readme.contains(subject),
+            "{identity} consumer route {subject} is undocumented"
+        );
+        assert!(
+            !stanza.contains("$JS.API.>"),
+            "{identity} must not create an arbitrary filtered consumer"
+        );
+        let durable = match identity {
+            "RATATOSKR_X" => "ratatoskr_x_browser_capture",
+            "RATATOSKR_INSTAGRAM" => "ratatoskr_instagram_browser_capture",
+            "RATATOSKR_THREADS" => "threads_browser_capture",
+            _ => unreachable!("the table above is closed"),
+        };
+        for permission in [
+            format!("$JS.API.CONSUMER.INFO.ratatoskr_commands.{durable}"),
+            format!("$JS.API.CONSUMER.MSG.NEXT.ratatoskr_commands.{durable}"),
+            format!("$JS.ACK.ratatoskr_commands.{durable}.>"),
+        ] {
+            assert!(
+                stanza.contains(&permission),
+                "{identity} lacks required permission {permission}"
+            );
+        }
+    }
+    for subject in [
+        "evt.platform.operation.reported.v1",
+        "evt.social.source.captured.v1",
+        "evt.social.source.updated.v1",
+    ] {
+        assert!(
+            config.contains(subject),
+            "Threads outbox cannot publish {subject}"
+        );
+    }
 }
 
 /// D-7. Domain services have only their workspace-allocated loopback listeners; Edge is the sole

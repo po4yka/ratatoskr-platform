@@ -15,7 +15,8 @@ use jiff::SignedDuration;
 use platform_core::RuntimeRole;
 use platform_core::config::{PlatformConfig, RetentionConfig};
 use platform_eventing::{
-    COMMAND_STREAM, EDGE_PROJECTION_CONSUMER, NatsPublisher, StreamSpec, pump,
+    COMMAND_STREAM, EDGE_PROJECTION_CONSUMER, NatsPublisher, StreamSpec,
+    ensure_social_capture_consumers, pump,
 };
 use platform_http::{RuntimeState, Serving};
 use platform_operations::ProgressProjection;
@@ -171,6 +172,11 @@ impl platform_http::PublicRoutes for EdgeRoutes {
                  reconciled; update or delete it on the broker"
             );
         }
+        ensure_social_capture_consumers(publisher.context(), COMMAND_STREAM)
+            .await
+            .map_err(|error| {
+                format!("the fixed social browser-capture consumers could not be declared: {error}")
+            })?;
         let mut state = platform_public_api::ApiState::new(
             database.clone(),
             AUDIENCE,
