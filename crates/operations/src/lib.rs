@@ -12,6 +12,7 @@
 
 use platform_persistence::PersistenceError;
 
+pub use crate::admin::{AdminListScope, AdminPage, InspectedOperation, list_admin_operations};
 pub use crate::archive::{
     AiArchiveAcceptance, fail_ai_archive_delivery, find_ai_archive_acceptance,
     record_ai_archive_acceptance,
@@ -30,6 +31,7 @@ use sqlx::{PgExecutor, Row as _};
 use crate::transition::Transition;
 use uuid::Uuid;
 
+mod admin;
 pub mod archive;
 pub mod cancel;
 pub mod list;

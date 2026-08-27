@@ -24,6 +24,10 @@ use platform_http::RuntimeState;
 use platform_persistence::Database;
 use tower_http::limit::RequestBodyLimitLayer;
 
+mod admin;
+pub mod admin_audit;
+pub mod admin_operations;
+pub mod admin_schedules;
 pub mod archives;
 pub mod auth;
 pub mod capabilities;
@@ -34,6 +38,7 @@ pub mod gateway;
 pub mod oauth;
 pub mod operations;
 pub mod sessions;
+pub mod status;
 pub mod stream;
 
 pub use crate::auth::Principal;
@@ -147,6 +152,10 @@ struct Endpoint {
 /// Every path carries its major version. `ARCHITECTURE.md` S5.3: versioned `/v1` resource-oriented
 /// routes. The version is 1, and it stays 1 while the project is in development: one system serves
 /// this surface, and there is no second major to serve beside it.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one route table keeps served handlers and documentation as the anti-drift source"
+)]
 fn table() -> Vec<Endpoint> {
     vec![
         Endpoint {
@@ -174,12 +183,32 @@ fn table() -> Vec<Endpoint> {
             handler: post(operations::cancel),
         },
         Endpoint {
+            doc: admin_operations::LIST_DOC,
+            handler: get(admin_operations::list),
+        },
+        Endpoint {
+            doc: admin_operations::READ_DOC,
+            handler: get(admin_operations::read),
+        },
+        Endpoint {
+            doc: admin_schedules::DOC,
+            handler: get(admin_schedules::list),
+        },
+        Endpoint {
+            doc: admin_audit::DOC,
+            handler: get(admin_audit::list),
+        },
+        Endpoint {
             doc: stream::DOC,
             handler: get(stream::events),
         },
         Endpoint {
             doc: capabilities::DOC,
             handler: get(capabilities::read),
+        },
+        Endpoint {
+            doc: status::DOC,
+            handler: get(status::read),
         },
         Endpoint {
             doc: sessions::DOC,
@@ -293,4 +322,8 @@ fn register_schemas(generator: &mut schemars::SchemaGenerator) {
     generator.subschema_for::<ratatoskr_operation_contracts::OperationSnapshot>();
     generator.subschema_for::<ratatoskr_error_contracts::ErrorEnvelope>();
     generator.subschema_for::<operations::OperationList>();
+    generator.subschema_for::<ratatoskr_operational_contracts::OperationInspectionPage>();
+    generator.subschema_for::<ratatoskr_operational_contracts::ScheduleInspectionPage>();
+    generator.subschema_for::<ratatoskr_operational_contracts::AuditEventPage>();
+    generator.subschema_for::<ratatoskr_operational_contracts::PublicStatusDocument>();
 }

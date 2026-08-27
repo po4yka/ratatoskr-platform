@@ -1,6 +1,6 @@
 //! The two facts readiness is computed from at milestone 1, and the checks it reports.
 
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU8, AtomicUsize, Ordering};
 
 use platform_core::RuntimeRole;
 use platform_telemetry::metrics::PLATFORM_READINESS;
@@ -33,11 +33,15 @@ pub struct RuntimeState {
     /// The database: 0 not configured, 1 answering, 2 not answering. Three states rather than a
     /// `bool`, because "no database" and "a database that is down" must not report the same thing.
     database: AtomicU8,
+    /// Latest successful database observation in Unix microseconds, or zero before one exists.
+    database_observed_at: AtomicI64,
     /// The bus, with the same three states and for the same reason. Only `ratatoskr-edge` ever
     /// leaves this at anything but `BUS_ABSENT`: it is the only role that opens a NATS connection
     /// (ADR-0013), so a bus check on the other two would report the health of something they do not
     /// use.
     bus: AtomicU8,
+    /// Latest successful bus observation in Unix microseconds, or zero before one exists.
+    bus_observed_at: AtomicI64,
 }
 
 impl RuntimeState {
@@ -49,7 +53,9 @@ impl RuntimeState {
             startup_complete: AtomicBool::new(false),
             draining: AtomicBool::new(false),
             database: AtomicU8::new(DATABASE_ABSENT),
+            database_observed_at: AtomicI64::new(0),
             bus: AtomicU8::new(BUS_ABSENT),
+            bus_observed_at: AtomicI64::new(0),
         };
         state.publish_readiness();
         state
@@ -72,6 +78,10 @@ impl RuntimeState {
     /// Called by the prober, not by a request: a readiness probe must not open a connection, or a
     /// saturated pool would make the health check the thing that finishes it off.
     pub fn set_database_reachable(&self, reachable: bool) {
+        if reachable {
+            self.database_observed_at
+                .store(jiff::Timestamp::now().as_microsecond(), Ordering::Release);
+        }
         self.database.store(
             if reachable {
                 DATABASE_UP
@@ -90,6 +100,10 @@ impl RuntimeState {
     /// find out would add load to the broker in exactly the situation where the broker is already
     /// the problem.
     pub fn set_bus_reachable(&self, reachable: bool) {
+        if reachable {
+            self.bus_observed_at
+                .store(jiff::Timestamp::now().as_microsecond(), Ordering::Release);
+        }
         self.bus
             .store(if reachable { BUS_UP } else { BUS_DOWN }, Ordering::Release);
         self.publish_readiness();
@@ -104,6 +118,12 @@ impl RuntimeState {
         }
     }
 
+    /// Latest successful bus observation, absent before the first successful probe.
+    #[must_use]
+    pub fn bus_observed_at(&self) -> Option<jiff::Timestamp> {
+        observed_at(&self.bus_observed_at)
+    }
+
     /// What the last database probe found, or `None` when this role has no database configured.
     ///
     /// Read by `GET /v1/capabilities` (ADR-0008) so the "healthy" half of a capability is the same
@@ -115,6 +135,12 @@ impl RuntimeState {
             DATABASE_ABSENT => None,
             state => Some(state == DATABASE_UP),
         }
+    }
+
+    /// Latest successful database observation, absent before the first successful probe.
+    #[must_use]
+    pub fn database_observed_at(&self) -> Option<jiff::Timestamp> {
+        observed_at(&self.database_observed_at)
     }
 
     /// A shutdown signal arrived. Readiness fails immediately; the listeners stay open.
@@ -189,6 +215,13 @@ impl RuntimeState {
         let value = if self.is_ready() { 1.0 } else { 0.0 };
         metrics::gauge!(PLATFORM_READINESS, "role" => self.role.as_str()).set(value);
     }
+}
+
+fn observed_at(storage: &AtomicI64) -> Option<jiff::Timestamp> {
+    let micros = storage.load(Ordering::Acquire);
+    (micros != 0)
+        .then(|| jiff::Timestamp::from_microsecond(micros).ok())
+        .flatten()
 }
 
 /// One readiness check.

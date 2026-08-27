@@ -62,6 +62,47 @@ pub struct AuditEvent {
     pub correlation_id: String,
 }
 
+/// Keyset anchor and bound for one deployment-wide audit page.
+#[derive(Debug, Clone, Copy)]
+pub struct AdminListScope {
+    /// Exclusive newest-first occurrence anchor.
+    pub before: Option<(jiff::Timestamp, Uuid)>,
+    /// Maximum number of rows returned.
+    pub limit: i64,
+}
+
+/// One stored audit record containing only the fixed audit columns.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InspectedAuditEvent {
+    /// Stable record identity.
+    pub audit_event_id: Uuid,
+    /// Platform-observed occurrence instant.
+    pub occurred_at: jiff::Timestamp,
+    /// Acting user, when one existed.
+    pub actor_user_id: Option<Uuid>,
+    /// Acting session, when one existed.
+    pub actor_session_id: Option<Uuid>,
+    /// Stable audited action token.
+    pub action: String,
+    /// Stable audited target kind.
+    pub target_kind: String,
+    /// Target identity, when one existed.
+    pub target_id: Option<Uuid>,
+    /// Stored decision token.
+    pub outcome: String,
+    /// Namespaced correlation reference.
+    pub correlation_id: String,
+}
+
+/// One bounded newest-first audit page.
+#[derive(Debug, Clone)]
+pub struct AdminPage {
+    /// Rows ordered by occurrence instant then identifier, newest first.
+    pub rows: Vec<InspectedAuditEvent>,
+    /// Whether another page exists after the last returned row.
+    pub has_more: bool,
+}
+
 /// Append an audit record, and count the decision.
 ///
 /// Takes an executor rather than a pool so it can join the caller's transaction: an audited action
@@ -116,6 +157,77 @@ where
     .increment(1);
 
     Ok(())
+}
+
+/// Read a bounded audit page without joining to sessions, credentials, or request content.
+///
+/// # Errors
+///
+/// [`PersistenceError::Query`] if the statement or a stored value cannot be read.
+pub async fn list_admin_events<'e, E>(
+    executor: E,
+    scope: AdminListScope,
+) -> Result<AdminPage, PersistenceError>
+where
+    E: PgExecutor<'e>,
+{
+    let limit = usize::try_from(scope.limit.max(0)).unwrap_or(0);
+    let rows = sqlx::query(
+        "select audit_event_id, occurred_at, actor_user_id, actor_session_id,
+                action, target_kind, target_id, outcome, correlation_id
+           from identity.audit_events
+          where ($1::timestamptz is null
+                 or (occurred_at, audit_event_id) < ($1, $2))
+          order by occurred_at desc, audit_event_id desc
+          limit $3",
+    )
+    .bind(
+        scope
+            .before
+            .as_ref()
+            .map(|(occurred_at, _)| to_offset(*occurred_at)),
+    )
+    .bind(scope.before.as_ref().map(|(_, event_id)| *event_id))
+    .bind(i64::try_from(limit).unwrap_or(i64::MAX).saturating_add(1))
+    .fetch_all(executor)
+    .await
+    .map_err(PersistenceError::Query)?;
+
+    let has_more = rows.len() > limit;
+    let mut rows = rows;
+    rows.truncate(limit);
+    let mut inspected = Vec::with_capacity(rows.len());
+    for row in rows {
+        let occurred_at: time::OffsetDateTime = row
+            .try_get("occurred_at")
+            .map_err(PersistenceError::Query)?;
+        inspected.push(InspectedAuditEvent {
+            audit_event_id: row
+                .try_get("audit_event_id")
+                .map_err(PersistenceError::Query)?,
+            occurred_at: crate::from_offset(occurred_at),
+            actor_user_id: row
+                .try_get("actor_user_id")
+                .map_err(PersistenceError::Query)?,
+            actor_session_id: row
+                .try_get("actor_session_id")
+                .map_err(PersistenceError::Query)?,
+            action: row.try_get("action").map_err(PersistenceError::Query)?,
+            target_kind: row
+                .try_get("target_kind")
+                .map_err(PersistenceError::Query)?,
+            target_id: row.try_get("target_id").map_err(PersistenceError::Query)?,
+            outcome: row.try_get("outcome").map_err(PersistenceError::Query)?,
+            correlation_id: row
+                .try_get("correlation_id")
+                .map_err(PersistenceError::Query)?,
+        });
+    }
+
+    Ok(AdminPage {
+        rows: inspected,
+        has_more,
+    })
 }
 
 /// Delete audit records older than `before`, at most `limit` of them.

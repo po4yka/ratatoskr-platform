@@ -24,6 +24,10 @@ use platform_http::{HttpState, RuntimeState};
 use platform_identity::{NewSession, SessionKind};
 use platform_persistence::test_support::TestDatabase;
 use platform_public_api::{ApiState, auth};
+use ratatoskr_operational_contracts::{
+    AUDIT_INSPECT_CAPABILITY, OPERATIONS_INSPECT_CAPABILITY, PLATFORM_OWNER_GRANT,
+    SCHEDULES_INSPECT_CAPABILITY,
+};
 use tower::ServiceExt as _;
 
 const CREDENTIAL: &str = "capabilities-credential-000000000000";
@@ -57,7 +61,7 @@ fn deployment(harness: &TestDatabase, database_reachable: bool, bus: bool) -> Ap
     ApiState::new(harness.database.clone(), AUDIENCE, health, bus)
 }
 
-async fn seed(pool: &sqlx::PgPool, credential: &str) {
+async fn seed(pool: &sqlx::PgPool, credential: &str) -> uuid::Uuid {
     let user = platform_identity::user::create_user(pool, now())
         .await
         .expect("a user");
@@ -75,6 +79,7 @@ async fn seed(pool: &sqlx::PgPool, credential: &str) {
     )
     .await
     .expect("a session");
+    user.user_id
 }
 
 fn ask(credential: Option<&str>) -> Request<Body> {
@@ -106,6 +111,68 @@ fn names(body: &serde_json::Value) -> Vec<String> {
         .iter()
         .map(|value| value.as_str().expect("a string").to_owned())
         .collect()
+}
+
+/// Owner-only names from a capability document, without deployment-wide member capabilities.
+fn operational_names(body: &serde_json::Value) -> Vec<String> {
+    let operational = [
+        AUDIT_INSPECT_CAPABILITY,
+        OPERATIONS_INSPECT_CAPABILITY,
+        SCHEDULES_INSPECT_CAPABILITY,
+    ];
+    names(body)
+        .into_iter()
+        .filter(|name| operational.contains(&name.as_str()))
+        .collect()
+}
+
+/// P-9. Operational capabilities follow the live owner grant for the authenticated principal.
+///
+/// The final request removes the grants relation after authentication data has been seeded. The
+/// session remains valid, so a successful document or an authorization refusal would both hide a
+/// dependency failure in the grant lookup.
+#[tokio::test]
+async fn operational_capabilities_follow_live_owner_grant() {
+    let harness = TestDatabase::create().await.expect("a test database");
+    let user_id = seed(harness.pool(), CREDENTIAL).await;
+    let app = app(deployment(&harness, true, true));
+
+    let (status, member) = send(&app, ask(Some(CREDENTIAL))).await;
+    assert_eq!(status, StatusCode::OK, "{member}");
+    assert!(operational_names(&member).is_empty(), "{member}");
+
+    platform_identity::grant::grant(harness.pool(), user_id, PLATFORM_OWNER_GRANT, now(), None)
+        .await
+        .expect("the owner grant");
+
+    let (status, owner) = send(&app, ask(Some(CREDENTIAL))).await;
+    assert_eq!(status, StatusCode::OK, "{owner}");
+    assert_eq!(
+        operational_names(&owner),
+        [
+            AUDIT_INSPECT_CAPABILITY,
+            OPERATIONS_INSPECT_CAPABILITY,
+            SCHEDULES_INSPECT_CAPABILITY,
+        ],
+        "owner capabilities must be canonical and sorted: {owner}"
+    );
+
+    assert!(
+        platform_identity::grant::revoke(harness.pool(), user_id, PLATFORM_OWNER_GRANT, now(),)
+            .await
+            .expect("the owner revocation")
+    );
+    let (status, revoked) = send(&app, ask(Some(CREDENTIAL))).await;
+    assert_eq!(status, StatusCode::OK, "{revoked}");
+    assert!(operational_names(&revoked).is_empty(), "{revoked}");
+
+    sqlx::query("drop table identity.grants")
+        .execute(harness.pool())
+        .await
+        .expect("the disposable grant lookup is made unavailable");
+    let (status, unavailable) = send(&app, ask(Some(CREDENTIAL))).await;
+    assert_eq!(status, StatusCode::GATEWAY_TIMEOUT, "{unavailable}");
+    assert_eq!(unavailable["code"], "platform.request.timeout");
 }
 
 /// P-1. The response carries Platform's fixed members plus the explicitly stale service sections.
@@ -307,7 +374,13 @@ async fn every_documented_path_is_served() {
             body["code"], "platform.route.method_not_allowed",
             "{method} {path} is documented under the wrong method"
         );
-        if route.security == platform_api_doc::Security::None {
+        if route.path == "/v1/status" {
+            assert_eq!(
+                status,
+                StatusCode::OK,
+                "{method} {path} is the anonymous read-only status route: {body}"
+            );
+        } else if route.security == platform_api_doc::Security::None {
             assert_eq!(
                 status,
                 StatusCode::BAD_REQUEST,
