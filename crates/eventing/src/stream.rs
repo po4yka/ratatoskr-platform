@@ -101,6 +101,35 @@ pub const EVENT_SUBJECTS: &str = "evt.>";
 /// stream or skipping what arrived while the process was down.
 pub const EDGE_PROJECTION_CONSUMER: &str = "platform_edge_projection";
 
+/// One provider-owned durable consumer that Edge creates before that provider can become ready.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CommandConsumerSpec {
+    /// The stable durable cursor name, also used by its NATS permission stanza.
+    pub durable_name: &'static str,
+    /// The sole command subject this durable consumer may receive.
+    pub filter_subject: &'static str,
+}
+
+/// Provider-specific browser-capture consumers pre-provisioned by Platform.
+///
+/// Social identities can inspect and pull only their own durable. Giving them consumer-create
+/// authority would let a compromised identity choose a different filter and observe another
+/// provider's commands.
+pub const SOCIAL_CAPTURE_CONSUMERS: [CommandConsumerSpec; 3] = [
+    CommandConsumerSpec {
+        durable_name: "ratatoskr_x_browser_capture",
+        filter_subject: "cmd.x.capture.requested.v1",
+    },
+    CommandConsumerSpec {
+        durable_name: "ratatoskr_instagram_browser_capture",
+        filter_subject: "cmd.instagram.capture.requested.v1",
+    },
+    CommandConsumerSpec {
+        durable_name: "threads_browser_capture",
+        filter_subject: "cmd.threads.capture.requested.v1",
+    },
+];
+
 /// The default retention: seven days.
 ///
 /// Long enough that a broker outage over a weekend does not lose an event, short enough that the
@@ -246,4 +275,43 @@ pub async fn ensure(
         mismatches.push("retention");
     }
     Ok(StreamState::Existing { mismatches })
+}
+
+/// Ensures the fixed social browser-capture durables exist on a Platform-owned command stream.
+///
+/// The implementation follows the failing broker test added with this consumer inventory.
+pub async fn ensure_social_capture_consumers(
+    context: &jetstream::Context,
+    stream_name: &str,
+) -> Result<(), EventingError> {
+    let stream = context
+        .get_stream(stream_name)
+        .await
+        .map_err(|error| EventingError::Bus(error.to_string()))?;
+    for spec in SOCIAL_CAPTURE_CONSUMERS {
+        let consumer = stream
+            .get_or_create_consumer(
+                spec.durable_name,
+                jetstream::consumer::pull::Config {
+                    durable_name: Some(spec.durable_name.to_owned()),
+                    filter_subject: spec.filter_subject.to_owned(),
+                    ack_policy: jetstream::consumer::AckPolicy::Explicit,
+                    ..jetstream::consumer::pull::Config::default()
+                },
+            )
+            .await
+            .map_err(|error| EventingError::Bus(error.to_string()))?;
+        let config = &consumer.cached_info().config;
+        if config.durable_name.as_deref() != Some(spec.durable_name)
+            || config.filter_subject != spec.filter_subject
+            || config.ack_policy != jetstream::consumer::AckPolicy::Explicit
+            || config.deliver_subject.is_some()
+        {
+            return Err(EventingError::Bus(format!(
+                "the pre-provisioned command consumer {} does not match its fixed provider filter",
+                spec.durable_name
+            )));
+        }
+    }
+    Ok(())
 }

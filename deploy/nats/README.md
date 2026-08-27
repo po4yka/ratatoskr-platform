@@ -1,8 +1,20 @@
-# The bus credential
+# Bus credentials
 
-One identity, `ratatoskr-edge`. `ratatoskr-ingest` and `ratatoskr-scheduler` hold none: they write
-commands into `operations.outbox` and edge is the only process that moves them onto the bus
-(ADR-0013).
+`ratatoskr-edge` publishes commands from Platform's outbox. `ratatoskr-x`,
+`ratatoskr-instagram`, and `ratatoskr-threads` each use an individual NKey for a filtered durable
+JetStream consumer: respectively `cmd.x.capture.requested.v1`,
+`cmd.instagram.capture.requested.v1`, and `cmd.threads.capture.requested.v1`. The three identities
+can inspect, pull from, and acknowledge only their named pre-provisioned durable and receive only
+their private replies. Edge creates and verifies those fixed durable/filter pairs at startup. The
+owners cannot create consumers: granting `$JS.API.>` would let a compromised identity choose a
+foreign filter and observe another provider's commands. `ratatoskr-ingest` and
+`ratatoskr-scheduler` hold none: they write commands into `operations.outbox` and edge is the only
+process that moves them onto the bus (ADR-0013).
+
+The Threads identity additionally publishes only its durable facts:
+`evt.platform.operation.reported.v1`, `evt.social.source.captured.v1`, and
+`evt.social.source.updated.v1`. X and Instagram receive no event-publish permission until they
+have a durable outbox publisher for a fact they actually produce.
 
 ## Generating it
 
@@ -32,6 +44,11 @@ sudo chmod 0640 /etc/ratatoskr/edge.nkey
 sets the primary group and does not add the user's other memberships, so a unit that says
 `Group=ratatoskr` produces a process that cannot read this file. That is not hypothetical — it is
 how milestone 10's first start failed, with "the bus credential could not be read".
+
+Repeat generation and installation for `x.nkey`, `instagram.nkey`, and `threads.nkey`, using their
+matching service group. Put only each public `U...` key in `ratatoskr.conf`, replacing its matching
+`UREPLACE_ME_WITH_THE_PUBLIC_NKEY_OF_RATATOSKR_*` token before reloading NATS. The seed stays
+outside Git and is referenced only by the owning service's `RATATOSKR__BUS__NKEY_SEED_PATH`.
 
 The seed never appears in the environment, in a URL or in a log line: the unit names its **path**,
 startup rule V16 refuses a relative path or a missing file, and `NatsPublisher::connect_with_nkey`

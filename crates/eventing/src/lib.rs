@@ -36,8 +36,9 @@ pub use crate::outbox::{ClaimedMessage, Outbox, OutboxStats};
 pub use crate::publisher::{NatsPublisher, PublishError, Publisher};
 pub use crate::pump::{PumpReport, run_once};
 pub use crate::stream::{
-    COMMAND_STREAM, COMMAND_SUBJECTS, EDGE_PROJECTION_CONSUMER, EVENT_STREAM, EVENT_SUBJECTS,
-    StreamSpec, StreamState, WhenFull,
+    COMMAND_STREAM, COMMAND_SUBJECTS, CommandConsumerSpec, EDGE_PROJECTION_CONSUMER, EVENT_STREAM,
+    EVENT_SUBJECTS, SOCIAL_CAPTURE_CONSUMERS, StreamSpec, StreamState, WhenFull,
+    ensure_social_capture_consumers,
 };
 
 /// A failure in the outbox, the inbox, or the subject grammar.
