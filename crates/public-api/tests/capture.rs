@@ -111,6 +111,16 @@ async fn send(app: &Router, request: Request<Body>) -> (StatusCode, serde_json::
 
 const CAPTURE: &str = r#"{"url":"https://example.test/article"}"#;
 
+const X_BROWSER_CAPTURE: &str = r#"{
+    "url":"https://x.com/ratatoskr/status/1234567890123456789",
+    "social":{
+        "provider":"x",
+        "captured_at":"2026-08-27T10:00:00Z",
+        "acquisition":"browser_extension",
+        "saved_authority":"explicit_user_capture"
+    }
+}"#;
+
 /// C-1. The happy path writes the reservation, the operation and the command in one transaction, and
 /// answers with something to poll rather than a result.
 #[tokio::test]
@@ -145,6 +155,52 @@ async fn a_capture_is_accepted_and_produces_exactly_one_command() {
     .expect("counting commands");
     assert_eq!(count, 1);
     assert_eq!(subject, "cmd.content.capture.requested.v1");
+
+    harness.cleanup().await.expect("cleanup");
+}
+
+/// C-1a. An explicit social browser capture is routed to its social owner with provenance, rather
+/// than being misrepresented as a generic article-extraction command.
+#[tokio::test]
+async fn an_explicit_x_browser_capture_produces_a_social_command_with_provenance() {
+    let harness = TestDatabase::create().await.expect("a test database");
+    let pool = harness.pool();
+    seed(pool, CREDENTIAL, AUDIENCE).await;
+    let app = app(state(&harness));
+
+    let (status, body) = send(
+        &app,
+        submit(
+            Some(CREDENTIAL),
+            Some("x-browser-capture"),
+            X_BROWSER_CAPTURE,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let operation_id: Uuid = body["operation_id"]
+        .as_str()
+        .and_then(|value| value.parse().ok())
+        .expect("an operation id");
+
+    let (subject, payload): (String, serde_json::Value) =
+        sqlx::query_as("select subject, payload from operations.outbox where operation_id = $1")
+            .bind(operation_id)
+            .fetch_one(pool)
+            .await
+            .expect("the social command");
+    assert_eq!(subject, "cmd.social.capture.requested.v1");
+    assert_eq!(payload["command_type"], "social.capture.requested.v1");
+    assert_eq!(
+        payload["payload"]["original_permalink"],
+        "https://x.com/ratatoskr/status/1234567890123456789"
+    );
+    assert_eq!(payload["payload"]["provider"], "x");
+    assert_eq!(payload["payload"]["acquisition"], "browser_extension");
+    assert_eq!(
+        payload["payload"]["saved_authority"],
+        "explicit_user_capture"
+    );
 
     harness.cleanup().await.expect("cleanup");
 }

@@ -23,8 +23,10 @@ ratatoskr-platform-telemetry.workspace   = true
 metrics.workspace    = true
 ratatoskr-platform-api-doc.workspace     = true
 ratatoskr-identifiers.workspace          = true
+ratatoskr-event-envelope.workspace       = true
 ratatoskr-error-contracts.workspace      = true
 ratatoskr-operation-contracts.workspace  = true
+ratatoskr-social-contracts.workspace     = true
 axum = { workspace = true, features = ["tokio"] }
 async-stream.workspace = true
 futures-util.workspace = true
@@ -40,6 +42,7 @@ serde_json.workspace = true
 uuid.workspace       = true
 jiff.workspace       = true
 tracing.workspace    = true
+sha2.workspace       = true
 tower-http.workspace = true
 
 [dev-dependencies]

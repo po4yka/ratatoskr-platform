@@ -14,6 +14,17 @@ use platform_api_doc::{In, Method, Parameter, Payload, ResponseDoc, RouteDoc, Se
 use platform_core::FailureKind;
 use platform_eventing::{MessageClass, Outbox, Subject};
 use platform_idempotency::{Digest, Outcome};
+use ratatoskr_event_envelope::{
+    CommandEnvelope, CommandPayload, EnvelopeSchemaVersion, ProducerName,
+};
+use ratatoskr_identifiers::{
+    CommandId, ContentDigest, DigestAlgorithm, DigestHex, Extensions, OperationId, TenantRef,
+    UserId,
+};
+use ratatoskr_social_contracts::{
+    AcquisitionMethod, PostPermalink, SavedAuthority, SocialCaptureProvider, SocialCaptureRequested,
+};
+use sha2::{Digest as _, Sha256};
 use uuid::Uuid;
 
 use platform_identity::audit::{self, AuditEvent, AuditOutcome};
@@ -29,6 +40,9 @@ const OPERATION_KIND: &str = "content.capture.submit";
 /// The command this route emits. The extractor is its consumer.
 const COMMAND_TYPE: &str = "content.capture.requested.v1";
 
+/// The route for an explicit social permalink is deliberately different from generic extraction.
+const SOCIAL_COMMAND_TYPE: &str = SocialCaptureRequested::COMMAND_TYPE;
+
 /// The header `INTERFACES.md` requires on a replayable mutation.
 const IDEMPOTENCY_KEY: &str = "idempotency-key";
 
@@ -37,6 +51,22 @@ const IDEMPOTENCY_KEY: &str = "idempotency-key";
 pub struct SubmitCapture {
     /// The address to capture. `http` or `https`, with a host, at most 2048 characters.
     pub url: String,
+    /// Provenance supplied by an explicit browser social capture, when this is a social permalink.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub social: Option<SocialCaptureProvenance>,
+}
+
+/// The social provenance a browser extension must assert explicitly.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct SocialCaptureProvenance {
+    /// The provider whose public permalink is captured.
+    pub provider: SocialCaptureProvider,
+    /// The browser's capture instant.
+    pub captured_at: ratatoskr_identifiers::WireTimestamp,
+    /// Must be `browser_extension`; a caller cannot claim another acquisition lane here.
+    pub acquisition: AcquisitionMethod,
+    /// Must be `explicit_user_capture`; this path never claims provider Saved state.
+    pub saved_authority: SavedAuthority,
 }
 
 /// What a client gets back.
@@ -86,9 +116,13 @@ async fn accept(
     correlation: &str,
 ) -> Response {
     let now = jiff::Timestamp::now();
-    let Ok(subject) = Subject::new(MessageClass::Command, COMMAND_TYPE) else {
+    let command_type = submit
+        .social
+        .as_ref()
+        .map_or(COMMAND_TYPE, |_| SOCIAL_COMMAND_TYPE);
+    let Ok(subject) = Subject::new(MessageClass::Command, command_type) else {
         tracing::error!(
-            command = COMMAND_TYPE,
+            command = command_type,
             "the command subject is not constructible"
         );
         return platform_http::reject(FailureKind::RequestTimeout);
@@ -143,15 +177,10 @@ async fn accept(
         }
     };
 
-    let payload = platform_eventing::Command {
-        command_type: COMMAND_TYPE,
-        operation_id: operation.operation_id,
-        principal: principal.user_id,
-        correlation_id: correlation,
-        idempotency_key: key,
-        requested_at: now,
-    }
-    .envelope(serde_json::json!({ "url": submit.url }));
+    let payload = match command_payload(&operation, &principal, key, now, submit, correlation) {
+        Ok(payload) => payload,
+        Err(kind) => return platform_http::reject(kind),
+    };
 
     if let Err(error) = Outbox::enqueue(
         &mut *transaction,
@@ -241,7 +270,124 @@ fn parse(
     if !platform_core::address::is_capturable(&submit.url) {
         return Err(FailureKind::InvalidRequest);
     }
+    if let Some(social) = &submit.social
+        && (social.acquisition != AcquisitionMethod::BrowserExtension
+            || social.saved_authority != SavedAuthority::ExplicitUserCapture
+            || !is_provider_permalink(&submit.url, social.provider))
+    {
+        return Err(FailureKind::InvalidRequest);
+    }
     Ok((key, submit))
+}
+
+/// Checks that a typed provenance owner agrees with the public URL, without fetching it.
+fn is_provider_permalink(url: &str, provider: SocialCaptureProvider) -> bool {
+    let Ok(parsed) = url::Url::parse(url) else {
+        return false;
+    };
+    if parsed.scheme() != "https" {
+        return false;
+    }
+    let Some(host) = parsed.host_str() else {
+        return false;
+    };
+    let host = host.to_ascii_lowercase();
+    match provider {
+        SocialCaptureProvider::X => matches!(
+            host.as_str(),
+            "x.com"
+                | "www.x.com"
+                | "mobile.x.com"
+                | "twitter.com"
+                | "www.twitter.com"
+                | "mobile.twitter.com"
+        ),
+        SocialCaptureProvider::Instagram => {
+            matches!(host.as_str(), "instagram.com" | "www.instagram.com")
+        }
+        SocialCaptureProvider::Threads => {
+            matches!(host.as_str(), "threads.net" | "www.threads.net")
+        }
+        _ => false,
+    }
+}
+
+/// Selects the only command representation that belongs to the accepted capture.
+fn command_payload(
+    operation: &platform_operations::Operation,
+    principal: &Principal,
+    idempotency_key: &str,
+    now: jiff::Timestamp,
+    submit: &SubmitCapture,
+    correlation: &str,
+) -> Result<serde_json::Value, FailureKind> {
+    match &submit.social {
+        Some(social) => social_command(
+            operation,
+            principal,
+            idempotency_key,
+            now,
+            &submit.url,
+            social,
+        ),
+        None => Ok(platform_eventing::Command {
+            command_type: COMMAND_TYPE,
+            operation_id: operation.operation_id,
+            principal: principal.user_id,
+            correlation_id: correlation,
+            idempotency_key,
+            requested_at: now,
+        }
+        .envelope(serde_json::json!({ "url": submit.url }))),
+    }
+}
+
+/// Builds the canonical contract envelope for the social service that owns an explicit capture.
+fn social_command(
+    operation: &platform_operations::Operation,
+    principal: &Principal,
+    idempotency_key: &str,
+    now: jiff::Timestamp,
+    url: &str,
+    social: &SocialCaptureProvenance,
+) -> Result<serde_json::Value, FailureKind> {
+    let original_permalink = PostPermalink::parse(url).map_err(|_| FailureKind::InvalidRequest)?;
+    let hex = format!("{:x}", Sha256::digest(idempotency_key.as_bytes()));
+    let hex = DigestHex::parse(&hex).map_err(|_| FailureKind::RequestTimeout)?;
+    let social_payload = SocialCaptureRequested {
+        operation_id: OperationId(operation.operation_id),
+        idempotency_key: ContentDigest {
+            algorithm: DigestAlgorithm::Sha256,
+            hex,
+        },
+        original_permalink,
+        captured_at: social.captured_at,
+        provider: social.provider,
+        acquisition: social.acquisition,
+        saved_authority: social.saved_authority,
+        extensions: Extensions::new(),
+    };
+    let serde_json::Value::Object(payload) =
+        serde_json::to_value(social_payload).map_err(|_| FailureKind::RequestTimeout)?
+    else {
+        return Err(FailureKind::RequestTimeout);
+    };
+    let operation_ref = OperationId(operation.operation_id).as_entity_ref();
+    let envelope = CommandEnvelope {
+        command_id: CommandId(Uuid::now_v7()),
+        command_type: SocialCaptureRequested::command_type(),
+        issued_at: ratatoskr_identifiers::WireTimestamp::from_jiff(now),
+        producer: ProducerName::parse("ratatoskr-platform")
+            .map_err(|_| FailureKind::RequestTimeout)?,
+        aggregate_id: operation_ref.clone(),
+        correlation_id: operation_ref,
+        causation_id: None,
+        tenant_id: Some(TenantRef::of_user(UserId(principal.user_id))),
+        schema_version: EnvelopeSchemaVersion::CURRENT,
+        payload,
+        extensions: Extensions::new(),
+    };
+    serde_json::to_value(envelope).map_err(|_| FailureKind::RequestTimeout)
 }
 
 /// The 202 body. `ARCHITECTURE.md` S5.3: `202 Accepted` for asynchronous work.

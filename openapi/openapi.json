@@ -1,6 +1,41 @@
 {
   "components": {
     "schemas": {
+      "AcquisitionMethod": {
+        "description": "How the source entered the user's library.\n\n**Closed on purpose.** An unknown value is rejected at parse rather than guessed at: the\nmethod determines retention, re-acquisition and provenance handling, and silently filing an\nunrecognized method under a default is how provenance rots. Adding a variant is an additive\nwire change that consumers adopt by upgrading.",
+        "oneOf": [
+          {
+            "const": "official_api",
+            "description": "Read from the platform's supported, authenticated API.",
+            "type": "string"
+          },
+          {
+            "const": "share_extension",
+            "description": "The user pushed it in through an OS or browser share target.",
+            "type": "string"
+          },
+          {
+            "const": "browser_extension",
+            "description": "The user pushed it in through a browser extension.",
+            "type": "string"
+          },
+          {
+            "const": "public_resolution",
+            "description": "Resolved from the platform's public, unauthenticated metadata surface (oEmbed-style).",
+            "type": "string"
+          },
+          {
+            "const": "data_export",
+            "description": "Parsed out of a provider data export the user supplied.",
+            "type": "string"
+          },
+          {
+            "const": "legacy_import",
+            "description": "Carried over from the retired monolith's stored state.",
+            "type": "string"
+          }
+        ]
+      },
       "AiArchiveCompleteness": {
         "description": "Whether one import obtained the whole export, stated per `docs/ARCHITECTURE.md` S8.3.\n\n**Closed on purpose**: indexing depth, retention and re-import scheduling hang off this\nstate, so an unrecognized value must stop processing rather than be read as \"whole enough\".\nCompleteness is evidence-based: a parser may not mark an import `complete` merely because it\nparsed every file it knows about.",
         "oneOf": [
@@ -1112,6 +1147,31 @@
         "title": "SafeMessage",
         "type": "string"
       },
+      "SavedAuthority": {
+        "description": "What the saved-state claim in this snapshot is worth.\n\n**Closed on purpose.** `AGENTS.md`: never model Instagram or Threads explicit capture as\nauthoritative membership in the provider's native Saved list. An unknown authority must stop\nprocessing — a consumer that guesses treats a maybe-saved source as saved.",
+        "oneOf": [
+          {
+            "const": "authoritative_platform_state",
+            "description": "The platform itself exposes this saved state (e.g. X bookmarks through the supported\nAPI). The strongest claim; folder membership may be provider-authoritative too.",
+            "type": "string"
+          },
+          {
+            "const": "explicit_user_capture",
+            "description": "A user action inside Ratatoskr captured the source; the provider's own state is unknown.",
+            "type": "string"
+          },
+          {
+            "const": "export_observation",
+            "description": "A provider data export shows the item was saved at some point, without live authority.",
+            "type": "string"
+          },
+          {
+            "const": "legacy_observation",
+            "description": "Migrated from the retired monolith; authority is as good as that record was.",
+            "type": "string"
+          }
+        ]
+      },
       "ServiceCapabilities": {
         "description": "A service-owned document observed through its loopback capability endpoint.",
         "properties": {
@@ -1287,9 +1347,68 @@
         ],
         "type": "object"
       },
+      "SocialCaptureProvenance": {
+        "description": "The social provenance a browser extension must assert explicitly.",
+        "properties": {
+          "acquisition": {
+            "$ref": "#/components/schemas/AcquisitionMethod",
+            "description": "Must be `browser_extension`; a caller cannot claim another acquisition lane here."
+          },
+          "captured_at": {
+            "$ref": "#/components/schemas/WireTimestamp",
+            "description": "The browser's capture instant."
+          },
+          "provider": {
+            "$ref": "#/components/schemas/SocialCaptureProvider",
+            "description": "The provider whose public permalink is captured."
+          },
+          "saved_authority": {
+            "$ref": "#/components/schemas/SavedAuthority",
+            "description": "Must be `explicit_user_capture`; this path never claims provider Saved state."
+          }
+        },
+        "required": [
+          "provider",
+          "captured_at",
+          "acquisition",
+          "saved_authority"
+        ],
+        "type": "object"
+      },
+      "SocialCaptureProvider": {
+        "description": "The social owner to which Platform routes an explicit capture.",
+        "oneOf": [
+          {
+            "const": "x",
+            "description": "X owns the permalink.",
+            "type": "string"
+          },
+          {
+            "const": "instagram",
+            "description": "Instagram owns the permalink.",
+            "type": "string"
+          },
+          {
+            "const": "threads",
+            "description": "Threads owns the permalink.",
+            "type": "string"
+          }
+        ]
+      },
       "SubmitCapture": {
         "description": "What a client submits.",
         "properties": {
+          "social": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SocialCaptureProvenance"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Provenance supplied by an explicit browser social capture, when this is a social permalink."
+          },
           "url": {
             "description": "The address to capture. `http` or `https`, with a host, at most 2048 characters.",
             "type": "string"
