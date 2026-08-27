@@ -189,7 +189,7 @@ async fn an_explicit_x_browser_capture_produces_a_social_command_with_provenance
             .fetch_one(pool)
             .await
             .expect("the social command");
-    assert_eq!(subject, "cmd.social.capture.requested.v1");
+    assert_eq!(subject, "cmd.x.capture.requested.v1");
     assert_eq!(payload["command_type"], "social.capture.requested.v1");
     assert_eq!(
         payload["payload"]["original_permalink"],

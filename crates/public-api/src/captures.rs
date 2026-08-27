@@ -40,9 +40,6 @@ const OPERATION_KIND: &str = "content.capture.submit";
 /// The command this route emits. The extractor is its consumer.
 const COMMAND_TYPE: &str = "content.capture.requested.v1";
 
-/// The route for an explicit social permalink is deliberately different from generic extraction.
-const SOCIAL_COMMAND_TYPE: &str = SocialCaptureRequested::COMMAND_TYPE;
-
 /// The header `INTERFACES.md` requires on a replayable mutation.
 const IDEMPOTENCY_KEY: &str = "idempotency-key";
 
@@ -119,7 +116,7 @@ async fn accept(
     let command_type = submit
         .social
         .as_ref()
-        .map_or(COMMAND_TYPE, |_| SOCIAL_COMMAND_TYPE);
+        .map_or(COMMAND_TYPE, |social| social.provider.command_subject());
     let Ok(subject) = Subject::new(MessageClass::Command, command_type) else {
         tracing::error!(
             command = command_type,
