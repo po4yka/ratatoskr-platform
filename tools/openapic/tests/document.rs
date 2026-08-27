@@ -198,12 +198,13 @@ fn the_document_discloses_no_internal_detail() {
 fn every_route_names_its_credential() {
     // The routes that are public, named rather than derived: a route becoming public by accident
     // must fail here, and a list is the only thing a diff shows.
-    const PUBLIC: [&str; 5] = [
+    const PUBLIC: [&str; 6] = [
         "/v1/sessions/telegram",
         "/v1/oauth/{provider}/callback",
         "/v1/devices/pair",
         "/v1/sessions/device",
         "/v1/sessions/refresh",
+        "/v1/status",
     ];
 
     let document = generated();
@@ -246,4 +247,146 @@ fn every_route_names_its_credential() {
             assert_eq!(scheme, expected, "{method} {path}");
         }
     }
+}
+
+/// O-7. Operational administration and anonymous status have exact security and shared schemas.
+#[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one exact OpenAPI inventory keeps security, responses, schemas, and query contracts together"
+)]
+fn operational_and_status_security_is_exact() {
+    const RESPONSES: [(&str, &str); 5] = [
+        ("/v1/admin/operations", "OperationInspectionPage"),
+        ("/v1/admin/operations/{operation_id}", "OperationSnapshot"),
+        ("/v1/admin/schedules", "ScheduleInspectionPage"),
+        ("/v1/admin/audit-events", "AuditEventPage"),
+        ("/v1/status", "PublicStatusDocument"),
+    ];
+    const LISTS: [&str; 3] = [
+        "/v1/admin/operations",
+        "/v1/admin/schedules",
+        "/v1/admin/audit-events",
+    ];
+
+    let document = generated();
+    let paths = document["paths"].as_object().expect("paths");
+    let status_security = paths["/v1/status"]["get"]["security"]
+        .as_array()
+        .expect("GET /v1/status explicitly declares security");
+    assert!(
+        status_security.is_empty(),
+        "GET /v1/status must explicitly opt out of authentication"
+    );
+
+    let expected_admin_security = serde_json::json!([{ "sessionBearer": [] }]);
+    for (path, item) in paths
+        .iter()
+        .filter(|(path, _)| path.starts_with("/v1/admin/"))
+    {
+        let methods = item.as_object().expect("an admin path item");
+        assert_eq!(
+            methods.keys().collect::<Vec<_>>(),
+            ["get"],
+            "{path} must expose only the documented GET"
+        );
+        assert_eq!(
+            methods["get"]["security"], expected_admin_security,
+            "GET {path} must name only sessionBearer"
+        );
+    }
+    assert_eq!(
+        paths
+            .keys()
+            .filter(|path| path.starts_with("/v1/admin/"))
+            .count(),
+        4,
+        "the operational admin inventory must be exact"
+    );
+
+    for (path, schema) in RESPONSES {
+        assert_eq!(
+            paths[path]["get"]["responses"]["200"]["content"]["application/json"]["schema"]["$ref"],
+            format!("#/components/schemas/{schema}"),
+            "GET {path} must reuse the shared {schema} response"
+        );
+    }
+
+    let schemas = document["components"]["schemas"]
+        .as_object()
+        .expect("schemas");
+    for schema in [
+        "OperationInspectionPage",
+        "ScheduleInspectionPage",
+        "AuditEventPage",
+        "PublicStatusDocument",
+    ] {
+        assert!(
+            schemas.contains_key(schema),
+            "missing shared schema {schema}"
+        );
+    }
+
+    for path in LISTS {
+        let parameters = paths[path]["get"]["parameters"]
+            .as_array()
+            .unwrap_or_else(|| panic!("GET {path} must document its query"));
+        let parameter = |name: &str| {
+            parameters
+                .iter()
+                .find(|parameter| parameter["name"] == name)
+                .unwrap_or_else(|| panic!("GET {path} is missing query parameter {name}"))
+        };
+        let limit = parameter("limit");
+        assert_eq!(limit["in"], "query", "GET {path} limit");
+        assert!(
+            limit["description"]
+                .as_str()
+                .is_some_and(|description| description.contains("1 through 100")),
+            "GET {path} must document the 1 through 100 limit bound: {limit}"
+        );
+        let cursor = parameter("cursor");
+        assert_eq!(cursor["in"], "query", "GET {path} cursor");
+        assert!(
+            cursor["description"]
+                .as_str()
+                .is_some_and(|description| description.to_lowercase().contains("opaque")),
+            "GET {path} must document its cursor as opaque: {cursor}"
+        );
+    }
+
+    let operation_parameters = paths["/v1/admin/operations"]["get"]["parameters"]
+        .as_array()
+        .expect("operation list query parameters");
+    let operation_names: BTreeSet<&str> = operation_parameters
+        .iter()
+        .map(|parameter| parameter["name"].as_str().expect("a parameter name"))
+        .collect();
+    assert_eq!(
+        operation_names,
+        ["cursor", "kind", "limit", "owner_user_id", "state"]
+            .into_iter()
+            .collect(),
+        "operation inspection filters must be exact"
+    );
+    for name in ["state", "kind", "owner_user_id"] {
+        let description = operation_parameters
+            .iter()
+            .find(|parameter| parameter["name"] == name)
+            .and_then(|parameter| parameter["description"].as_str())
+            .unwrap_or_else(|| panic!("operation filter {name} needs a description"));
+        assert!(
+            description.to_lowercase().contains("exact"),
+            "operation filter {name} must document exact matching: {description}"
+        );
+    }
+
+    let committed: Value = serde_json::from_str(
+        &std::fs::read_to_string(path()).expect("the committed OpenAPI document"),
+    )
+    .expect("the committed OpenAPI document is JSON");
+    assert_eq!(
+        committed, document,
+        "the committed OpenAPI document is stale; regenerate it after the route inventory is exact"
+    );
 }

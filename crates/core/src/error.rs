@@ -175,6 +175,8 @@ pub enum FailureKind {
     /// missing, malformed, revoked and expired credential must be indistinguishable to a caller, or
     /// the difference is an oracle (`ARCHITECTURE.md` S15).
     Unauthenticated,
+    /// The caller is authenticated but lacks the live authority required by this operation.
+    Forbidden,
     /// The resource does not exist, or exists and is not this principal's. Also deliberately one
     /// variant: S15 requires authorization before existence is disclosed, so "not yours" and "not
     /// there" must read the same from outside.
@@ -211,12 +213,13 @@ pub enum FailureKind {
 impl FailureKind {
     /// Every kind, in status order. The array length is the documented count, so adding a variant
     /// without updating it does not compile.
-    pub const ALL: [Self; 14] = [
+    pub const ALL: [Self; 15] = [
         Self::RouteNotFound,
         Self::MethodNotAllowed,
         Self::PayloadTooLarge,
         Self::RequestTimeout,
         Self::Unauthenticated,
+        Self::Forbidden,
         Self::NotFound,
         Self::InvalidRequest,
         Self::MissingIdempotencyKey,
@@ -255,6 +258,7 @@ impl FailureKind {
             Self::PayloadTooLarge => &PAYLOAD_TOO_LARGE,
             Self::RequestTimeout => &REQUEST_TIMEOUT,
             Self::Unauthenticated => &UNAUTHENTICATED,
+            Self::Forbidden => &FORBIDDEN,
             Self::NotFound => &NOT_FOUND,
             Self::InvalidRequest => &INVALID_REQUEST,
             Self::MissingIdempotencyKey => &MISSING_IDEMPOTENCY_KEY,
@@ -367,6 +371,16 @@ static UNAUTHENTICATED: LazyLock<PublicFault> = LazyLock::new(|| {
         StatusCode::UNAUTHORIZED,
         "platform.auth.unauthenticated",
         "Authentication is required.",
+        false,
+    )
+});
+
+/// `platform.auth.forbidden` — 403. Authentication succeeded; retrying unchanged authority cannot.
+static FORBIDDEN: LazyLock<PublicFault> = LazyLock::new(|| {
+    entry(
+        StatusCode::FORBIDDEN,
+        "platform.auth.forbidden",
+        "You are not allowed to perform this action.",
         false,
     )
 });

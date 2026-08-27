@@ -123,6 +123,13 @@ fn the_status_and_retryability_table_is_pinned() {
             "Authentication is required.",
         ),
         (
+            FailureKind::Forbidden,
+            StatusCode::FORBIDDEN,
+            "platform.auth.forbidden",
+            false,
+            "You are not allowed to perform this action.",
+        ),
+        (
             // The same status and the same words as RouteNotFound, and a different code. From
             // outside they are indistinguishable, which is what S15 requires; from inside they are
             // different facts, which is why the code differs.

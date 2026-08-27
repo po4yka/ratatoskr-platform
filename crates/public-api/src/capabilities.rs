@@ -16,6 +16,10 @@ use axum::extract::State;
 use axum::response::{IntoResponse as _, Response};
 use platform_api_doc::{Method, Payload, ResponseDoc, RouteDoc, Security};
 use platform_core::Capability;
+use ratatoskr_operational_contracts::{
+    AUDIT_INSPECT_CAPABILITY, OPERATIONS_INSPECT_CAPABILITY, PLATFORM_OWNER_GRANT,
+    SCHEDULES_INSPECT_CAPABILITY,
+};
 
 use crate::{ApiState, Principal};
 
@@ -89,22 +93,40 @@ pub fn sample(state: &ApiState) {
 /// authorization input is per-principal by definition, the health input is operational state that
 /// `ARCHITECTURE.md` S15 keeps off an anonymous surface, and an authenticated route can be opened
 /// to anonymous callers later while the reverse breaks every client.
-pub async fn read(
-    State(state): State<Arc<ApiState>>,
-    // Authenticates, and is then deliberately unused: no capability in the vocabulary is
-    // grant-gated yet, so the document is the same for every principal. The filter over
-    // `identity.grants` arrives with the first capability that needs one, and the route already
-    // authenticates, so that change is invisible to a client.
-    _principal: Principal,
-) -> Response {
+pub async fn read(State(state): State<Arc<ApiState>>, principal: Principal) -> Response {
     // What this deployment has, from the same facts readiness reports — never a fresh probe.
     let deployment = state.deployment();
 
-    let capabilities = Capability::ALL
+    let mut capabilities: Vec<&'static str> = Capability::ALL
         .into_iter()
         .filter(|capability| capability.requires().is_met(&deployment))
         .map(Capability::as_str)
         .collect();
+
+    if deployment.database_reachable {
+        let owner = match platform_identity::grant::holds(
+            state.database.pool(),
+            principal.user_id,
+            PLATFORM_OWNER_GRANT,
+            jiff::Timestamp::now(),
+        )
+        .await
+        {
+            Ok(owner) => owner,
+            Err(error) => {
+                tracing::error!(%error, "operational capability authorization could not be read");
+                return platform_http::reject(platform_core::FailureKind::RequestTimeout);
+            }
+        };
+        if owner {
+            capabilities.extend([
+                AUDIT_INSPECT_CAPABILITY,
+                OPERATIONS_INSPECT_CAPABILITY,
+                SCHEDULES_INSPECT_CAPABILITY,
+            ]);
+        }
+    }
+    capabilities.sort_unstable();
 
     let services = state.gateway.capabilities().await;
     (

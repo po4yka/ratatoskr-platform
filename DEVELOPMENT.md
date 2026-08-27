@@ -55,6 +55,17 @@ and drift-checked by `cargo run -p openapic`. `ratatoskr-ingest` now REQUIRES
 `RATATOSKR__DATABASE__URL` and a public listener, applies no schema, and refuses to start against a
 database `ratatoskr-edge` has not prepared.
 
+Present since the operational-inspection extension: anonymous `GET /v1/status` projects cached
+database, bus, and gateway observations into four sanitized public groups and never probes a
+dependency from the request path. The owner-only `GET /v1/admin/operations`,
+`GET /v1/admin/operations/{operation_id}`, `GET /v1/admin/schedules`, and
+`GET /v1/admin/audit-events` routes use bounded keyset pages and shared Contracts response types.
+They re-check the live `platform.owner` grant on every request and fail closed when authorization
+storage cannot answer. Provision that grant out of band with the existing identity grant mechanism;
+there is no public grant or role-management route. Public status is distinct from the
+operator listener's `/health/ready`: status is anonymous and sanitized, while operator health keeps
+the detailed process checks on the private listener.
+
 Present since milestone 6: the outbox publisher and the operation-event consumer run inside
 `ratatoskr-edge`, and `GET /v1/operations/{id}/events` streams progress as Server-Sent Events with
 `Last-Event-ID` replay. The bus is optional — a developer polling `/v1/operations` needs no broker —

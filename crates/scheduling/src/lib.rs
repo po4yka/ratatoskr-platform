@@ -28,6 +28,9 @@ use uuid::Uuid;
 
 pub mod registration;
 
+mod admin;
+
+pub use admin::{AdminListScope, AdminPage, InspectedSchedule, list_admin_schedules};
 pub use registration::occurrence_id;
 pub use registration::{RegistrationHandler, ScheduleRegistration};
 

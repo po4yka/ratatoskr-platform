@@ -34,6 +34,7 @@ The Edge service owns:
 - operation creation and status projections;
 - SSE or WebSocket progress delivery;
 - public OpenAPI and capability discovery;
+- anonymous sanitized status and owner-authorized operational inspection;
 - rate limits, audit context, and safe error envelopes.
 
 It accepts work, validates authority, creates an operation, publishes a command, and returns promptly. It does not run scraping, Git, provider synchronization, or LLM inference inline.
@@ -203,6 +204,30 @@ Telegram Mini App authentication follows the same rule: `ratatoskr-telegram` val
 
 The array is short because the vocabulary is closed and holds only names this build serves a route for. [ADR-0008](docs/adr/0008-capability-discovery.md) records why: a name on that list is a promise the route tree has to keep, so `github.catalog` and its siblings enter it in the pull request that adds the routes behind them, not before. A capability is reported when the deployment has the components it needs, those components answered their last health probe, and the caller is authorized for it — so `content.submit` disappears from a deployment with no event bus, whose captures would be accepted and never published.
 
+`GET /v1/status` is the anonymous public availability surface. It returns four stable groups: API,
+storage, command delivery, and connected services. Cached observations supply every value. It preserves
+`degraded`, `unavailable`, `unknown`, and stale states, sets `Cache-Control: no-store`, and never
+returns service names, addresses, raw capability documents, diagnostics, identifiers, or user data.
+It is not the operator listener: `/health/ready`, `/metrics`, and `/version` remain private operator
+routes and are not exposed on the public listener.
+
+An identity holding the live `platform.owner` grant receives three additional capabilities and may
+read the bounded operational routes:
+
+```text
+GET /v1/admin/operations
+GET /v1/admin/operations/{operation_id}
+GET /v1/admin/schedules
+GET /v1/admin/audit-events
+```
+
+Every request re-reads the grant, so revocation takes effect on the next request and a grant
+lookup failure returns no privileged data. These projections contain lifecycle facts, stable safe
+failure codes, schedule status, and fixed audit columns only; command payloads, cron configuration,
+credentials, request bodies, raw errors, and diagnostics never enter the queries. Operators
+provision `platform.owner` out of band through the existing identity grant mechanism. No public
+route grants it, and the browser cannot promote itself.
+
 ## Security invariants
 
 1. Edge does not retain GitHub, X, Instagram, Threads, ChatGPT, Claude, or Telegram provider secrets.
@@ -213,6 +238,8 @@ The array is short because the vocabulary is closed and holds only names this bu
 6. All sessions, identity links, consent changes, and privileged operations are auditable.
 7. Cross-schema writes are prohibited.
 8. Scheduler jobs publish commands but do not import domain repositories or clients.
+9. Owner presentation in a client is not authorization; every admin request checks the live
+   `platform.owner` grant at Edge.
 
 ## Observability
 

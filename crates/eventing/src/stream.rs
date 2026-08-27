@@ -283,8 +283,8 @@ pub async fn ensure(
 ///
 /// # Errors
 ///
-/// Returns an [`EventingError`] when the command stream or a fixed durable cannot be obtained or
-/// its configuration differs from the closed provider filter and explicit-ack contract.
+/// Returns [`EventingError::Bus`] when the stream or consumer configuration cannot be read or
+/// created, or when an existing durable does not match the required configuration.
 pub async fn ensure_social_capture_consumers(
     context: &jetstream::Context,
     stream_name: &str,

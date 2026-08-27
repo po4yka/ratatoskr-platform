@@ -175,6 +175,142 @@
         ],
         "type": "object"
       },
+      "AuditAction": {
+        "description": "Stable audited action token.",
+        "examples": [
+          "operation.read"
+        ],
+        "maxLength": 120,
+        "pattern": "^[a-z][a-z0-9_]{0,29}(\\.[a-z][a-z0-9_]{0,29}){1,3}$",
+        "title": "AuditAction",
+        "type": "string"
+      },
+      "AuditEventPage": {
+        "additionalProperties": false,
+        "description": "Cursor page of newest-first audit summaries.",
+        "properties": {
+          "items": {
+            "description": "At most 100 audit summaries.",
+            "items": {
+              "$ref": "#/components/schemas/AuditEventSummary"
+            },
+            "maxItems": 100,
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InspectionCursor"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Opaque continuation cursor, absent on the final page."
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "AuditEventSummary": {
+        "additionalProperties": false,
+        "description": "One redacted audit event.",
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/AuditAction",
+            "description": "Stable bounded audited action token."
+          },
+          "actor_session_id": {
+            "description": "Acting session, absent when no session acted.",
+            "format": "uuid",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "actor_user_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UserId"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Acting user, absent for a system or unauthenticated event."
+          },
+          "audit_event_id": {
+            "description": "Stable audit record identity.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "correlation_id": {
+            "$ref": "#/components/schemas/EntityRef",
+            "description": "Namespaced correlation reference visible to support workflows."
+          },
+          "occurred_at": {
+            "$ref": "#/components/schemas/WireTimestamp",
+            "description": "Platform-observed occurrence instant."
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/AuditOutcome",
+            "description": "Stable audited outcome."
+          },
+          "target_id": {
+            "description": "Target UUID when one exists.",
+            "format": "uuid",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "target_kind": {
+            "$ref": "#/components/schemas/AuditTargetKind",
+            "description": "Stable bounded target kind."
+          }
+        },
+        "required": [
+          "audit_event_id",
+          "occurred_at",
+          "action",
+          "target_kind",
+          "outcome",
+          "correlation_id"
+        ],
+        "type": "object"
+      },
+      "AuditOutcome": {
+        "description": "Stable outcome of one audited action.",
+        "oneOf": [
+          {
+            "const": "allowed",
+            "description": "The action proceeded.",
+            "type": "string"
+          },
+          {
+            "const": "denied",
+            "description": "Authorization refused the action.",
+            "type": "string"
+          },
+          {
+            "const": "failed",
+            "description": "The permitted action did not complete.",
+            "type": "string"
+          }
+        ]
+      },
+      "AuditTargetKind": {
+        "description": "Stable kind of audited target.",
+        "examples": [
+          "operation"
+        ],
+        "maxLength": 60,
+        "pattern": "^[a-z][a-z0-9_-]{0,59}$",
+        "title": "AuditTargetKind",
+        "type": "string"
+      },
       "BlobOwner": {
         "description": "Deployment identity of the service that owns and resolves a blob.",
         "examples": [
@@ -555,6 +691,16 @@
         "type": "object",
         "x-ratatoskr-unknown-policy": "preserve"
       },
+      "InspectionCursor": {
+        "description": "Opaque service-generated pagination cursor.",
+        "examples": [
+          "eyJvYnNlcnZlZF9hdCI6IjIwMjYtMDgtMjdUMDk6MDA6MDBaIn0"
+        ],
+        "maxLength": 512,
+        "pattern": "^[A-Za-z0-9_-]{1,512}$",
+        "title": "InspectionCursor",
+        "type": "string"
+      },
       "MediaType": {
         "description": "Internet media type of stored bytes, without parameters.",
         "examples": [
@@ -612,6 +758,85 @@
         "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
         "title": "OperationId",
         "type": "string"
+      },
+      "OperationInspectionPage": {
+        "additionalProperties": false,
+        "description": "Cursor page of deployment-wide operation summaries.",
+        "properties": {
+          "items": {
+            "description": "At most 100 summaries in newest-accepted-first order.",
+            "items": {
+              "$ref": "#/components/schemas/OperationInspectionSummary"
+            },
+            "maxItems": 100,
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InspectionCursor"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Opaque continuation cursor, absent on the final page."
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "OperationInspectionSummary": {
+        "additionalProperties": false,
+        "description": "One redacted operation in an owner inspection page.",
+        "properties": {
+          "accepted_at": {
+            "$ref": "#/components/schemas/WireTimestamp",
+            "description": "Platform-observed acceptance instant."
+          },
+          "failure_code": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ErrorCode"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Stable user-safe failure code, absent when no failure is recorded."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/OperationKind",
+            "description": "Contracted kind of work."
+          },
+          "operation_id": {
+            "$ref": "#/components/schemas/OperationId",
+            "description": "Stable operation identity."
+          },
+          "owner_user_id": {
+            "$ref": "#/components/schemas/UserId",
+            "description": "User whose data the operation concerns."
+          },
+          "status": {
+            "$ref": "#/components/schemas/OperationStatus",
+            "description": "Exact lifecycle state."
+          },
+          "status_changed_at": {
+            "$ref": "#/components/schemas/WireTimestamp",
+            "description": "Platform-observed instant at which status last changed."
+          }
+        },
+        "required": [
+          "operation_id",
+          "owner_user_id",
+          "kind",
+          "status",
+          "accepted_at",
+          "status_changed_at"
+        ],
+        "type": "object"
       },
       "OperationKind": {
         "description": "What work the operation performs, e.g. `content.document.extract`.\nPresent tense: a kind names an activity, not a completed fact — unlike an event action.\nOpen by construction (a validated string), so there is no unknown-variant problem.",
@@ -1049,6 +1274,140 @@
         "title": "ProgressPercent",
         "type": "integer"
       },
+      "PublicComponentId": {
+        "description": "A stable public component group that reveals no private topology.",
+        "oneOf": [
+          {
+            "const": "api",
+            "description": "Public Edge API readiness.",
+            "type": "string"
+          },
+          {
+            "const": "storage",
+            "description": "Durable storage readiness.",
+            "type": "string"
+          },
+          {
+            "const": "command_delivery",
+            "description": "Command delivery readiness.",
+            "type": "string"
+          },
+          {
+            "const": "connected_services",
+            "description": "Aggregate readiness of connected product services.",
+            "type": "string"
+          }
+        ]
+      },
+      "PublicComponentState": {
+        "description": "Availability of one public component group.",
+        "oneOf": [
+          {
+            "const": "operational",
+            "description": "The latest observation is current and healthy.",
+            "type": "string"
+          },
+          {
+            "const": "degraded",
+            "description": "The component is impaired but some useful operation remains.",
+            "type": "string"
+          },
+          {
+            "const": "unavailable",
+            "description": "The component cannot serve its required work.",
+            "type": "string"
+          },
+          {
+            "const": "unknown",
+            "description": "No successful observation exists.",
+            "type": "string"
+          }
+        ]
+      },
+      "PublicStatusComponent": {
+        "additionalProperties": false,
+        "description": "Sanitized observation of one stable public component group.",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/PublicComponentId",
+            "description": "Stable public component identifier."
+          },
+          "observed_at": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WireTimestamp"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Latest successful observation, absent when never observed."
+          },
+          "stale": {
+            "description": "Whether the last successful observation is older than the current failed refresh.",
+            "type": "boolean"
+          },
+          "state": {
+            "$ref": "#/components/schemas/PublicComponentState",
+            "description": "Latest contracted component state."
+          }
+        },
+        "required": [
+          "id",
+          "state",
+          "stale"
+        ],
+        "type": "object"
+      },
+      "PublicStatusDocument": {
+        "additionalProperties": false,
+        "description": "Anonymous sanitized public status response.",
+        "properties": {
+          "components": {
+            "description": "Stable component observations in contract order.",
+            "items": {
+              "$ref": "#/components/schemas/PublicStatusComponent"
+            },
+            "maxItems": 4,
+            "minItems": 4,
+            "type": "array"
+          },
+          "generated_at": {
+            "$ref": "#/components/schemas/WireTimestamp",
+            "description": "Instant this projection was produced by Platform."
+          },
+          "state": {
+            "$ref": "#/components/schemas/PublicStatusState",
+            "description": "Overall public availability."
+          }
+        },
+        "required": [
+          "generated_at",
+          "state",
+          "components"
+        ],
+        "type": "object"
+      },
+      "PublicStatusState": {
+        "description": "Overall public availability of Ratatoskr.",
+        "oneOf": [
+          {
+            "const": "operational",
+            "description": "All public component observations are current and healthy.",
+            "type": "string"
+          },
+          {
+            "const": "degraded",
+            "description": "Ratatoskr can answer but one or more component observations are impaired.",
+            "type": "string"
+          },
+          {
+            "const": "unavailable",
+            "description": "A required component cannot serve work.",
+            "type": "string"
+          }
+        ]
+      },
       "RefreshSession": {
         "description": "What a refreshing client presents.",
         "properties": {
@@ -1172,6 +1531,96 @@
           }
         ]
       },
+      "ScheduleInspectionPage": {
+        "additionalProperties": false,
+        "description": "Cursor page of deterministic schedule status summaries.",
+        "properties": {
+          "items": {
+            "description": "At most 100 schedule status rows.",
+            "items": {
+              "$ref": "#/components/schemas/ScheduleInspectionSummary"
+            },
+            "maxItems": 100,
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InspectionCursor"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Opaque continuation cursor, absent on the final page."
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "ScheduleInspectionSummary": {
+        "additionalProperties": false,
+        "description": "One schedule's current Platform-owned status projection.",
+        "properties": {
+          "enabled": {
+            "description": "Whether future occurrences are enabled.",
+            "type": "boolean"
+          },
+          "last_outcome": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OperationStatus"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Last operation outcome, absent before the first occurrence."
+          },
+          "name": {
+            "$ref": "#/components/schemas/ScheduleName",
+            "description": "Schedule name within that service."
+          },
+          "next_due_at": {
+            "$ref": "#/components/schemas/WireTimestamp",
+            "description": "Next Platform-observed due instant."
+          },
+          "owner_user_id": {
+            "$ref": "#/components/schemas/UserId",
+            "description": "User whose data scheduled work concerns."
+          },
+          "schedule_id": {
+            "description": "Stable schedule identity.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "service_name": {
+            "$ref": "#/components/schemas/ServiceName",
+            "description": "Stable service label, not an address."
+          }
+        },
+        "required": [
+          "schedule_id",
+          "service_name",
+          "name",
+          "owner_user_id",
+          "next_due_at",
+          "enabled"
+        ],
+        "type": "object"
+      },
+      "ScheduleName": {
+        "description": "Stable schedule name within one service.",
+        "examples": [
+          "daily_sync"
+        ],
+        "maxLength": 120,
+        "pattern": "^[a-z][a-z0-9_-]{0,119}$",
+        "title": "ScheduleName",
+        "type": "string"
+      },
       "ServiceCapabilities": {
         "description": "A service-owned document observed through its loopback capability endpoint.",
         "properties": {
@@ -1207,6 +1656,16 @@
           "stale"
         ],
         "type": "object"
+      },
+      "ServiceName": {
+        "description": "Stable product-service label, never a hostname or address.",
+        "examples": [
+          "telegram"
+        ],
+        "maxLength": 64,
+        "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+        "title": "ServiceName",
+        "type": "string"
       },
       "SessionDeviceRef": {
         "description": "A device reference inside [`SessionSummary`].",
@@ -1439,6 +1898,16 @@
         "title": "TraceId",
         "type": "string"
       },
+      "UserId": {
+        "description": "Identity of a Ratatoskr end user. Bare canonical lowercase hyphenated UUID; not namespaced.",
+        "examples": [
+          "018f0000-0000-7000-8000-000000000001"
+        ],
+        "format": "uuid",
+        "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+        "title": "UserId",
+        "type": "string"
+      },
       "WarningEnvelope": {
         "additionalProperties": true,
         "description": "A non-terminal problem that did not prevent the recorded outcome.\n\nA distinct type, not a flag on [`ErrorEnvelope`]: `ARCHITECTURE.md` S5.5 requires\n\"partial-success warnings are distinct from terminal errors\", and a shared type with a\nseverity field would let a producer emit a \"warning\" that consumers treat as fatal.",
@@ -1519,6 +1988,414 @@
   "jsonSchemaDialect": "https://json-schema.org/draft/2020-12/schema",
   "openapi": "3.1.0",
   "paths": {
+    "/v1/admin/audit-events": {
+      "get": {
+        "description": "Returns a bounded newest-first page after a live owner grant check. The fixed audit columns contain no request body, credential, or diagnostic payload.",
+        "operationId": "inspectAuditEvents",
+        "parameters": [
+          {
+            "description": "Page size from 1 through 100; defaults to 20.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Opaque continuation cursor from the previous page.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuditEventPage"
+                }
+              }
+            },
+            "description": "One bounded redacted audit page."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The page size or cursor is invalid."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No valid session credential."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The authenticated user does not hold the live owner grant."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The caller has spent its request allowance."
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Authorization or audit storage could not answer."
+          }
+        },
+        "security": [
+          {
+            "sessionBearer": []
+          }
+        ],
+        "summary": "Inspect the audit trail",
+        "tags": [
+          "administration"
+        ]
+      }
+    },
+    "/v1/admin/operations": {
+      "get": {
+        "description": "Returns a bounded newest-first page across users after a live owner grant check. Rows contain lifecycle facts and a stable safe failure code only.",
+        "operationId": "inspectOperations",
+        "parameters": [
+          {
+            "description": "Exact operation lifecycle state.",
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Exact operation kind.",
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Exact operation owner.",
+            "in": "query",
+            "name": "owner_user_id",
+            "required": false,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Page size from 1 through 100; defaults to 20.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Opaque continuation cursor from the previous page.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationInspectionPage"
+                }
+              }
+            },
+            "description": "One bounded inspection page."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "A filter, page size, owner identifier, or cursor is invalid."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No valid session credential."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The authenticated user does not hold the live owner grant."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The caller has spent its request allowance."
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Authorization or operation storage could not answer."
+          }
+        },
+        "security": [
+          {
+            "sessionBearer": []
+          }
+        ],
+        "summary": "Inspect recent operations",
+        "tags": [
+          "administration"
+        ]
+      }
+    },
+    "/v1/admin/operations/{operation_id}": {
+      "get": {
+        "description": "Returns the existing operation snapshot after a live owner grant check.",
+        "operationId": "inspectOperation",
+        "parameters": [
+          {
+            "description": "The operation to inspect.",
+            "in": "path",
+            "name": "operation_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationSnapshot"
+                }
+              }
+            },
+            "description": "The operation snapshot."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No valid session credential."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The authenticated user does not hold the live owner grant."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No such operation."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The caller has spent its request allowance."
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Authorization or operation storage could not answer."
+          }
+        },
+        "security": [
+          {
+            "sessionBearer": []
+          }
+        ],
+        "summary": "Inspect one operation",
+        "tags": [
+          "administration"
+        ]
+      }
+    },
+    "/v1/admin/schedules": {
+      "get": {
+        "description": "Returns a bounded schedule-status page after a live owner grant check. Command payloads and schedule configuration are never selected.",
+        "operationId": "inspectSchedules",
+        "parameters": [
+          {
+            "description": "Page size from 1 through 100; defaults to 20.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Opaque continuation cursor from the previous page.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduleInspectionPage"
+                }
+              }
+            },
+            "description": "One bounded schedule-status page."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The page size or cursor is invalid."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No valid session credential."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The authenticated user does not hold the live owner grant."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The caller has spent its request allowance."
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Authorization or schedule storage could not answer."
+          }
+        },
+        "security": [
+          {
+            "sessionBearer": []
+          }
+        ],
+        "summary": "Inspect schedule status",
+        "tags": [
+          "administration"
+        ]
+      }
+    },
     "/v1/ai-archives/{provider}": {
       "post": {
         "description": "Accepts immutable metadata for a registered export-agent archive and returns the operation-bound upload path. It does not mean that archive bytes have been received or imported.",
@@ -3097,6 +3974,29 @@
         "summary": "Revoke one of your sessions",
         "tags": [
           "sessions"
+        ]
+      }
+    },
+    "/v1/status": {
+      "get": {
+        "description": "Projects four sanitized public component groups from cached observations. It performs no request-time dependency probes and is not the operator health surface.",
+        "operationId": "readPublicStatus",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicStatusDocument"
+                }
+              }
+            },
+            "description": "Current cached public status projection."
+          }
+        },
+        "security": [],
+        "summary": "Read public status",
+        "tags": [
+          "status"
         ]
       }
     }
