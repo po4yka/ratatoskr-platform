@@ -47,16 +47,20 @@ fn environment(role: RuntimeRole) -> String {
     deploy(&format!("systemd/{}.conf.example", role.as_str()))
 }
 
-/// The permission stanza for one NKey identity, delimited by its public-key placeholder.
+/// The permission stanza for one `NKey` identity, delimited by its public-key placeholder.
 fn nkey_stanza<'a>(config: &'a str, identity: &str) -> &'a str {
     let start = config
         .find(identity)
         .unwrap_or_else(|| panic!("missing {identity} identity"));
-    let after = &config[start..];
+    let after = config
+        .get(start..)
+        .unwrap_or_else(|| panic!("{identity} identity begins outside a character boundary"));
     let end = after
         .find("\n        {\n            nkey:")
         .unwrap_or(after.len());
-    &after[..end]
+    after
+        .get(..end)
+        .unwrap_or_else(|| panic!("{identity} stanza ends outside a character boundary"))
 }
 
 /// D-1. Every unit's stop timeout EXCEEDS the shutdown ceiling the configuration accepts.
