@@ -1,6 +1,6 @@
 [package]
 name        = "ratatoskr-platform-scheduling"
-description = "Periodic command publication: schedules, deterministic occurrences, and catch-up policy."
+description = "Periodic command publication: cron schedules and deterministic occurrences."
 version.workspace      = true
 edition.workspace      = true
 rust-version.workspace = true
@@ -15,18 +15,22 @@ path = "src/lib.rs"
 ratatoskr-platform-persistence.workspace = true
 ratatoskr-platform-operations.workspace  = true
 ratatoskr-platform-eventing.workspace    = true
+ratatoskr-platform-identity.workspace    = true
 ratatoskr-platform-telemetry.workspace   = true
 metrics.workspace    = true
 sqlx.workspace       = true
 uuid.workspace       = true
 time.workspace       = true
 jiff.workspace       = true
+cron.workspace       = true
+chrono.workspace     = true
 serde_json.workspace = true
 thiserror.workspace  = true
 tracing.workspace    = true
 
 [dev-dependencies]
 ratatoskr-platform-persistence = { workspace = true, features = ["test-support"] }
+ratatoskr-operation-contracts.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 
 [lints]

@@ -412,6 +412,7 @@ async fn an_event_published_to_jetstream_reaches_the_projection() {
                 &context,
                 &spec,
                 &consumer_name,
+                "evt.platform.operation.reported.v1",
                 &pool,
                 &ProgressProjection,
                 async move {

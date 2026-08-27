@@ -32,7 +32,8 @@ pub use crate::config::model::{
     AdminConfig, BusConfig, DEFAULT_ACTOR_REQUESTS_PER_MINUTE, DEFAULT_STALE_AFTER_SECONDS,
     DatabaseConfig, EVENT_RETENTION_DAYS, GatewayConfig, GatewayRouteBudget, GatewayRouteBudgets,
     GatewayRouteClass, GatewayRouteConfig, IdentityConfig, LogFormat, OperationsConfig, OtlpConfig,
-    PlatformConfig, PublicConfig, RetentionConfig, ShutdownConfig, TelemetryConfig,
+    PlatformConfig, PublicConfig, RetentionConfig, SchedulingConfig, ShutdownConfig,
+    TelemetryConfig,
 };
 pub use crate::config::validate::{SHUTDOWN_CEILING_SECONDS, Violation};
 use crate::role::RuntimeRole;
@@ -130,6 +131,7 @@ impl PlatformConfig {
             // The reconciliation window is one day by default, and the reaper it feeds is an edge
             // task (ADR-0014); the other roles carry the section so one shape stays one shape.
             operations: OperationsConfig::default(),
+            scheduling: SchedulingConfig::default(),
             shutdown: ShutdownConfig {
                 drain_seconds: model::default_drain_seconds(),
                 grace_seconds: model::default_grace_seconds(),

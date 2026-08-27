@@ -14,18 +14,16 @@
 
 use jiff::{SignedDuration, Timestamp};
 use platform_persistence::test_support::TestDatabase;
-use platform_scheduling::{CatchUp, occurrence_id, run_once};
+use platform_scheduling::{occurrence_id, run_once};
 use sqlx::{PgPool, Row as _};
 use uuid::Uuid;
 
-/// A schedule an operator could have written, with everything but the parts a test varies.
+/// A registered schedule, with everything but the parts a test varies.
 struct Fixture {
     schedule_id: Uuid,
     owner_user_id: Uuid,
     name: String,
     next_due_at: Timestamp,
-    interval_seconds: i32,
-    catch_up: CatchUp,
     enabled: bool,
 }
 
@@ -40,8 +38,6 @@ impl Fixture {
                 .take(60)
                 .collect(),
             next_due_at,
-            interval_seconds: 60,
-            catch_up: CatchUp::Skip,
             enabled: true,
         }
     }
@@ -50,17 +46,15 @@ impl Fixture {
         let created = to_offset(self.next_due_at - SignedDuration::from_hours(1));
         sqlx::query(
             "insert into operations.schedules
-                 (schedule_id, name, owner_user_id, command_type, operation_kind, payload,
-                  interval_seconds, next_due_at, catch_up, enabled, created_at, updated_at)
-             values ($1, $2, $3, 'github.sync.requested.v1', 'github.sync',
-                     '{\"account\": \"po4yka\"}'::jsonb, $4, $5, $6, $7, $8, $8)",
+                 (schedule_id, service_name, name, owner_user_id, command_type, operation_kind, payload,
+                  cron_expression, next_due_at, enabled, created_at, updated_at)
+             values ($1, 'ratatoskr-github', $2, $3, 'github.sync.requested.v1', 'github.sync',
+                     '{\"account\": \"po4yka\"}'::jsonb, '* * * * *', $4, $5, $6, $6)",
         )
         .bind(self.schedule_id)
         .bind(&self.name)
         .bind(self.owner_user_id)
-        .bind(self.interval_seconds)
         .bind(to_offset(self.next_due_at))
-        .bind(self.catch_up.as_str())
         .bind(self.enabled)
         .bind(created)
         .execute(pool)
@@ -100,7 +94,8 @@ async fn occurrence_count(pool: &PgPool, schedule_id: Uuid) -> i64 {
 }
 
 fn at(seconds: i64) -> Timestamp {
-    Timestamp::from_second(seconds).expect("a timestamp inside the supported range")
+    Timestamp::from_second(seconds - seconds.rem_euclid(60))
+        .expect("a minute-aligned timestamp inside the supported range")
 }
 
 /// S-1. One due schedule produces exactly one occurrence, one operation and one outbox command,
@@ -169,9 +164,7 @@ async fn a_due_schedule_publishes_an_occurrence_an_operation_and_a_command() {
     database.cleanup().await.expect("cleanup");
 }
 
-/// S-2. A disabled schedule is not due, however far past its due time it is. Enabling one starts
-/// publishing to a service that may not exist, so the flag is the operator's decision and not a
-/// hint.
+/// S-2. A disabled schedule is not due, however far past its due time it is.
 #[tokio::test]
 async fn a_disabled_schedule_is_never_due() {
     let database = TestDatabase::create().await.expect("a test database");
@@ -215,8 +208,8 @@ async fn a_schedule_that_is_not_yet_due_publishes_nothing() {
     database.cleanup().await.expect("cleanup");
 }
 
-/// S-4. The duplicate suppression S14 requires, exercised the only way it is reachable: an operator
-/// moves `next_due_at` back to a due time that has already been published. The occurrence is
+/// S-4. The duplicate suppression S14 requires, exercised by moving `next_due_at` back to a due
+/// time that has already been published. The occurrence is
 /// recognised, NO second command is enqueued, and the schedule still moves forward — the last part
 /// being what stops the pass from spinning on that row forever.
 #[tokio::test]
@@ -255,11 +248,9 @@ async fn a_due_time_that_has_already_been_published_is_suppressed_and_still_adva
     database.cleanup().await.expect("cleanup");
 }
 
-/// S-5. `skip` publishes one occurrence for a long outage and discards the rest, reporting how many
-/// it discarded. A snapshot taken ten times in a row is nine snapshots whose results are already
-/// superseded.
+/// S-5. A cron schedule advances to the next cron occurrence after its due instant.
 #[tokio::test]
-async fn skip_publishes_once_after_an_outage_and_reports_what_it_discarded() {
+async fn cron_advances_from_the_due_occurrence() {
     let database = TestDatabase::create().await.expect("a test database");
     let pool = database.pool();
 
@@ -269,30 +260,31 @@ async fn skip_publishes_once_after_an_outage_and_reports_what_it_discarded() {
 
     let now = due + SignedDuration::from_secs(600);
     let report = run_once(pool, 32, now).await.expect("the pass must run");
-    assert_eq!((report.published, report.skipped), (1, 10));
+    assert_eq!(report.published, 1);
     assert_eq!(occurrence_count(pool, fixture.schedule_id).await, 1);
-    assert!(next_due_at(pool, fixture.schedule_id).await > now);
+    assert_eq!(
+        next_due_at(pool, fixture.schedule_id).await,
+        due + SignedDuration::from_secs(60)
+    );
 
     database.cleanup().await.expect("cleanup");
 }
 
-/// S-6. `catch_up` publishes the backlog across successive passes, one occurrence at a time, each
-/// with its own due time and its own identifier. An incremental synchronisation may not have gaps.
+/// S-6. A delayed cron schedule publishes each selected due occurrence once, each with its own
+/// identifier.
 #[tokio::test]
-async fn catch_up_publishes_the_backlog_one_occurrence_per_pass() {
+async fn cron_publishes_a_delayed_sequence_one_occurrence_per_pass() {
     let database = TestDatabase::create().await.expect("a test database");
     let pool = database.pool();
 
     let due = at(1_700_000_000);
-    let mut fixture = Fixture::new(due);
-    fixture.catch_up = CatchUp::CatchUp;
+    let fixture = Fixture::new(due);
     fixture.insert(pool).await;
 
     let now = due + SignedDuration::from_secs(300);
     for expected in 1..=5_i64 {
         let report = run_once(pool, 32, now).await.expect("the pass must run");
         assert_eq!(report.published, 1, "pass {expected}");
-        assert_eq!(report.skipped, 0, "pass {expected}");
         assert_eq!(occurrence_count(pool, fixture.schedule_id).await, expected);
     }
 
@@ -335,9 +327,9 @@ async fn a_command_type_outside_the_subject_grammar_is_refused_by_the_schema() {
     ] {
         let outcome = sqlx::query(
             "insert into operations.schedules
-                 (schedule_id, name, owner_user_id, command_type, operation_kind,
-                  interval_seconds, next_due_at, created_at, updated_at)
-             values ($1, $2, $3, $4, 'github.sync', 60, now(), now(), now())",
+                 (schedule_id, service_name, name, owner_user_id, command_type, operation_kind,
+                  cron_expression, next_due_at, created_at, updated_at)
+             values ($1, 'ratatoskr-github', $2, $3, $4, 'github.sync', '* * * * *', now(), now(), now())",
         )
         .bind(Uuid::now_v7())
         .bind(
@@ -392,8 +384,7 @@ async fn retention_removes_occurrences_outside_the_window() {
     let pool = database.pool();
 
     let due = at(1_700_000_000);
-    let mut fixture = Fixture::new(due);
-    fixture.catch_up = CatchUp::CatchUp;
+    let fixture = Fixture::new(due);
     fixture.insert(pool).await;
 
     // Three occurrences, published a minute apart at a due time far in the past.

@@ -62,3 +62,7 @@ RATATOSKR__BUS__NKEY_SEED_PATH=/etc/ratatoskr/edge.nkey
 #RATATOSKR__OPERATIONS__STALE_AFTER_SECONDS=86400
 
 RATATOSKR__TELEMETRY__LOG_FORMAT=json
+
+# Interim envelope allowlist for domain schedule registrations. Fleet must also give each named
+# service an authenticated NATS identity permitted only on cmd.platform.schedule.registration_requested.v1.
+RATATOSKR__SCHEDULING__ALLOWED_REGISTRARS=["ratatoskr-github"]

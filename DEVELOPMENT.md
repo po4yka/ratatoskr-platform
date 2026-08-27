@@ -225,17 +225,13 @@ values (gen_random_uuid(), '<user>', 'an rss shim', digest('<credential>', 'sha2
         'content.capture', now());
 ```
 
-A schedule is registered the same way, and for the same reason: there is no route that writes
-`operations.schedules`. Every schedule is created DISABLED, because enabling one starts publishing
-commands to a domain service that may not be deployed. `deploy/README.md` explains the columns.
-
-```sql
-insert into operations.schedules
-    (schedule_id, name, owner_user_id, command_type, operation_kind, payload,
-     interval_seconds, next_due_at, catch_up, enabled, created_at, updated_at)
-values (gen_random_uuid(), 'github-sync', '<user>', 'github.sync.requested.v1', 'github.sync',
-        '{"account": "po4yka"}'::jsonb, 3600, now(), 'catch_up', true, now(), now());
-```
+Domain services register schedules by publishing
+`cmd.platform.schedule.registration_requested.v1`. The `payload` holds `service_name`, a service-
+unique `name`, `owner_user_id`, five-field UTC `cron_expression`, `command_type`,
+`operation_kind`, command-payload template, and `enabled`. Edge validates the cron and the
+configured service-producer allowlist, reconciles the row atomically, and records the decision in
+the audit trail. There is intentionally no direct operator insert path; `deploy/README.md` explains
+the interim allowlist limitation and the schedule-status query.
 
 ### PostgreSQL — real
 

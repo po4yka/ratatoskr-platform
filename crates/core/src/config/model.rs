@@ -62,6 +62,10 @@ pub struct PlatformConfig {
     #[serde(default)]
     pub operations: OperationsConfig,
 
+    /// Domain-service identities allowed to register recurring schedules.
+    #[serde(default)]
+    pub scheduling: SchedulingConfig,
+
     /// The two phases of a graceful stop.
     pub shutdown: ShutdownConfig,
 
@@ -203,6 +207,15 @@ pub struct OperationsConfig {
     /// value, not behind a boolean.
     #[serde(default = "default_stale_after_seconds")]
     pub stale_after_seconds: u64,
+}
+
+/// The interim admission policy for schedule-registration commands.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct SchedulingConfig {
+    /// Envelope producer names accepted while fleet bus identities are not yet provisioned.
+    #[serde(default)]
+    pub allowed_registrars: Vec<String>,
 }
 
 pub(super) const fn default_stale_after_seconds() -> u64 {

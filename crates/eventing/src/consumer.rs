@@ -103,6 +103,7 @@ pub async fn run<H: Handler>(
     context: &jetstream::Context,
     spec: &StreamSpec,
     durable_name: &str,
+    filter_subject: &str,
     pool: &PgPool,
     handler: &H,
     stop: impl Future<Output = ()> + Send,
@@ -131,6 +132,7 @@ pub async fn run<H: Handler>(
             durable_name,
             jetstream::consumer::pull::Config {
                 durable_name: Some(durable_name.to_owned()),
+                filter_subject: filter_subject.to_owned(),
                 ..jetstream::consumer::pull::Config::default()
             },
         )

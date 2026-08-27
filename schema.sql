@@ -1101,25 +1101,27 @@ create index idempotency_operation_id_idx
 
 create table operations.schedules (
     schedule_id       uuid        primary key,
+    service_name      text        not null,
     name              text        not null,
     owner_user_id     uuid        not null,
     command_type      text        not null,
     operation_kind    text        not null,
     payload           jsonb       not null default '{}'::jsonb,
-    interval_seconds  integer     not null,
+    cron_expression   text        not null,
     next_due_at       timestamptz not null,
-    catch_up          text        not null default 'skip',
     enabled           boolean     not null default false,
     created_at        timestamptz not null,
     updated_at        timestamptz not null,
     last_published_at timestamptz,
 
-    -- An operator-chosen name that becomes a metric label, so its grammar is the cardinality
-    -- bound: no dots, no spaces, no unbounded length. `ARCHITECTURE.md` S16 requires scheduler
-    -- drift as a signal, and a label whose values are rows in this table is bounded by how many
-    -- rows an operator writes.
+    -- A service-chosen name that becomes a metric label, so its grammar is the cardinality bound:
+    -- no dots, no spaces, no unbounded length.
     constraint schedules_name_is_a_label
         check (name ~ '^[a-z][a-z0-9_-]{0,63}$'),
+    constraint schedules_service_name_is_bounded
+        check (service_name ~ '^[a-z][a-z0-9_-]{0,63}$'),
+    constraint schedules_cron_expression_is_bounded
+        check (length(cron_expression) between 9 and 120),
     -- The contract type name, WITH its version suffix: it is published as `cmd.<command_type>`,
     -- and `operations.outbox.subject` enforces exactly this grammar one table over. Checked here
     -- as well so a row that could never be published is refused where it is written, not where it
@@ -1143,13 +1145,6 @@ create table operations.schedules (
     -- error at the far end of an asynchronous hop.
     constraint schedules_payload_is_an_object
         check (jsonb_typeof(payload) = 'object'),
-    -- One minute to one year. The floor is not arbitrary: below it the tick interval and the drift
-    -- it produces are the same order as the schedule itself, and four cores on one host
-    -- (`ratatoskr-workspace/docs/DEPLOYMENT_TARGET.md`) are not a load generator.
-    constraint schedules_interval_is_between_a_minute_and_a_year
-        check (interval_seconds between 60 and 31536000),
-    constraint schedules_catch_up_is_known
-        check (catch_up in ('skip', 'catch_up')),
     constraint schedules_updated_at_is_not_before_created_at
         check (updated_at >= created_at)
 );
@@ -1157,9 +1152,9 @@ create table operations.schedules (
 comment on table operations.schedules is
     'A periodic command, defined as data. ARCHITECTURE.md S10: Scheduler is a thin command '
     'publisher that does not import domain repositories and decides no domain behaviour, so what '
-    'to publish and how often is a row rather than a constant in a binary. There is no route that '
-    'writes this table: an operator inserts a schedule, which is why every column carries a CHECK '
-    'an operator can trip.';
+    'to publish and how often is a row rather than a constant in a binary. Domain services write '
+    'rows only through the schedule-registration command; its handler validates cron and records '
+    'the audit decision.';
 comment on column operations.schedules.owner_user_id is
     'References identity.users(user_id) semantically, with no foreign key: DATA_MODEL.md forbids '
     'cross-schema foreign keys. Every one of S10''s example schedules is per-user work — sync THIS '
@@ -1167,24 +1162,13 @@ comment on column operations.schedules.owner_user_id is
     'and the command carries a real principal. There is no system principal, and adding one would '
     'be a second kind of actor for the authorization model to grow a hole around.';
 comment on column operations.schedules.next_due_at is
-    'The next occurrence, and also the phase of the schedule: the grid is next_due_at + k * '
-    'interval_seconds, so "every 24 hours at 03:00" is an interval of 86400 anchored at 03:00. '
-    'That is why there is no cron expression here — a parser and its dependency would buy the '
-    'phase this column already carries.';
-comment on column operations.schedules.catch_up is
-    'skip | catch_up. S10 requires catch-up policy to be explicit per schedule. `skip` publishes '
-    'the current occurrence and moves to the next grid point after now, discarding what was missed '
-    '— correct for a snapshot, where only the latest matters. `catch_up` advances one interval at '
-    'a time, so every missed occurrence is eventually published — correct for an incremental sync '
-    'that must not have gaps. Catch-up is bounded in code: a schedule enabled with a next_due_at '
-    'far in the past jumps forward rather than publishing a year of commands.';
+    'The selected next UTC cron occurrence. The scheduler advances it strictly after the occurrence '
+    'it just handled, which keeps an already-due occurrence stable across a registration edit.';
 comment on column operations.schedules.enabled is
-    'A schedule is created disabled. Enabling one starts publishing commands to a domain service '
-    'that may not be deployed, which is an operator decision and not a consequence of writing a '
-    'row.';
+    'The registering service controls whether its named schedule publishes commands.';
 
-create unique index schedules_name_key
-    on operations.schedules (name);
+create unique index schedules_service_name_key
+    on operations.schedules (service_name, name);
 
 -- The only query the publisher runs. Partial, because a disabled schedule is never due.
 create index schedules_due_idx
@@ -1242,6 +1226,19 @@ create unique index schedule_occurrences_schedule_id_due_at_key
 -- a schedule's `next_due_at` before a rewind republishes instead of being suppressed.
 create index schedule_occurrences_schedule_id_published_at_idx
     on operations.schedule_occurrences (schedule_id, published_at desc);
+
+create view operations.schedule_status as
+select s.schedule_id, s.service_name, s.name, s.owner_user_id, s.next_due_at, s.enabled,
+       latest.status as last_outcome
+  from operations.schedules s
+  left join lateral (
+      select o.status
+        from operations.schedule_occurrences occurrence
+        join operations.operations o on o.operation_id = occurrence.operation_id
+       where occurrence.schedule_id = s.schedule_id
+       order by occurrence.published_at desc
+       limit 1
+  ) latest on true;
 
 -- =================================================================================================
 -- platform_ingest

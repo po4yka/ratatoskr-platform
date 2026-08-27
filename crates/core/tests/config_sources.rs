@@ -29,7 +29,7 @@ use platform_core::config::{self, ConfigError, LogFormat, PlatformConfig};
 /// configuration variable, and milestones 5 to 8 added the database, the bus and the identity keys
 /// without touching it — so the claim had been false for four milestones, and this list is what
 /// makes it checkable again.
-const DOCUMENTED: [(&str, &str); 25] = [
+const DOCUMENTED: [(&str, &str); 26] = [
     ("RATATOSKR__ADMIN__BIND", "127.0.0.1:19464"),
     ("RATATOSKR__PUBLIC__BIND", "127.0.0.1:18080"),
     ("RATATOSKR__PUBLIC__REQUEST_TIMEOUT_SECONDS", "17"),
@@ -62,6 +62,10 @@ const DOCUMENTED: [(&str, &str); 25] = [
     ("RATATOSKR__RETENTION__AUDIT_DAYS", "33"),
     ("RATATOSKR__RETENTION__SCHEDULE_OCCURRENCE_DAYS", "34"),
     ("RATATOSKR__OPERATIONS__STALE_AFTER_SECONDS", "86400"),
+    (
+        "RATATOSKR__SCHEDULING__ALLOWED_REGISTRARS",
+        "[\"ratatoskr-github\"]",
+    ),
     ("RATATOSKR__SHUTDOWN__DRAIN_SECONDS", "7"),
     ("RATATOSKR__SHUTDOWN__GRACE_SECONDS", "11"),
     ("RATATOSKR__TELEMETRY__LOG_FORMAT", "pretty"),
@@ -289,6 +293,7 @@ fn every_variable_in_env_example_overrides_its_field() {
         assert_eq!(config.retention.outbox_days, 32);
         assert_eq!(config.retention.audit_days, 33);
         assert_eq!(config.retention.schedule_occurrence_days, 34);
+        assert_eq!(config.scheduling.allowed_registrars, ["ratatoskr-github"]);
         assert_eq!(config.shutdown.drain_seconds, 7);
         assert_eq!(config.shutdown.grace_seconds, 11);
         assert_eq!(config.telemetry.log_format, LogFormat::Pretty);

@@ -20,6 +20,7 @@ use platform_eventing::{
 use platform_http::{RuntimeState, Serving};
 use platform_operations::ProgressProjection;
 use platform_persistence::Database;
+use platform_scheduling::RegistrationHandler;
 use sqlx::PgPool;
 
 const ROLE: RuntimeRole = RuntimeRole::Edge;
@@ -209,6 +210,11 @@ impl platform_http::PublicRoutes for EdgeRoutes {
         let tasks = vec![
             spawn_publisher(database.pool().clone(), publisher.clone()),
             spawn_projection(database.pool().clone(), publisher.clone()),
+            spawn_schedule_registration(
+                database.pool().clone(),
+                publisher.clone(),
+                RegistrationHandler::new(config.scheduling.allowed_registrars.clone()),
+            ),
             spawn_bus_prober(publisher, Arc::clone(health)),
             spawn_observer(database.pool().clone(), Arc::clone(&state)),
             spawn_retention(database.pool().clone(), config.retention.clone()),
@@ -460,6 +466,7 @@ fn spawn_projection(pool: PgPool, publisher: NatsPublisher) -> tokio::task::Join
             publisher.context(),
             &StreamSpec::event_stream(),
             EDGE_PROJECTION_CONSUMER,
+            "evt.platform.operation.reported.v1",
             &pool,
             &ProgressProjection,
             std::future::pending::<()>(),
@@ -467,6 +474,29 @@ fn spawn_projection(pool: PgPool, publisher: NatsPublisher) -> tokio::task::Join
         .await;
         if let Err(error) = outcome {
             tracing::error!(%error, "the operation-event consumer stopped");
+        }
+    })
+}
+
+/// Receive domain schedule registrations through Edge's sole bus connection.
+fn spawn_schedule_registration(
+    pool: PgPool,
+    publisher: NatsPublisher,
+    handler: RegistrationHandler,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let outcome = platform_eventing::consumer::run(
+            publisher.context(),
+            &StreamSpec::command_stream(),
+            "platform_schedule_registration",
+            "cmd.platform.schedule.registration_requested.v1",
+            &pool,
+            &handler,
+            std::future::pending::<()>(),
+        )
+        .await;
+        if let Err(error) = outcome {
+            tracing::error!(%error, "the schedule-registration consumer stopped");
         }
     })
 }

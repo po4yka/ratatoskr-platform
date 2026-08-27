@@ -19,15 +19,17 @@
 //! still records the occurrence durably, and a broker outage becomes a backlog with an operator
 //! signal instead of a lost occurrence. This crate therefore has no NATS dependency at all.
 
-use jiff::{SignedDuration, Timestamp};
+use crate::registration::next_after;
+use jiff::Timestamp;
 use platform_eventing::{Command, MessageClass, Outbox, Subject};
 use platform_persistence::PersistenceError;
 use sqlx::{PgPool, Postgres, Row as _, Transaction};
 use uuid::Uuid;
 
-pub mod plan;
+pub mod registration;
 
-pub use plan::{Advance, CatchUp, occurrence_id};
+pub use registration::occurrence_id;
+pub use registration::{RegistrationHandler, ScheduleRegistration};
 
 /// Why a pass could not do what it was asked.
 #[derive(Debug, thiserror::Error)]
@@ -66,8 +68,6 @@ pub struct SchedulerReport {
     /// Occurrences that already existed and were therefore not published a second time. The
     /// duplicate-suppression signal.
     pub suppressed: usize,
-    /// Grid points passed over without being published, by policy.
-    pub skipped: u64,
     /// Schedules whose transaction failed. Their rows are untouched and the next pass retries them.
     pub failed: usize,
 }
@@ -83,9 +83,8 @@ struct Schedule {
     command_type: String,
     operation_kind: String,
     payload: serde_json::Value,
-    interval: SignedDuration,
+    cron_expression: String,
     next_due_at: Timestamp,
-    catch_up: CatchUp,
 }
 
 /// What handling one schedule produced.
@@ -94,7 +93,6 @@ struct Handled {
     name: String,
     published: bool,
     drift_seconds: i64,
-    skipped: u32,
 }
 
 /// Publish every occurrence that is due, up to `limit` schedules.
@@ -136,7 +134,6 @@ pub async fn run_once(
 
 /// Fold one handled schedule into the report and into the exported signals.
 fn record(report: &mut SchedulerReport, handled: &Handled) {
-    report.skipped += u64::from(handled.skipped);
     let outcome = if handled.published {
         report.published += 1;
         "published"
@@ -164,15 +161,6 @@ fn record(report: &mut SchedulerReport, handled: &Handled) {
         "outcome" => outcome,
     )
     .increment(1);
-
-    if handled.skipped > 0 {
-        metrics::counter!(
-            platform_telemetry::metrics::PLATFORM_SCHEDULER_OCCURRENCES_TOTAL,
-            "schedule" => handled.name.clone(),
-            "outcome" => "skipped",
-        )
-        .increment(u64::from(handled.skipped));
-    }
 }
 
 /// Which schedules are due. Read without a lock: the lock is taken per schedule, in [`handle`].
@@ -216,7 +204,7 @@ async fn handle(
     };
 
     let due_at = schedule.next_due_at;
-    let occurrence_id = plan::occurrence_id(schedule.id, due_at);
+    let occurrence_id = occurrence_id(schedule.id, due_at);
     let drift_seconds = now.duration_since(due_at).as_secs().max(0);
 
     // Read rather than an `on conflict` on the insert, because the answer decides whether an
@@ -237,8 +225,13 @@ async fn handle(
         true
     };
 
-    let advance = plan::advance(due_at, schedule.interval, now, schedule.catch_up);
-    reschedule(&mut transaction, schedule.id, &advance, published, now).await?;
+    let Some(next_due_at) = next_after(&schedule.cron_expression, due_at) else {
+        return Err(SchedulingError::UnusableRow {
+            schedule_id,
+            column: "cron_expression",
+        });
+    };
+    reschedule(&mut transaction, schedule.id, next_due_at, published, now).await?;
     transaction
         .commit()
         .await
@@ -248,7 +241,6 @@ async fn handle(
         name: schedule.name,
         published,
         drift_seconds,
-        skipped: advance.skipped,
     }))
 }
 
@@ -264,7 +256,7 @@ async fn claim(
 ) -> Result<Option<Schedule>, SchedulingError> {
     let row = sqlx::query(
         "select schedule_id, name, owner_user_id, command_type, operation_kind, payload,
-                interval_seconds, next_due_at, catch_up
+                cron_expression, next_due_at
            from operations.schedules
           where schedule_id = $1 and enabled and next_due_at <= $2
             for update skip locked",
@@ -277,16 +269,6 @@ async fn claim(
 
     let Some(row) = row else { return Ok(None) };
 
-    let catch_up: String = row.try_get("catch_up").map_err(PersistenceError::Query)?;
-    let Some(catch_up) = CatchUp::parse(&catch_up) else {
-        return Err(SchedulingError::UnusableRow {
-            schedule_id,
-            column: "catch_up",
-        });
-    };
-    let interval_seconds: i32 = row
-        .try_get("interval_seconds")
-        .map_err(PersistenceError::Query)?;
     let next_due_at: time::OffsetDateTime = row
         .try_get("next_due_at")
         .map_err(PersistenceError::Query)?;
@@ -304,9 +286,10 @@ async fn claim(
             .try_get("operation_kind")
             .map_err(PersistenceError::Query)?,
         payload: row.try_get("payload").map_err(PersistenceError::Query)?,
-        interval: SignedDuration::from_secs(i64::from(interval_seconds)),
+        cron_expression: row
+            .try_get("cron_expression")
+            .map_err(PersistenceError::Query)?,
         next_due_at: from_offset(next_due_at),
-        catch_up,
     }))
 }
 
@@ -393,7 +376,7 @@ async fn publish(
 async fn reschedule(
     transaction: &mut Transaction<'_, Postgres>,
     schedule_id: Uuid,
-    advance: &Advance,
+    next_due_at: Timestamp,
     published: bool,
     now: Timestamp,
 ) -> Result<(), SchedulingError> {
@@ -405,7 +388,7 @@ async fn reschedule(
           where schedule_id = $1",
     )
     .bind(schedule_id)
-    .bind(to_offset(advance.next_due_at))
+    .bind(to_offset(next_due_at))
     .bind(to_offset(now))
     .bind(published)
     .execute(&mut **transaction)

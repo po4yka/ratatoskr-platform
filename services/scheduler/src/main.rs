@@ -117,7 +117,6 @@ fn spawn_publisher(pool: PgPool) -> tokio::task::JoinHandle<()> {
                         due = report.due,
                         published = report.published,
                         suppressed = report.suppressed,
-                        skipped = report.skipped,
                         failed = report.failed,
                         "schedule pass",
                     );

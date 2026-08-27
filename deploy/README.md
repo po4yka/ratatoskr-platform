@@ -181,37 +181,29 @@ docker exec victoriametrics wget -q -O- --timeout=4 \
 
 ## Schedules
 
-`ratatoskr-scheduler` publishes from `operations.schedules`, and there is no route that writes that
-table: an operator inserts a row. Every schedule is created **disabled**, because enabling one starts
-publishing commands to a domain service that may not exist yet.
+`ratatoskr-scheduler` publishes from `operations.schedules`. Domain services register their own
+named cron schedules by publishing `cmd.platform.schedule.registration_requested.v1`; Edge consumes
+that command through its durable inbox and scheduler reads the reconciled row. The fleet configures
+`RATATOSKR__SCHEDULING__ALLOWED_REGISTRARS` on Edge. This is an envelope-level interim allowlist,
+not cryptographic service authentication: provision a distinct NATS identity per service, restricted
+to this exact subject, before relying on it as an authorization boundary.
 
 ```sql
 -- docker exec -i shared-postgres psql -U postgres -d ratatoskr
-insert into operations.schedules
-    (schedule_id, name, owner_user_id, command_type, operation_kind, payload,
-     interval_seconds, next_due_at, catch_up, enabled, created_at, updated_at)
-values (gen_random_uuid(), 'github-sync', '<a user_id from identity.users>',
-        'github.sync.requested.v1', 'github.sync', '{"account": "po4yka"}'::jsonb,
-        3600, date_trunc('hour', now()) + interval '1 hour', 'catch_up', false, now(), now());
-
-update operations.schedules set enabled = true, updated_at = now() where name = 'github-sync';
+select service_name, name, owner_user_id, next_due_at, enabled, last_outcome
+  from operations.schedule_status
+ order by service_name, name;
 ```
 
-- `next_due_at` is the **phase** as well as the next occurrence: an interval of 86 400 anchored at
-  03:00 stays at 03:00. There is no cron expression, because a parser and its dependency would buy
-  only what this column already carries.
-- `catch_up` is `skip` for a snapshot — ten stale snapshots are nine units of superseded work — and
-  `catch_up` for an incremental synchronisation, where a gap is a hole in the data. Catch-up is
-  bounded: a schedule enabled with a due time far in the past jumps to the present and reports what
-  it discarded, rather than publishing a year of commands into a stream that refuses a publish when
-  it is full.
+- Cron uses five UTC fields: minute, hour, day of month, month, day of week. Registration computes
+  its first `next_due_at` strictly after receipt and does not backfill. An edit retains an already
+  due occurrence, so its deterministic ID can be published exactly once.
 - `command_type` is the type, never the subject. `cmd.` is added by the publisher, and a CHECK
   refuses a value that already carries it.
 
 Watch it with `platform_scheduler_drift_seconds{schedule}` and
 `platform_scheduler_occurrences_total{schedule,outcome}`. A `suppressed` count above zero means
-something is republishing an occurrence that already happened; a `skipped` count that keeps rising
-means the process is not keeping up with its own schedules.
+something is republishing an occurrence that already happened.
 
 ## What the services now report
 
