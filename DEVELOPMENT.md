@@ -27,7 +27,8 @@ the occurrence, an operation and an outbox command in ONE transaction. It requir
 `RATATOSKR__DATABASE__URL`, applies no schema, and reads no `RATATOSKR__BUS__*` variable at
 all: it publishes into the outbox and `ratatoskr-edge` runs the only pump (ADR-0013). The
 single-host deployment profile is in `deploy/` — three systemd units, two PostgreSQL role files,
-the NATS server configuration with its one nkey identity, a logrotate file and a scrape fragment —
+the NATS server configuration with its least-privilege nkey identities, a logrotate file and a
+scrape fragment —
 and `services/edge/tests/deployment_profile.rs` compares the parts of it a binary could
 contradict.
 
@@ -186,8 +187,10 @@ cargo test --workspace --locked
 cargo test -p ratatoskr-platform-core --locked --test config_validation
 ```
 
-No test opens a network socket to anything but `127.0.0.1`, starts a container, or reads a
-credential. Production credentials are never required for the default tests.
+No test opens a network socket to anything but `127.0.0.1` or reads a production credential. The
+NATS permission-matrix test starts one disposable local `nats:2-alpine` container, generates its own
+short-lived NKeys, and removes both container and seed-bearing fixture directory before returning.
+Production credentials are never required for the default tests.
 
 Configuration tests use `figment::Jail`, which gives each test an isolated environment and working
 directory. They cannot use `std::env::set_var`: it is `unsafe` in edition 2024 and the workspace

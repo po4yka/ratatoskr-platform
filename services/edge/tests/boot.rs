@@ -16,6 +16,10 @@
     reason = "assertions in a test binary"
 )]
 
+use std::sync::Mutex;
+
+use async_nats::jetstream;
+use platform_eventing::{EVENT_STREAM, NatsPublisher, StreamSpec, TELEGRAM_NOTIFICATION_CONSUMER};
 use platform_persistence::test_support::TestDatabase;
 use std::io::{Read, Write as _};
 use std::net::TcpStream;
@@ -31,6 +35,9 @@ const READY_TIMEOUT: Duration = Duration::from_secs(30);
 /// Between readiness polls.
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
 
+/// Serializes the tests that start edge against the fixed deployment stream names.
+static EDGE_BOOT_LOCK: Mutex<()> = Mutex::new(());
+
 /// B-1. Each role starts on its documented environment, reports ready on its documented admin
 /// port, and exits `0` on `SIGTERM` after the drain.
 ///
@@ -38,6 +45,7 @@ const POLL_INTERVAL: Duration = Duration::from_millis(50);
 /// point — those ports are the ones `DEVELOPMENT.md` tells an operator to use.
 #[test]
 fn each_role_boots_on_its_documented_configuration_and_reports_ready() {
+    let _edge_boot = EDGE_BOOT_LOCK.lock().expect("the edge boot lock");
     // `DEVELOPMENT.md`, "Local run": edge, with a public listener AND a database. Since milestone 5
     // every route edge serves reads or writes one, so it refuses to start without it — a process
     // that reported itself ready and then failed every request would be worse than one that did not
@@ -77,6 +85,206 @@ fn each_role_boots_on_its_documented_configuration_and_reports_ready() {
         &[("RATATOSKR__DATABASE__URL", &database_url())],
         9466,
     );
+}
+
+/// B-10. Edge owns the fixed notification durable that Telegram later opens with a narrowly
+/// permissioned identity.
+#[test]
+fn edge_preprovisions_the_telegram_notification_consumer() {
+    let _edge_boot = EDGE_BOOT_LOCK.lock().expect("the edge boot lock");
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("a fixture runtime");
+    let database = runtime
+        .block_on(TestDatabase::create())
+        .expect("a prepared database");
+
+    runtime.block_on(async {
+        let publisher = NatsPublisher::connect(&bus_url())
+            .await
+            .expect("a test JetStream server");
+        publisher
+            .ensure_stream(&StreamSpec::event_stream())
+            .await
+            .expect("the event stream");
+        let stream = publisher
+            .context()
+            .get_stream(EVENT_STREAM)
+            .await
+            .expect("the event stream exists");
+        let _ = stream
+            .delete_consumer("ratatoskr_telegram_notifications")
+            .await;
+    });
+
+    boots(
+        "ratatoskr-edge",
+        &[
+            ("RATATOSKR__PUBLIC__BIND", "127.0.0.1:8098"),
+            ("RATATOSKR__ADMIN__BIND", "127.0.0.1:9471"),
+            ("RATATOSKR__DATABASE__URL", &database.url()),
+            ("RATATOSKR__BUS__URL", &bus_url()),
+        ],
+        9471,
+    );
+
+    runtime.block_on(async {
+        let publisher = NatsPublisher::connect(&bus_url())
+            .await
+            .expect("the test JetStream server remains reachable");
+        let stream = publisher
+            .context()
+            .get_stream(EVENT_STREAM)
+            .await
+            .expect("the event stream exists");
+        let consumer: jetstream::consumer::PullConsumer = stream
+            .get_consumer("ratatoskr_telegram_notifications")
+            .await
+            .expect("edge must pre-provision the Telegram notification durable");
+        let config = &consumer.cached_info().config;
+        assert_eq!(config.filter_subject, "evt.platform.notification.raised.v1");
+        assert_eq!(config.ack_policy, jetstream::consumer::AckPolicy::Explicit);
+        assert!(
+            config.deliver_subject.is_none(),
+            "the durable must be pull-only"
+        );
+    });
+
+    runtime
+        .block_on(database.cleanup())
+        .expect("the fixture database must drop");
+}
+
+/// B-11. Edge refuses to report ready when the operator-created Telegram durable would deliver a
+/// different event class than the fixed contract permits.
+#[test]
+fn edge_refuses_a_mismatched_telegram_notification_consumer() {
+    let _edge_boot = EDGE_BOOT_LOCK.lock().expect("the edge boot lock");
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("a fixture runtime");
+    let database = runtime
+        .block_on(TestDatabase::create())
+        .expect("a prepared database");
+
+    runtime.block_on(async {
+        let publisher = NatsPublisher::connect(&bus_url())
+            .await
+            .expect("a test JetStream server");
+        publisher
+            .ensure_stream(&StreamSpec::event_stream())
+            .await
+            .expect("the event stream");
+        let stream = publisher
+            .context()
+            .get_stream(EVENT_STREAM)
+            .await
+            .expect("the event stream exists");
+        let _ = stream.delete_consumer(TELEGRAM_NOTIFICATION_CONSUMER).await;
+        stream
+            .get_or_create_consumer(
+                TELEGRAM_NOTIFICATION_CONSUMER,
+                jetstream::consumer::pull::Config {
+                    durable_name: Some(TELEGRAM_NOTIFICATION_CONSUMER.to_owned()),
+                    filter_subject: "evt.foreign.notification.v1".to_owned(),
+                    ack_policy: jetstream::consumer::AckPolicy::Explicit,
+                    ..jetstream::consumer::pull::Config::default()
+                },
+            )
+            .await
+            .expect("the deliberately mismatched durable");
+    });
+
+    let (ready, status, log) = observe_edge_startup(&[
+        ("RATATOSKR__PUBLIC__BIND", "127.0.0.1:8099"),
+        ("RATATOSKR__ADMIN__BIND", "127.0.0.1:9472"),
+        ("RATATOSKR__DATABASE__URL", &database.url()),
+        ("RATATOSKR__BUS__URL", &bus_url()),
+    ]);
+
+    runtime.block_on(async {
+        let publisher = NatsPublisher::connect(&bus_url())
+            .await
+            .expect("the test JetStream server remains reachable");
+        let stream = publisher
+            .context()
+            .get_stream(EVENT_STREAM)
+            .await
+            .expect("the event stream exists");
+        let consumer: jetstream::consumer::PullConsumer = stream
+            .get_consumer(TELEGRAM_NOTIFICATION_CONSUMER)
+            .await
+            .expect("edge must leave the mismatched durable in place for operator recovery");
+        assert_eq!(
+            consumer.cached_info().config.filter_subject,
+            "evt.foreign.notification.v1",
+            "startup refusal must not reconcile or reset the durable"
+        );
+        stream
+            .delete_consumer(TELEGRAM_NOTIFICATION_CONSUMER)
+            .await
+            .expect("cleaning up the mismatched durable");
+    });
+    runtime
+        .block_on(database.cleanup())
+        .expect("the fixture database must drop");
+
+    assert!(!ready, "edge accepted the mismatched durable\n{log}");
+    assert!(
+        !status.success(),
+        "edge did not refuse the mismatched durable\n{log}"
+    );
+    assert!(
+        log.contains(TELEGRAM_NOTIFICATION_CONSUMER),
+        "the safe startup error did not name the mismatched durable\n{log}"
+    );
+}
+
+fn observe_edge_startup(env: &[(&str, &str)]) -> (bool, std::process::ExitStatus, String) {
+    let path = built_binary("ratatoskr-edge");
+    let mut child = Command::new(&path)
+        .envs(env.iter().copied())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap_or_else(|error| panic!("{} could not be spawned: {error}", path.display()));
+
+    let deadline = Instant::now() + READY_TIMEOUT;
+    let mut ready = false;
+    while Instant::now() < deadline {
+        if child
+            .try_wait()
+            .expect("the edge process can be observed")
+            .is_some()
+        {
+            break;
+        }
+        if probe_ready(9472).is_some_and(|response| {
+            response.starts_with("HTTP/1.1 200") && response.contains("\"state\":\"ready\"")
+        }) {
+            ready = true;
+            break;
+        }
+        sleep(POLL_INTERVAL);
+    }
+    if child
+        .try_wait()
+        .expect("the edge process can be observed")
+        .is_none()
+    {
+        terminate(&child);
+    }
+    let status = child
+        .wait()
+        .expect("waiting for edge after startup observation");
+    let log = format!(
+        "{}{}",
+        strip_ansi(&drain(child.stdout.take())),
+        drain(child.stderr.take())
+    );
+    (ready, status, log)
 }
 
 /// Where edge's bus is. Matches `compose.yaml`, like the database below.

@@ -30,6 +30,7 @@ base64.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]
+async-nats.workspace = true
 ratatoskr-platform-persistence = { workspace = true, features = ["test-support"] }
 tokio = { workspace = true, features = ["rt", "macros"] }
 

@@ -1980,6 +1980,7 @@ dependencies = [
 name = "ratatoskr-edge"
 version = "0.1.0"
 dependencies = [
+ "async-nats",
  "axum",
  "base64",
  "jiff",
@@ -2121,6 +2122,7 @@ dependencies = [
  "futures-util",
  "jiff",
  "metrics",
+ "nkeys",
  "ratatoskr-event-envelope",
  "ratatoskr-identifiers",
  "ratatoskr-platform-core",
