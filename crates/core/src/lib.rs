@@ -19,7 +19,7 @@ pub mod config;
 pub mod error;
 pub mod role;
 
-pub use crate::capability::{Capability, Deployment, Requirement};
+pub use crate::capability::{Capability, DependencyAvailability, Deployment, Requirement};
 pub use crate::config::{
     BusConfig, ConfigError, DatabaseConfig, GatewayConfig, GatewayRouteBudget, GatewayRouteBudgets,
     GatewayRouteClass, GatewayRouteConfig, IdentityConfig, PlatformConfig, Violation,

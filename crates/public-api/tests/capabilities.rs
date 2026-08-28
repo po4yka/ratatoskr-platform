@@ -12,13 +12,15 @@
     reason = "assertions in a test binary"
 )]
 
-use std::sync::Arc;
+use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex};
 
 use axum::Router;
 use axum::body::Body;
+use axum::routing::get;
 use http::{Request, StatusCode};
 use http_body_util::BodyExt as _;
-use platform_core::config::PublicConfig;
+use platform_core::config::{GatewayConfig, GatewayRouteClass, GatewayRouteConfig, PublicConfig};
 use platform_core::{Capability, RuntimeRole};
 use platform_http::{HttpState, RuntimeState};
 use platform_identity::{NewSession, SessionKind};
@@ -29,6 +31,85 @@ use ratatoskr_operational_contracts::{
     SCHEDULES_INSPECT_CAPABILITY,
 };
 use tower::ServiceExt as _;
+
+#[derive(Clone, Default)]
+struct RecordedGauges(Arc<Mutex<BTreeMap<String, f64>>>);
+
+struct GaugeRecorder(RecordedGauges);
+
+impl metrics::Recorder for GaugeRecorder {
+    fn describe_counter(
+        &self,
+        _: metrics::KeyName,
+        _: Option<metrics::Unit>,
+        _: metrics::SharedString,
+    ) {
+    }
+
+    fn describe_gauge(
+        &self,
+        _: metrics::KeyName,
+        _: Option<metrics::Unit>,
+        _: metrics::SharedString,
+    ) {
+    }
+
+    fn describe_histogram(
+        &self,
+        _: metrics::KeyName,
+        _: Option<metrics::Unit>,
+        _: metrics::SharedString,
+    ) {
+    }
+
+    fn register_counter(&self, _: &metrics::Key, _: &metrics::Metadata<'_>) -> metrics::Counter {
+        metrics::Counter::noop()
+    }
+
+    fn register_gauge(&self, key: &metrics::Key, _: &metrics::Metadata<'_>) -> metrics::Gauge {
+        let capability = key
+            .labels()
+            .find(|label| label.key() == "capability")
+            .map(|label| label.value().to_owned())
+            .unwrap_or_default();
+        metrics::Gauge::from_arc(Arc::new(RecordingGauge {
+            capability,
+            recorded: self.0.clone(),
+        }))
+    }
+
+    fn register_histogram(
+        &self,
+        _: &metrics::Key,
+        _: &metrics::Metadata<'_>,
+    ) -> metrics::Histogram {
+        metrics::Histogram::noop()
+    }
+}
+
+struct RecordingGauge {
+    capability: String,
+    recorded: RecordedGauges,
+}
+
+impl metrics::GaugeFn for RecordingGauge {
+    fn increment(&self, value: f64) {
+        let mut values = self.recorded.0.lock().expect("uncontended recorder");
+        *values.entry(self.capability.clone()).or_default() += value;
+    }
+
+    fn decrement(&self, value: f64) {
+        self.increment(-value);
+    }
+
+    fn set(&self, value: f64) {
+        self.recorded
+            .0
+            .lock()
+            .expect("uncontended recorder")
+            .insert(self.capability.clone(), value);
+    }
+}
 
 const CREDENTIAL: &str = "capabilities-credential-000000000000";
 const AUDIENCE: &str = "edge";
@@ -311,6 +392,8 @@ fn every_capability_names_a_route_this_build_serves() {
     for capability in Capability::ALL {
         let required = match capability {
             Capability::ContentSubmit => "/v1/captures",
+            Capability::LibraryReadState => "/v1/library/items/{analysis_id}/read-state",
+            Capability::LibrarySearch => "/v1/library/search",
             Capability::TelegramMiniApp => "/v1/sessions/telegram",
             // A new variant arrives here and fails until somebody names the route it promises,
             // which is the point: the vocabulary may not grow ahead of the route tree.
@@ -394,4 +477,131 @@ async fn every_documented_path_is_served() {
             );
         }
     }
+}
+
+fn knowledge_gateway(listener: std::net::SocketAddr) -> GatewayConfig {
+    GatewayConfig {
+        routes: BTreeMap::from([(
+            "knowledge".to_owned(),
+            GatewayRouteConfig {
+                prefix: "/v1/k".to_owned(),
+                listener,
+                class: Some(GatewayRouteClass::Control),
+                capabilities_path: "/v1/capabilities".to_owned(),
+                archive_receipt_path: "/v1/ai-archives/receipt".to_owned(),
+            },
+        )]),
+        ..GatewayConfig::default()
+    }
+}
+
+async fn stub(router: Router) -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("a loopback listener");
+    let address = listener.local_addr().expect("a listener address");
+    let task = tokio::spawn(async move {
+        axum::serve(listener, router)
+            .await
+            .expect("the fixture server serves");
+    });
+    (address, task)
+}
+
+fn sampled(state: &ApiState) -> BTreeMap<String, f64> {
+    let values = RecordedGauges::default();
+    metrics::with_local_recorder(&GaugeRecorder(values.clone()), || {
+        platform_public_api::capabilities::sample(state);
+    });
+    values.0.lock().expect("uncontended recorder").clone()
+}
+
+/// Library capabilities use the last background Knowledge observation, never a request-path probe.
+#[tokio::test]
+async fn library_capabilities_follow_last_knowledge_observation() {
+    let harness = TestDatabase::create().await.expect("a test database");
+    seed(harness.pool(), CREDENTIAL).await;
+    let (address, task) = stub(Router::new().route(
+        "/v1/capabilities",
+        get(|| async {
+            axum::Json(serde_json::json!({
+                "service": "knowledge",
+                "capabilities": ["library.search", "library.read_state"]
+            }))
+        }),
+    ))
+    .await;
+    let mut state = deployment(&harness, true, true);
+    state.gateway = platform_public_api::gateway::Gateway::from_config(&knowledge_gateway(address));
+    state.gateway.refresh_capabilities().await;
+
+    let (status, healthy) = send(&app(state.clone()), ask(Some(CREDENTIAL))).await;
+    assert_eq!(status, StatusCode::OK, "{healthy}");
+    let healthy_names = names(&healthy);
+    assert!(
+        healthy_names.contains(&"library.search".to_owned()),
+        "{healthy}"
+    );
+    assert!(
+        healthy_names.contains(&"library.read_state".to_owned()),
+        "{healthy}"
+    );
+    let healthy_gauges = sampled(&state);
+    assert_eq!(healthy_gauges.get("library.search"), Some(&1.0));
+    assert_eq!(healthy_gauges.get("library.read_state"), Some(&1.0));
+
+    task.abort();
+    state.gateway.refresh_capabilities().await;
+    let (status, unhealthy_body) = send(&app(state.clone()), ask(Some(CREDENTIAL))).await;
+    assert_eq!(status, StatusCode::OK, "{unhealthy_body}");
+    let stale_names = names(&unhealthy_body);
+    assert!(
+        !stale_names.contains(&"library.search".to_owned()),
+        "{unhealthy_body}"
+    );
+    assert!(
+        !stale_names.contains(&"library.read_state".to_owned()),
+        "{unhealthy_body}"
+    );
+    let stale_gauges = sampled(&state);
+    assert_eq!(stale_gauges.get("library.search"), Some(&0.0));
+    assert_eq!(stale_gauges.get("library.read_state"), Some(&0.0));
+}
+
+/// A reachable service with a partial or unrelated document is not the required Knowledge surface.
+#[tokio::test]
+async fn library_capabilities_require_both_declared_knowledge_surfaces() {
+    let harness = TestDatabase::create().await.expect("a test database");
+    seed(harness.pool(), CREDENTIAL).await;
+    let (address, task) = stub(Router::new().route(
+        "/v1/capabilities",
+        get(|| async {
+            axum::Json(serde_json::json!({
+                "service": "knowledge",
+                "capabilities": ["library.search"]
+            }))
+        }),
+    ))
+    .await;
+    let mut state = deployment(&harness, true, true);
+    state.gateway = platform_public_api::gateway::Gateway::from_config(&knowledge_gateway(address));
+    state.gateway.refresh_capabilities().await;
+
+    let (status, body) = send(&app(state.clone()), ask(Some(CREDENTIAL))).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let capability_names = names(&body);
+    assert!(
+        !capability_names.contains(&"library.search".to_owned()),
+        "{body}"
+    );
+    assert!(
+        !capability_names.contains(&"library.read_state".to_owned()),
+        "{body}"
+    );
+    let gauges = sampled(&state);
+    assert_eq!(gauges.get("library.search"), Some(&0.0));
+    assert_eq!(gauges.get("library.read_state"), Some(&0.0));
+
+    task.abort();
+    harness.cleanup().await.expect("cleanup");
 }
