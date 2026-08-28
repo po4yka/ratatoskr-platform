@@ -20,8 +20,9 @@ use std::time::Duration;
 
 use async_nats::jetstream;
 use platform_eventing::{
-    NatsPublisher, SOCIAL_CAPTURE_CONSUMERS, StreamSpec, StreamState, WhenFull,
-    ensure_social_capture_consumers,
+    NatsPublisher, SOCIAL_CAPTURE_CONSUMERS, StreamSpec, StreamState,
+    TELEGRAM_NOTIFICATION_CONSUMER, TELEGRAM_NOTIFICATION_SUBJECT, WhenFull,
+    ensure_social_capture_consumers, ensure_telegram_notification_consumer,
 };
 use uuid::Uuid;
 
@@ -289,4 +290,57 @@ async fn edge_preprovisions_each_fixed_social_browser_capture_consumer() {
         .delete_stream(&name)
         .await
         .expect("cleaning up");
+}
+
+/// S-8. Fixed pull consumers are idempotent, and delivery-policy drift is a startup error rather
+/// than a silent change in which historical messages a provider receives.
+#[tokio::test]
+async fn fixed_consumer_inventory_refuses_delivery_policy_drift() {
+    let publisher = NatsPublisher::connect(&nats_url())
+        .await
+        .expect("a broker; docker compose up -d");
+    let name = format!("t_{}", Uuid::now_v7().simple());
+    publisher
+        .ensure_stream(&StreamSpec::events(&name, vec![format!("{name}.>")]))
+        .await
+        .expect("the isolated event stream");
+
+    ensure_telegram_notification_consumer(publisher.context(), &name)
+        .await
+        .expect("the fixed durable is created");
+    ensure_telegram_notification_consumer(publisher.context(), &name)
+        .await
+        .expect("the matching durable is reused idempotently");
+
+    let stream = publisher
+        .context()
+        .get_stream(&name)
+        .await
+        .expect("the event stream");
+    stream
+        .delete_consumer(TELEGRAM_NOTIFICATION_CONSUMER)
+        .await
+        .expect("replacing the fixture durable");
+    stream
+        .create_consumer(jetstream::consumer::pull::Config {
+            durable_name: Some(TELEGRAM_NOTIFICATION_CONSUMER.to_owned()),
+            filter_subject: TELEGRAM_NOTIFICATION_SUBJECT.to_owned(),
+            deliver_policy: jetstream::consumer::DeliverPolicy::New,
+            ack_policy: jetstream::consumer::AckPolicy::Explicit,
+            ..jetstream::consumer::pull::Config::default()
+        })
+        .await
+        .expect("the deliberately mismatched durable");
+
+    let result = ensure_telegram_notification_consumer(publisher.context(), &name).await;
+    publisher
+        .context()
+        .delete_stream(&name)
+        .await
+        .expect("cleaning up");
+
+    assert!(
+        result.is_err(),
+        "a fixed consumer with a different delivery policy must be refused"
+    );
 }

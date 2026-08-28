@@ -101,9 +101,15 @@ pub const EVENT_SUBJECTS: &str = "evt.>";
 /// stream or skipping what arrived while the process was down.
 pub const EDGE_PROJECTION_CONSUMER: &str = "platform_edge_projection";
 
+/// The durable Telegram reads raised notification events through.
+pub const TELEGRAM_NOTIFICATION_CONSUMER: &str = "ratatoskr_telegram_notifications";
+
+/// The sole event subject delivered to [`TELEGRAM_NOTIFICATION_CONSUMER`].
+pub const TELEGRAM_NOTIFICATION_SUBJECT: &str = "evt.platform.notification.raised.v1";
+
 /// One provider-owned durable consumer that Edge creates before that provider can become ready.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct CommandConsumerSpec {
+pub struct FixedConsumerSpec {
     /// The stable durable cursor name, also used by its NATS permission stanza.
     pub durable_name: &'static str,
     /// The sole command subject this durable consumer may receive.
@@ -115,20 +121,25 @@ pub struct CommandConsumerSpec {
 /// Social identities can inspect and pull only their own durable. Giving them consumer-create
 /// authority would let a compromised identity choose a different filter and observe another
 /// provider's commands.
-pub const SOCIAL_CAPTURE_CONSUMERS: [CommandConsumerSpec; 3] = [
-    CommandConsumerSpec {
+pub const SOCIAL_CAPTURE_CONSUMERS: [FixedConsumerSpec; 3] = [
+    FixedConsumerSpec {
         durable_name: "ratatoskr_x_browser_capture",
         filter_subject: "cmd.x.capture.requested.v1",
     },
-    CommandConsumerSpec {
+    FixedConsumerSpec {
         durable_name: "ratatoskr_instagram_browser_capture",
         filter_subject: "cmd.instagram.capture.requested.v1",
     },
-    CommandConsumerSpec {
+    FixedConsumerSpec {
         durable_name: "threads_browser_capture",
         filter_subject: "cmd.threads.capture.requested.v1",
     },
 ];
+
+const TELEGRAM_NOTIFICATION_CONSUMERS: [FixedConsumerSpec; 1] = [FixedConsumerSpec {
+    durable_name: TELEGRAM_NOTIFICATION_CONSUMER,
+    filter_subject: TELEGRAM_NOTIFICATION_SUBJECT,
+}];
 
 /// The default retention: seven days.
 ///
@@ -289,11 +300,19 @@ pub async fn ensure_social_capture_consumers(
     context: &jetstream::Context,
     stream_name: &str,
 ) -> Result<(), EventingError> {
+    ensure_fixed_consumers(context, stream_name, &SOCIAL_CAPTURE_CONSUMERS).await
+}
+
+async fn ensure_fixed_consumers(
+    context: &jetstream::Context,
+    stream_name: &str,
+    specs: &[FixedConsumerSpec],
+) -> Result<(), EventingError> {
     let stream = context
         .get_stream(stream_name)
         .await
         .map_err(|error| EventingError::Bus(error.to_string()))?;
-    for spec in SOCIAL_CAPTURE_CONSUMERS {
+    for spec in specs {
         let consumer = stream
             .get_or_create_consumer(
                 spec.durable_name,
@@ -311,12 +330,27 @@ pub async fn ensure_social_capture_consumers(
             || config.filter_subject != spec.filter_subject
             || config.ack_policy != jetstream::consumer::AckPolicy::Explicit
             || config.deliver_subject.is_some()
+            || config.deliver_policy != jetstream::consumer::DeliverPolicy::All
+            || config.replay_policy != jetstream::consumer::ReplayPolicy::Instant
         {
             return Err(EventingError::Bus(format!(
-                "the pre-provisioned command consumer {} does not match its fixed provider filter",
+                "the pre-provisioned consumer {} does not match its fixed filter and delivery policy",
                 spec.durable_name
             )));
         }
     }
     Ok(())
+}
+
+/// Ensures the fixed Telegram notification durable exists on the Platform-owned event stream.
+///
+/// # Errors
+///
+/// Returns [`EventingError::Bus`] when the stream or consumer configuration cannot be read or
+/// created, or when an existing durable does not match its fixed event filter.
+pub async fn ensure_telegram_notification_consumer(
+    context: &jetstream::Context,
+    stream_name: &str,
+) -> Result<(), EventingError> {
+    ensure_fixed_consumers(context, stream_name, &TELEGRAM_NOTIFICATION_CONSUMERS).await
 }

@@ -259,6 +259,62 @@ fn social_owner_bus_identities_are_limited_to_their_capture_subjects() {
     }
 }
 
+/// D-7. Telegram can only inspect, fetch from, and acknowledge its pre-provisioned notification
+/// durable. It cannot create a consumer, publish a domain fact, or subscribe directly to events.
+#[test]
+fn telegram_bus_identity_is_limited_to_its_notification_durable() {
+    let raw = deploy("nats/ratatoskr.conf");
+    let config: String = raw
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.starts_with('#'))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let stanza = nkey_stanza(&config, "RATATOSKR_TELEGRAM");
+    let stream = platform_eventing::EVENT_STREAM;
+    let durable = platform_eventing::TELEGRAM_NOTIFICATION_CONSUMER;
+
+    for permission in [
+        format!("$JS.API.CONSUMER.INFO.{stream}.{durable}"),
+        format!("$JS.API.CONSUMER.MSG.NEXT.{stream}.{durable}"),
+        format!("$JS.ACK.{stream}.{durable}.>"),
+        "_INBOX.>".to_owned(),
+    ] {
+        assert!(
+            stanza.contains(&permission),
+            "Telegram lacks required permission {permission}"
+        );
+    }
+    for forbidden in [
+        "$JS.API.>",
+        "cmd.>",
+        "evt.>",
+        platform_eventing::TELEGRAM_NOTIFICATION_SUBJECT,
+    ] {
+        assert!(
+            !stanza.contains(forbidden),
+            "Telegram must not receive broad or direct access through {forbidden}"
+        );
+    }
+}
+
+/// D-8. The operator guide and runtime use one fixed Telegram consumer contract and one seed path.
+#[test]
+fn telegram_consumer_profile_matches_runtime_constants() {
+    let readme = deploy("nats/README.md");
+    for value in [
+        platform_eventing::EVENT_STREAM,
+        platform_eventing::TELEGRAM_NOTIFICATION_CONSUMER,
+        platform_eventing::TELEGRAM_NOTIFICATION_SUBJECT,
+        "/etc/ratatoskr/telegram.nkey",
+    ] {
+        assert!(
+            readme.contains(value),
+            "the NATS operator guide does not name `{value}`"
+        );
+    }
+}
+
 /// D-7. Domain services have only their workspace-allocated loopback listeners; Edge is the sole
 /// public composition point and its template names every prefix/port/class explicitly.
 #[test]

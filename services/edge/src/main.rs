@@ -16,7 +16,7 @@ use platform_core::RuntimeRole;
 use platform_core::config::{PlatformConfig, RetentionConfig};
 use platform_eventing::{
     COMMAND_STREAM, EDGE_PROJECTION_CONSUMER, NatsPublisher, StreamSpec,
-    ensure_social_capture_consumers, pump,
+    ensure_social_capture_consumers, ensure_telegram_notification_consumer, pump,
 };
 use platform_http::{RuntimeState, Serving};
 use platform_operations::ProgressProjection;
@@ -150,33 +150,7 @@ impl platform_http::PublicRoutes for EdgeRoutes {
             None => NatsPublisher::connect(bus.url.as_str()).await,
         }
         .map_err(|error| format!("the bus could not be reached: {error}"))?;
-        // The names and limits are the deployment profile's, stated once in
-        // `platform_eventing::stream` so that this process, the NATS permission file and the
-        // operator commands in `deploy/README.md` cannot disagree about them.
-        let command_stream = StreamSpec::command_stream();
-        let state = publisher
-            .ensure_stream(&command_stream)
-            .await
-            .map_err(|error| format!("the command stream could not be declared: {error}"))?;
-        // A stream that already exists keeps the limits it was created with, and the client says
-        // nothing about it. A deployment carrying corrected limits would otherwise report success
-        // and change nothing — which for a command stream means `DiscardPolicy::Old` quietly
-        // deleting commands a client was told had been accepted.
-        if let platform_eventing::StreamState::Existing { mismatches } = state
-            && !mismatches.is_empty()
-        {
-            tracing::warn!(
-                stream = COMMAND_STREAM,
-                mismatches = ?mismatches,
-                "the command stream on the broker was created with different limits and was NOT \
-                 reconciled; update or delete it on the broker"
-            );
-        }
-        ensure_social_capture_consumers(publisher.context(), COMMAND_STREAM)
-            .await
-            .map_err(|error| {
-                format!("the fixed social browser-capture consumers could not be declared: {error}")
-            })?;
+        ensure_fixed_bus_topology(&publisher).await?;
         let mut state = platform_public_api::ApiState::new(
             database.clone(),
             AUDIENCE,
@@ -236,6 +210,53 @@ impl platform_http::PublicRoutes for EdgeRoutes {
             tasks,
         })
     }
+}
+
+async fn ensure_fixed_bus_topology(publisher: &NatsPublisher) -> Result<(), String> {
+    // The names and limits are stated once in `platform_eventing::stream`, so this process, the
+    // NATS permission file, and the operator commands cannot disagree about them.
+    let command_stream = StreamSpec::command_stream();
+    let state = publisher
+        .ensure_stream(&command_stream)
+        .await
+        .map_err(|error| format!("the command stream could not be declared: {error}"))?;
+    // Existing streams are deliberately reported, not reconciled: changing or deleting one is an
+    // operator action because it can discard work or change retention.
+    if let platform_eventing::StreamState::Existing { mismatches } = state
+        && !mismatches.is_empty()
+    {
+        tracing::warn!(
+            stream = COMMAND_STREAM,
+            mismatches = ?mismatches,
+            "the command stream on the broker was created with different limits and was NOT \
+             reconciled; update or delete it on the broker"
+        );
+    }
+    ensure_social_capture_consumers(publisher.context(), COMMAND_STREAM)
+        .await
+        .map_err(|error| {
+            format!("the fixed social browser-capture consumers could not be declared: {error}")
+        })?;
+
+    let event_stream = StreamSpec::event_stream();
+    let event_state = publisher
+        .ensure_stream(&event_stream)
+        .await
+        .map_err(|error| format!("the event stream could not be declared: {error}"))?;
+    if let platform_eventing::StreamState::Existing { mismatches } = event_state
+        && !mismatches.is_empty()
+    {
+        tracing::warn!(
+            stream = platform_eventing::EVENT_STREAM,
+            mismatches = ?mismatches,
+            "the event stream on the broker was created with different limits and was NOT reconciled"
+        );
+    }
+    ensure_telegram_notification_consumer(publisher.context(), platform_eventing::EVENT_STREAM)
+        .await
+        .map_err(|error| {
+            format!("the fixed Telegram notification consumer could not be declared: {error}")
+        })
 }
 
 /// Move due outbox rows onto the bus, forever.
