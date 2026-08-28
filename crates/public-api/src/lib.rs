@@ -35,6 +35,7 @@ pub mod captures;
 pub mod credentials;
 pub mod devices;
 pub mod gateway;
+pub mod library;
 pub mod oauth;
 pub mod operations;
 pub mod sessions;
@@ -119,6 +120,11 @@ impl ApiState {
             database_reachable: self.health.database_reachable().unwrap_or(false),
             bus_configured: self.bus_configured,
             assertion_key_configured: self.assertion_key.is_some(),
+            knowledge: if self.gateway.knowledge_available() {
+                platform_core::DependencyAvailability::Available
+            } else {
+                platform_core::DependencyAvailability::Unavailable
+            },
         }
     }
 }
@@ -177,6 +183,14 @@ fn table() -> Vec<Endpoint> {
         Endpoint {
             doc: operations::LIST_DOC,
             handler: get(operations::list),
+        },
+        Endpoint {
+            doc: library::SEARCH_DOC,
+            handler: get(library::search),
+        },
+        Endpoint {
+            doc: library::READ_STATE_DOC,
+            handler: put(library::replace_read_state),
         },
         Endpoint {
             doc: operations::CANCEL_DOC,
@@ -322,6 +336,10 @@ fn register_schemas(generator: &mut schemars::SchemaGenerator) {
     generator.subschema_for::<ratatoskr_operation_contracts::OperationSnapshot>();
     generator.subschema_for::<ratatoskr_error_contracts::ErrorEnvelope>();
     generator.subschema_for::<operations::OperationList>();
+    generator.subschema_for::<library::LibraryPage>();
+    generator.subschema_for::<library::LibraryItem>();
+    generator.subschema_for::<library::ReplaceReadState>();
+    generator.subschema_for::<library::ReadStateResource>();
     generator.subschema_for::<ratatoskr_operational_contracts::OperationInspectionPage>();
     generator.subschema_for::<ratatoskr_operational_contracts::ScheduleInspectionPage>();
     generator.subschema_for::<ratatoskr_operational_contracts::AuditEventPage>();

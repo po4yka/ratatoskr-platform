@@ -61,8 +61,12 @@ route family implementing it — one enum variant, one requirement, one line in 
 every variant to a served path. Adding it earlier would put a name on the public surface that the
 public surface cannot honour, and no amount of documentation makes that safe.
 
-So at milestone 7 the vocabulary is one entry, `content.submit`, and the endpoint's answer is short
-and true. A longer answer would only be longer.
+The initial milestone shipped only `content.submit`. The library façade later added
+`library.search` and `library.read_state`; both name real served routes and additionally require the
+last background Knowledge observation to name service `knowledge` and declare both library
+capabilities. A reachable endpoint with a partial or unrelated document fails closed.
+`telegram.mini_app` names the implemented assertion-exchange route and requires its verification
+key. The vocabulary remains short and true.
 
 ### The endpoint is authenticated
 
@@ -93,10 +97,10 @@ the API's behaviour and the operator does not decide that.
 - A capability that is enabled and healthy for one principal is enabled and healthy for all of them
   today. When the first grant-gated capability lands, the response becomes per-principal and the
   route already authenticates, so nothing about the contract changes.
-- The endpoint cannot describe a sibling service's health. It describes Platform's ability to
-  *accept* the request and get the command onto the bus, which is the only half Platform can
-  truthfully speak for. Whether `ratatoskr-extractor` is running is reported by the operation, not
-  by this document.
+- A synchronous typed façade may include the last background observation of its required sibling;
+  the public request path never probes that dependency. Asynchronous capture capabilities still
+  describe Platform's ability to accept and publish work, while operation progress reports the
+  downstream outcome.
 
 ## Security and privacy
 
@@ -115,8 +119,9 @@ removed.
 ## Validation
 
 `crates/public-api/tests/capabilities.rs` covers: the document's shape against S12; the array sorted
-and stable; `content.submit` absent with no bus configured; absent when the last database probe
-failed; and present when both hold. A separate test asserts that every variant of `Capability`
+and stable; `content.submit` absent with no bus configured; all database-backed capabilities absent
+when the last database probe failed; and both library capabilities and their gauges following the
+last background Knowledge observation. A separate test asserts that every variant of `Capability`
 resolves to a path the router actually serves, which is the drift gate in the direction that
 matters.
 

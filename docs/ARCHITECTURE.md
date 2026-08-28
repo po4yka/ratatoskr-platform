@@ -411,6 +411,15 @@ The capabilities endpoint decouples clients from deployment composition.
 
 Capabilities reflect enabled, healthy, and authorized features. They do not reveal internal service topology or secrets.
 
+`library.search` and `library.read_state` additionally require the last background Knowledge
+observation to be healthy. A successful observation must name service `knowledge` and declare both
+library capabilities; partial or unrelated documents fail closed. Public requests never probe
+Knowledge to decide capability availability.
+The corresponding routes derive tenant `user:<internal-user-uuid>` from the authenticated principal,
+delegate only to fixed loopback paths, and return bounded public projections with `Cache-Control:
+no-store`. Search ranking and read-state persistence remain owned by Knowledge. The fleet-visible
+contract is `library-search-read-state` in the `ratatoskr-workspace` OpenSpec store.
+
 ## 13. Persistence
 
 Platform uses SQLx and explicit queries. Transactions group:

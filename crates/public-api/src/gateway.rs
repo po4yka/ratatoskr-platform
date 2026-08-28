@@ -2,6 +2,7 @@
 
 use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use axum::body::Body;
@@ -58,6 +59,7 @@ pub struct Gateway {
     routes: Arc<BTreeMap<String, GatewayRouteConfig>>,
     budgets: GatewayRouteBudgets,
     capabilities: Arc<tokio::sync::RwLock<BTreeMap<String, ServiceCapabilities>>>,
+    knowledge_available: Arc<AtomicBool>,
 }
 
 impl core::fmt::Debug for Gateway {
@@ -79,12 +81,14 @@ impl Gateway {
     /// Build the one pooled loopback client for this process.
     #[must_use]
     pub fn from_config(config: &GatewayConfig) -> Self {
-        let connector = HttpConnector::new();
+        let mut connector = HttpConnector::new();
+        connector.set_connect_timeout(Some(Duration::from_secs(5)));
         Self {
             client: Client::builder(TokioExecutor::new()).build(connector),
             routes: Arc::new(config.routes.clone()),
             budgets: config.budgets.clone(),
             capabilities: Arc::new(tokio::sync::RwLock::new(BTreeMap::new())),
+            knowledge_available: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -110,6 +114,49 @@ impl Gateway {
     #[must_use]
     pub const fn transfer_budget(&self) -> GatewayRouteBudget {
         self.budgets.transfer
+    }
+
+    /// The finite control-plane response budget used by dedicated typed clients.
+    #[must_use]
+    pub(crate) const fn control_budget(&self) -> GatewayRouteBudget {
+        self.budgets.control
+    }
+
+    /// A configured service listener, available only to fixed-path typed clients in this crate.
+    #[must_use]
+    pub(crate) fn service_listener(&self, service: &str) -> Option<std::net::SocketAddr> {
+        self.routes.get(service).map(|route| route.listener)
+    }
+
+    /// Execute one fixed-path typed control request under the configured response-header budget.
+    pub(crate) async fn request_control(
+        &self,
+        request: hyper::Request<Body>,
+    ) -> Result<hyper::Response<hyper::body::Incoming>, FailureKind> {
+        match tokio::time::timeout(
+            Duration::from_secs(self.budgets.control.response_timeout_seconds),
+            self.client.request(request),
+        )
+        .await
+        {
+            Ok(Ok(response)) => Ok(response),
+            Ok(Err(_)) => {
+                tracing::warn!(
+                    dependency = "knowledge",
+                    class = "unavailable",
+                    "typed dependency request failed"
+                );
+                Err(FailureKind::UpstreamUnavailable)
+            }
+            Err(_) => {
+                tracing::warn!(
+                    dependency = "knowledge",
+                    class = "timeout",
+                    "typed dependency response headers timed out"
+                );
+                Err(FailureKind::UpstreamTimeout)
+            }
+        }
     }
 
     /// Whether a configured transfer-class receiver can accept an archive for this provider.
@@ -138,6 +185,12 @@ impl Gateway {
                     })
             })
             .collect()
+    }
+
+    /// Whether the last background Knowledge observation succeeded.
+    #[must_use]
+    pub fn knowledge_available(&self) -> bool {
+        self.knowledge_available.load(Ordering::Acquire)
     }
 
     /// Refresh every configured service document on a bounded background cadence.
@@ -169,6 +222,12 @@ impl Gateway {
                     _ => None,
                 };
             let now = jiff::Timestamp::now().to_string();
+            if service == "knowledge" {
+                self.knowledge_available.store(
+                    document.as_ref().is_some_and(knowledge_surface_available),
+                    Ordering::Release,
+                );
+            }
             let mut snapshots = self.capabilities.write().await;
             if let Some(document) = document {
                 snapshots.insert(
@@ -260,6 +319,25 @@ impl Gateway {
             }
         }
     }
+}
+
+fn knowledge_surface_available(document: &serde_json::Value) -> bool {
+    if document.get("service").and_then(serde_json::Value::as_str) != Some("knowledge") {
+        return false;
+    }
+    let Some(capabilities) = document
+        .get("capabilities")
+        .and_then(serde_json::Value::as_array)
+    else {
+        return false;
+    };
+    ["library.search", "library.read_state"]
+        .into_iter()
+        .all(|required| {
+            capabilities
+                .iter()
+                .any(|value| value.as_str() == Some(required))
+        })
 }
 
 /// Authenticate at Edge, mint bounded claims, and stream the request and response unchanged.

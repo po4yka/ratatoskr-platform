@@ -198,11 +198,21 @@ Telegram Mini App authentication follows the same rule: `ratatoskr-telegram` val
 {
   "api_version": "1.0",
   "minimum_client_versions": { "web": "1.0", "mobile": "1.0" },
-  "capabilities": ["content.submit"]
+  "capabilities": ["content.submit", "library.read_state", "library.search"]
 }
 ```
 
 The array is short because the vocabulary is closed and holds only names this build serves a route for. [ADR-0008](docs/adr/0008-capability-discovery.md) records why: a name on that list is a promise the route tree has to keep, so `github.catalog` and its siblings enter it in the pull request that adds the routes behind them, not before. A capability is reported when the deployment has the components it needs, those components answered their last health probe, and the caller is authorized for it — so `content.submit` disappears from a deployment with no event bus, whose captures would be accepted and never published.
+
+The session-authenticated library façade serves `GET /v1/library/search` and idempotent
+`PUT /v1/library/items/{analysis_id}/read-state`. Edge derives Knowledge tenant authority only from
+the authenticated internal user, bounds every request and response, and exposes minimized result
+summaries rather than the loopback owner's schema or errors. `library.search` and
+`library.read_state` appear only while the database-backed session path and the last background
+Knowledge observation is healthy. That observation accepts only a document naming service
+`knowledge` and declaring both `library.search` and `library.read_state`; a reachable endpoint with
+a partial or unrelated document cannot enable either route family. The cross-repository contract is
+`library-search-read-state` in the `ratatoskr-workspace` OpenSpec store.
 
 `GET /v1/status` is the anonymous public availability surface. It returns four stable groups: API,
 storage, command delivery, and connected services. Cached observations supply every value. It preserves

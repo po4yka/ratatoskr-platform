@@ -4,7 +4,8 @@
 
 Public REST from web/mobile/extension/export-agent; anonymous cached status reads; owner-authorized
 operational inspection; OAuth callbacks; validated Telegram identity assertions; generic
-webhooks/captures; domain operation events.
+webhooks/captures; bounded session-authenticated library search and read-state replacement; domain
+operation events.
 
 ## Outbound
 
@@ -20,6 +21,11 @@ commands; session/device events; scheduled commands; audit records.
 - Assertions validate issuer, signature, audience, expiry, nonce, and subject binding.
 - Pagination, cancellation, optimistic concurrency, upload limits, and partial success are explicit.
 - Internal provider/database errors are mapped to safe public codes.
+- `/v1/library/search` accepts only bounded `q`, `read_state`, `limit`, and `offset`; tenant identity
+  is derived from the session, and results omit Knowledge-owned tenant and owner context.
+- `/v1/library/items/{analysis_id}/read-state` replaces only read state, is idempotent, and maps a
+  foreign and missing analysis to the same not-found envelope. Both library routes conform to
+  workspace contract `library-search-read-state`.
 - `/v1/status` reads cached observations only, requires no credential, sets `Cache-Control:
   no-store`, and never exposes operator-health detail or deployment topology.
 - Every `/v1/admin/*` request requires a session and re-checks the live `platform.owner` grant.

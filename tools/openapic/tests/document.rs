@@ -390,3 +390,64 @@ fn operational_and_status_security_is_exact() {
         "the committed OpenAPI document is stale; regenerate it after the route inventory is exact"
     );
 }
+
+/// Library search and read-state are complete session-authenticated generated contracts.
+#[test]
+fn library_routes_are_session_authenticated_and_schema_complete() {
+    let committed: Value = serde_json::from_str(
+        &std::fs::read_to_string(path()).expect("the committed OpenAPI document"),
+    )
+    .expect("valid OpenAPI JSON");
+    let paths = committed["paths"].as_object().expect("paths");
+    let search = &paths["/v1/library/search"]["get"];
+    let replace = &paths["/v1/library/items/{analysis_id}/read-state"]["put"];
+
+    for (method, operation) in [("search", search), ("replace", replace)] {
+        assert_eq!(
+            operation["security"][0]["sessionBearer"],
+            serde_json::json!([]),
+            "{method} requires a session"
+        );
+        assert!(
+            operation["responses"]["400"]["content"]["application/json"]["schema"]["$ref"]
+                .as_str()
+                .is_some_and(|reference| reference.ends_with("/ErrorEnvelope")),
+            "{method} documents its stable invalid-request envelope"
+        );
+    }
+
+    let parameters = search["parameters"].as_array().expect("search parameters");
+    let names: BTreeSet<&str> = parameters
+        .iter()
+        .map(|parameter| parameter["name"].as_str().expect("a parameter name"))
+        .collect();
+    assert_eq!(
+        names,
+        ["limit", "offset", "q", "read_state"].into_iter().collect()
+    );
+    assert_eq!(
+        search["responses"]["200"]["content"]["application/json"]["schema"]["$ref"],
+        "#/components/schemas/LibraryPage"
+    );
+    assert_eq!(
+        replace["requestBody"]["content"]["application/json"]["schema"]["$ref"],
+        "#/components/schemas/ReplaceReadState"
+    );
+    assert_eq!(
+        replace["responses"]["200"]["content"]["application/json"]["schema"]["$ref"],
+        "#/components/schemas/ReadStateResource"
+    );
+
+    let schemas = committed["components"]["schemas"]
+        .as_object()
+        .expect("schemas");
+    for schema in [
+        "LibraryItem",
+        "LibraryPage",
+        "ReadState",
+        "ReadStateResource",
+        "ReplaceReadState",
+    ] {
+        assert!(schemas.contains_key(schema), "missing {schema}");
+    }
+}

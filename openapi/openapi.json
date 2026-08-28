@@ -701,6 +701,86 @@
         "title": "InspectionCursor",
         "type": "string"
       },
+      "LibraryItem": {
+        "description": "One minimized public library result.",
+        "properties": {
+          "analysis_id": {
+            "description": "Accepted Knowledge analysis identity.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "document_id": {
+            "description": "Canonical document identity.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "read_state": {
+            "$ref": "#/components/schemas/ReadState",
+            "description": "The effective user read state."
+          },
+          "score": {
+            "description": "A finite positive relevance score, absent for browse results.",
+            "format": "float",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "snippet": {
+            "description": "A bounded result excerpt, absent for browse results.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title": {
+            "description": "A bounded display title.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "analysis_id",
+          "document_id",
+          "title",
+          "read_state"
+        ],
+        "type": "object"
+      },
+      "LibraryPage": {
+        "description": "A bounded public page.",
+        "properties": {
+          "has_more": {
+            "description": "Whether at least one later result exists.",
+            "type": "boolean"
+          },
+          "items": {
+            "description": "Ordered result summaries.",
+            "items": {
+              "$ref": "#/components/schemas/LibraryItem"
+            },
+            "type": "array"
+          },
+          "limit": {
+            "description": "Applied page size.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "offset": {
+            "description": "Applied zero-based offset.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "limit",
+          "offset",
+          "has_more"
+        ],
+        "type": "object"
+      },
       "MediaType": {
         "description": "Internet media type of stored bytes, without parameters.",
         "examples": [
@@ -1408,6 +1488,35 @@
           }
         ]
       },
+      "ReadState": {
+        "description": "The effective read state of an accepted analysis.",
+        "oneOf": [
+          {
+            "const": "unread",
+            "description": "The user has not marked the analysis as read.",
+            "type": "string"
+          },
+          {
+            "const": "read",
+            "description": "The user has marked the analysis as read.",
+            "type": "string"
+          }
+        ]
+      },
+      "ReadStateResource": {
+        "additionalProperties": false,
+        "description": "Authoritative read state returned after replacement.",
+        "properties": {
+          "read_state": {
+            "$ref": "#/components/schemas/ReadState",
+            "description": "Stored effective state."
+          }
+        },
+        "required": [
+          "read_state"
+        ],
+        "type": "object"
+      },
       "RefreshSession": {
         "description": "What a refreshing client presents.",
         "properties": {
@@ -1450,6 +1559,20 @@
         "required": [
           "provider",
           "state"
+        ],
+        "type": "object"
+      },
+      "ReplaceReadState": {
+        "additionalProperties": false,
+        "description": "The complete read-state resource accepted by `PUT`.",
+        "properties": {
+          "read_state": {
+            "$ref": "#/components/schemas/ReadState",
+            "description": "Replacement state."
+          }
+        },
+        "required": [
+          "read_state"
         ],
         "type": "object"
       },
@@ -3104,6 +3227,232 @@
         "summary": "Push a signal from a registered source",
         "tags": [
           "ingest"
+        ]
+      }
+    },
+    "/v1/library/items/{analysis_id}/read-state": {
+      "put": {
+        "description": "Idempotently replaces the complete read-state resource for a caller-owned accepted analysis.",
+        "operationId": "replaceLibraryReadState",
+        "parameters": [
+          {
+            "description": "Opaque accepted analysis identity.",
+            "in": "path",
+            "name": "analysis_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReplaceReadState"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadStateResource"
+                }
+              }
+            },
+            "description": "The authoritative effective state."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The identifier or exact body is invalid."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The session does not authenticate here."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The item is absent or belongs to another principal."
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Knowledge returned an invalid response."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Knowledge is unavailable."
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Knowledge exceeded its response budget."
+          }
+        },
+        "security": [
+          {
+            "sessionBearer": []
+          }
+        ],
+        "summary": "Replace one library item's read state",
+        "tags": [
+          "library"
+        ]
+      }
+    },
+    "/v1/library/search": {
+      "get": {
+        "description": "Returns a bounded page owned by the authenticated principal. Tenant identity is derived by Edge and cannot be supplied by the caller.",
+        "operationId": "searchLibrary",
+        "parameters": [
+          {
+            "description": "Optional search text, at most 512 Unicode scalar values.",
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Optional effective state: read or unread.",
+            "in": "query",
+            "name": "read_state",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Page size from 1 through 100; defaults to 25.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "uint32",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Non-negative zero-based page offset; defaults to 0.",
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LibraryPage"
+                }
+              }
+            },
+            "description": "A bounded library page."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "One or more search parameters are invalid."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The session does not authenticate here."
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Knowledge returned an invalid response."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Knowledge is unavailable."
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Knowledge exceeded its response budget."
+          }
+        },
+        "security": [
+          {
+            "sessionBearer": []
+          }
+        ],
+        "summary": "Search or browse the caller's library",
+        "tags": [
+          "library"
         ]
       }
     },

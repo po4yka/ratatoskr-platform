@@ -20,6 +20,10 @@
 pub enum Capability {
     /// `content.submit` — submitting an address for capture, at `POST /v1/captures`.
     ContentSubmit,
+    /// `library.read_state` — replacing one caller-owned analysis read state.
+    LibraryReadState,
+    /// `library.search` — searching or browsing the caller-owned library.
+    LibrarySearch,
     /// `telegram.mini_app` — exchanging a `ratatoskr-telegram` identity assertion for a session, at
     /// `POST /v1/sessions/telegram`.
     TelegramMiniApp,
@@ -29,13 +33,20 @@ impl Capability {
     /// Every capability, in wire order — sorted, so two consecutive responses from an unchanged
     /// deployment are byte-identical. The array length is the documented count, so adding a variant
     /// without extending this does not compile.
-    pub const ALL: [Self; 2] = [Self::ContentSubmit, Self::TelegramMiniApp];
+    pub const ALL: [Self; 4] = [
+        Self::ContentSubmit,
+        Self::LibraryReadState,
+        Self::LibrarySearch,
+        Self::TelegramMiniApp,
+    ];
 
     /// The public name. This is a contract: a client gates a feature on this exact string.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::ContentSubmit => "content.submit",
+            Self::LibraryReadState => "library.read_state",
+            Self::LibrarySearch => "library.search",
             Self::TelegramMiniApp => "telegram.mini_app",
         }
     }
@@ -49,6 +60,7 @@ impl Capability {
             // outbox is the durable half — but the command is then never published and the
             // operation never progresses. From the client's side that is not a working feature.
             Self::ContentSubmit => Requirement::DatabaseAndBus,
+            Self::LibraryReadState | Self::LibrarySearch => Requirement::DatabaseAndKnowledge,
             // No bus: exchanging an assertion for a session touches the database and nothing else.
             // The key is what makes it possible at all — without one, Platform cannot verify what
             // `ratatoskr-telegram` says and the route refuses everything (ADR-0011).
@@ -76,6 +88,8 @@ pub enum Requirement {
     DatabaseAndBus,
     /// A reachable database and a configured assertion key.
     DatabaseAndAssertionKey,
+    /// A reachable database and a healthy last background observation of Knowledge.
+    DatabaseAndKnowledge,
 }
 
 impl Requirement {
@@ -88,8 +102,22 @@ impl Requirement {
             Self::DatabaseAndAssertionKey => {
                 deployment.database_reachable && deployment.assertion_key_configured
             }
+            Self::DatabaseAndKnowledge => {
+                deployment.database_reachable
+                    && matches!(deployment.knowledge, DependencyAvailability::Available)
+            }
         }
     }
+}
+
+/// Last-observed availability of a synchronous domain dependency.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DependencyAvailability {
+    /// No successful observation exists, or the latest observation failed.
+    #[default]
+    Unavailable,
+    /// The latest background observation succeeded.
+    Available,
 }
 
 /// What this deployment has, as far as a capability is concerned.
@@ -108,4 +136,6 @@ pub struct Deployment {
     pub bus_configured: bool,
     /// Whether an assertion verification key is configured.
     pub assertion_key_configured: bool,
+    /// The last background Knowledge capability observation.
+    pub knowledge: DependencyAvailability,
 }
