@@ -15,7 +15,7 @@ use jiff::SignedDuration;
 use platform_core::RuntimeRole;
 use platform_core::config::{PlatformConfig, RetentionConfig};
 use platform_eventing::{
-    COMMAND_STREAM, EDGE_PROJECTION_CONSUMER, NatsPublisher, StreamSpec,
+    COMMAND_STREAM, EDGE_PROJECTION_CONSUMER, NatsPublisher, StreamSpec, ensure_github_consumers,
     ensure_social_capture_consumers, ensure_telegram_notification_consumer, pump,
 };
 use platform_http::{RuntimeState, Serving};
@@ -256,7 +256,14 @@ async fn ensure_fixed_bus_topology(publisher: &NatsPublisher) -> Result<(), Stri
         .await
         .map_err(|error| {
             format!("the fixed Telegram notification consumer could not be declared: {error}")
-        })
+        })?;
+    ensure_github_consumers(
+        publisher.context(),
+        COMMAND_STREAM,
+        platform_eventing::EVENT_STREAM,
+    )
+    .await
+    .map_err(|error| format!("the fixed GitHub consumers could not be declared: {error}"))
 }
 
 /// Move due outbox rows onto the bus, forever.

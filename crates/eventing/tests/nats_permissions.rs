@@ -1,4 +1,4 @@
-//! Real-broker proof for the least-privilege Telegram notification identity.
+//! Real-broker proof for least-privilege application identities.
 
 #![allow(
     clippy::expect_used,
@@ -11,7 +11,8 @@ use async_nats::jetstream;
 use futures_util::StreamExt as _;
 use nkeys::KeyPair;
 use platform_eventing::{
-    EVENT_STREAM, TELEGRAM_NOTIFICATION_CONSUMER, TELEGRAM_NOTIFICATION_SUBJECT,
+    COMMAND_STREAM, EVENT_STREAM, GITHUB_CONSUMERS, TELEGRAM_NOTIFICATION_CONSUMER,
+    TELEGRAM_NOTIFICATION_SUBJECT,
 };
 use std::path::PathBuf;
 use std::process::Command;
@@ -27,6 +28,7 @@ struct NatsFixture {
     directory: PathBuf,
     url: String,
     admin_seed: String,
+    github_seed: String,
     telegram_seed: String,
 }
 
@@ -40,9 +42,14 @@ impl NatsFixture {
         std::fs::create_dir_all(&directory).expect("the disposable NATS directory");
 
         let admin = KeyPair::new_user();
+        let github = KeyPair::new_user();
         let telegram = KeyPair::new_user();
         let telegram_public = include_telegram_identity.then(|| telegram.public_key());
-        let config = nats_config(&admin.public_key(), telegram_public.as_deref());
+        let config = nats_config(
+            &admin.public_key(),
+            telegram_public.as_deref(),
+            Some(&github.public_key()),
+        );
         let config_path = directory.join("nats.conf");
         std::fs::write(&config_path, config).expect("the disposable NATS configuration");
 
@@ -100,6 +107,7 @@ impl NatsFixture {
             directory,
             url: format!("nats://127.0.0.1:{port}"),
             admin_seed: admin.seed().expect("the disposable admin seed"),
+            github_seed: github.seed().expect("the disposable GitHub seed"),
             telegram_seed: telegram.seed().expect("the disposable Telegram seed"),
         }
     }
@@ -123,7 +131,11 @@ impl NatsFixture {
     }
 }
 
-fn nats_config(admin_public: &str, telegram_public: Option<&str>) -> String {
+fn nats_config(
+    admin_public: &str,
+    telegram_public: Option<&str>,
+    github_public: Option<&str>,
+) -> String {
     let stream = EVENT_STREAM;
     let consumer = TELEGRAM_NOTIFICATION_CONSUMER;
     let telegram_user = telegram_public.map_or_else(String::new, |public_key| {
@@ -144,7 +156,41 @@ fn nats_config(admin_public: &str, telegram_public: Option<&str>) -> String {
         }}"#
         )
     });
-    let admin_separator = if telegram_public.is_some() { "," } else { "" };
+    let github_user = github_public.map_or_else(String::new, |public_key| {
+        let permissions = GITHUB_CONSUMERS
+            .iter()
+            .flat_map(|spec| {
+                [
+                    format!(
+                        "\"$JS.API.CONSUMER.INFO.{}.{}\"",
+                        spec.stream_name, spec.durable_name
+                    ),
+                    format!(
+                        "\"$JS.API.CONSUMER.MSG.NEXT.{}.{}\"",
+                        spec.stream_name, spec.durable_name
+                    ),
+                    format!("\"$JS.ACK.{}.{}.>\"", spec.stream_name, spec.durable_name),
+                ]
+            })
+            .chain([
+                "\"evt.knowledge.repository_analysis.requested.v1\"".to_owned(),
+                "\"cmd.vault.target.desired.v1\"".to_owned(),
+            ])
+            .collect::<Vec<_>>()
+            .join(",\n                        ");
+        format!(
+            r#"
+        {{
+            nkey: {public_key}
+            permissions: {{
+                publish: {{ allow: [{permissions}] }}
+                subscribe: {{ allow: ["_INBOX.>"] }}
+            }}
+        }}"#
+        )
+    });
+    let telegram_separator = if telegram_public.is_some() { "," } else { "" };
+    let github_separator = if github_public.is_some() { "," } else { "" };
     format!(
         r"
 port: 4222
@@ -152,8 +198,9 @@ host: 0.0.0.0
 jetstream {{ store_dir: /data }}
 authorization {{
     users: [
-        {{ nkey: {admin_public} }}{admin_separator}
-        {telegram_user}
+        {{ nkey: {admin_public} }}{telegram_separator}
+        {telegram_user}{github_separator}
+        {github_user}
     ]
 }}
 "
@@ -240,6 +287,132 @@ async fn telegram_nkey_permission_matrix_is_enforced_by_nats() {
         assert!(
             !matches!(response, Ok(Ok(_))),
             "Telegram unexpectedly received a response after publishing to {forbidden}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn github_identity_can_use_only_declared_bus_paths() {
+    const OUTBOUND: [&str; 2] = [
+        "evt.knowledge.repository_analysis.requested.v1",
+        "cmd.vault.target.desired.v1",
+    ];
+
+    let fixture = NatsFixture::start(true);
+    let admin = fixture.connect(&fixture.admin_seed).await;
+    let admin_jetstream = jetstream::new(admin.clone());
+    admin_jetstream
+        .create_stream(jetstream::stream::Config {
+            name: COMMAND_STREAM.to_owned(),
+            subjects: vec!["cmd.>".to_owned()],
+            ..jetstream::stream::Config::default()
+        })
+        .await
+        .expect("the admin creates the command stream");
+    admin_jetstream
+        .create_stream(jetstream::stream::Config {
+            name: EVENT_STREAM.to_owned(),
+            subjects: vec!["evt.>".to_owned()],
+            ..jetstream::stream::Config::default()
+        })
+        .await
+        .expect("the admin creates the event stream");
+    for spec in GITHUB_CONSUMERS {
+        let stream = admin_jetstream
+            .get_stream(spec.stream_name)
+            .await
+            .expect("the owning stream exists");
+        stream
+            .create_consumer(jetstream::consumer::pull::Config {
+                durable_name: Some(spec.durable_name.to_owned()),
+                filter_subject: spec.filter_subject.to_owned(),
+                ack_policy: jetstream::consumer::AckPolicy::Explicit,
+                ack_wait: spec.ack_wait,
+                max_deliver: spec.max_deliver,
+                ..jetstream::consumer::pull::Config::default()
+            })
+            .await
+            .expect("the admin creates the fixed GitHub durable");
+        admin_jetstream
+            .publish(spec.filter_subject, "inbound".into())
+            .await
+            .expect("the admin publishes the inbound fixture")
+            .await
+            .expect("the inbound fixture is stored");
+    }
+
+    let github = fixture.connect(&fixture.github_seed).await;
+    let github_jetstream = jetstream::new(github.clone());
+    for subject in OUTBOUND {
+        github_jetstream
+            .publish(subject, "outbound".into())
+            .await
+            .expect("GitHub may publish its declared family")
+            .await
+            .expect("the declared outbound message is stored");
+    }
+    for spec in GITHUB_CONSUMERS {
+        let consumer: jetstream::consumer::PullConsumer = github_jetstream
+            .get_consumer_from_stream(spec.durable_name, spec.stream_name)
+            .await
+            .expect("GitHub may inspect only its fixed durable");
+        let mut messages = consumer.messages().await.expect("GitHub may fetch");
+        let message = timeout(REQUEST_TIMEOUT, messages.next())
+            .await
+            .expect("the allowed fetch returns promptly")
+            .expect("the fixture delivery exists")
+            .expect("the fixture delivery is valid");
+        message.ack().await.expect("GitHub may acknowledge");
+    }
+
+    assert_github_denials(&admin, &github, &github_jetstream).await;
+}
+
+async fn assert_github_denials(
+    admin: &async_nats::Client,
+    github: &async_nats::Client,
+    github_jetstream: &jetstream::Context,
+) {
+    let foreign = "evt.social.source.captured.v1";
+    let mut wildcard = github
+        .subscribe("evt.>")
+        .await
+        .expect("the client creates a local subscription handle");
+    github
+        .flush()
+        .await
+        .expect("the server processes the subscribe");
+    admin
+        .publish(foreign, "foreign".into())
+        .await
+        .expect("the admin publishes a foreign event");
+    assert!(
+        timeout(REQUEST_TIMEOUT, wildcard.next()).await.is_err(),
+        "GitHub must not receive a direct wildcard subscription"
+    );
+
+    let foreign_result: Result<jetstream::consumer::PullConsumer, _> = github_jetstream
+        .get_consumer_from_stream("foreign", EVENT_STREAM)
+        .await;
+    assert!(
+        foreign_result.is_err(),
+        "GitHub must not inspect an unrelated durable"
+    );
+    for forbidden in [
+        foreign.to_owned(),
+        format!("$JS.API.CONSUMER.DURABLE.CREATE.{EVENT_STREAM}.arbitrary"),
+        format!("$JS.API.STREAM.PURGE.{EVENT_STREAM}"),
+        format!("$JS.API.STREAM.DELETE.{EVENT_STREAM}"),
+        format!("$JS.API.CONSUMER.DELETE.{EVENT_STREAM}.ratatoskr_github_analysis_completed"),
+    ] {
+        let response = timeout(
+            REQUEST_TIMEOUT + Duration::from_millis(250),
+            github.request(forbidden.clone(), "{}".into()),
+        )
+        .await;
+        assert!(
+            !matches!(response, Ok(Ok(_))),
+            "GitHub unexpectedly received a response after publishing to {forbidden}"
         );
     }
 }

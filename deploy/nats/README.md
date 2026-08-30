@@ -16,6 +16,13 @@ acknowledge only `ratatoskr_telegram_notifications` on `ratatoskr_events`, filte
 `evt.platform.notification.raised.v1`. Edge pre-provisions and validates that pull consumer;
 Telegram never receives consumer-create authority and must refuse readiness if the durable differs.
 
+`ratatoskr-github` has its own narrow identity. It publishes only
+`evt.knowledge.repository_analysis.requested.v1` and `cmd.vault.target.desired.v1`, and it may
+inspect, pull, and acknowledge only `ratatoskr_github_sync`,
+`ratatoskr_github_analysis_completed`, `ratatoskr_github_analysis_failed`, and
+`ratatoskr_github_vault_policy_ack`. Edge pre-provisions and validates all four; GitHub receives no
+consumer-create, stream-management, wildcard-subscribe, or foreign-publish authority.
+
 The Threads identity additionally publishes only its durable facts:
 `evt.platform.operation.reported.v1`, `evt.social.source.captured.v1`, and
 `evt.social.source.updated.v1`. X and Instagram receive no event-publish permission until they
@@ -50,8 +57,9 @@ sets the primary group and does not add the user's other memberships, so a unit 
 `Group=ratatoskr` produces a process that cannot read this file. That is not hypothetical — it is
 how milestone 10's first start failed, with "the bus credential could not be read".
 
-Repeat generation and installation for `telegram.nkey`, `x.nkey`, `instagram.nkey`, and
-`threads.nkey`, using their matching service group. Telegram's seed is installed as:
+Repeat generation and installation for `telegram.nkey`, `github.nkey`, `x.nkey`,
+`instagram.nkey`, and `threads.nkey`, using their matching service group. Telegram's seed is
+installed as:
 
 ```bash
 sudo install -m 0640 -o root -g ratatoskr-telegram-dispatcher \
@@ -61,6 +69,14 @@ sudo install -m 0640 -o root -g ratatoskr-telegram-dispatcher \
 Put only each public `U...` key in `ratatoskr.conf`, replacing its matching
 `UREPLACE_ME_WITH_THE_PUBLIC_NKEY_OF_RATATOSKR_*` token before reloading NATS. The seed stays
 outside Git and is referenced only by the owning service's NKey seed-path setting.
+
+GitHub's seed is installed for its dedicated role; the checked-in configuration contains only its
+public key placeholder:
+
+```bash
+sudo install -m 0640 -o root -g ratatoskr-github \
+  /path/to/generated-github-seed /etc/ratatoskr/github.nkey
+```
 
 The seed never appears in the environment, in a URL or in a log line: the unit names its **path**,
 startup rule V16 refuses a relative path or a missing file, and `NatsPublisher::connect_with_nkey`
@@ -98,9 +114,34 @@ that module's constants and not a second copy of them:
 | `ratatoskr_commands` | `cmd.>` | **refuse the publish** — the outbox is the durable copy and a refusal becomes a visible retry | 1 GiB / 7 days |
 | `ratatoskr_events` | `evt.>` | drop the oldest — an event is a fact its producer already recorded | 1 GiB / 7 days |
 
-Durable consumers on `ratatoskr_events` are `platform_edge_projection` and the pull consumer
-`ratatoskr_telegram_notifications`, whose sole filter is
-`evt.platform.notification.raised.v1` and whose acknowledgement policy is explicit.
+Durable consumers on `ratatoskr_events` include `platform_edge_projection`,
+`ratatoskr_telegram_notifications`, and GitHub's three independent Knowledge/Vault feedback
+cursors. GitHub's command cursor `ratatoskr_github_sync` lives on `ratatoskr_commands`. All four
+GitHub consumers use explicit acknowledgements, deliver-all replay, a 120-second acknowledgement
+wait, and ten maximum broker deliveries.
+
+## Provisioning and inspection for GitHub
+
+1. Generate `github.nkey`, install its seed at `/etc/ratatoskr/github.nkey`, replace only the
+   GitHub public-key placeholder, and validate the candidate NATS configuration.
+2. Reload NATS, then restart Edge so it creates or verifies both streams and all four GitHub
+   durables. A mismatched existing durable makes Edge refuse startup and is not mutated.
+3. Inspect each durable with Edge's operator credential before starting GitHub:
+
+   ```bash
+   nats --server nats://127.0.0.1:4222 --nkey /etc/ratatoskr/edge.nkey \
+     consumer info ratatoskr_commands ratatoskr_github_sync
+   nats --server nats://127.0.0.1:4222 --nkey /etc/ratatoskr/edge.nkey \
+     consumer info ratatoskr_events ratatoskr_github_analysis_completed
+   nats --server nats://127.0.0.1:4222 --nkey /etc/ratatoskr/edge.nkey \
+     consumer info ratatoskr_events ratatoskr_github_analysis_failed
+   nats --server nats://127.0.0.1:4222 --nkey /etc/ratatoskr/edge.nkey \
+     consumer info ratatoskr_events ratatoskr_github_vault_policy_ack
+   ```
+
+   Confirm each exact filter, explicit acknowledgement, deliver-all replay, 120-second wait and
+   ten-delivery ceiling before starting GitHub. Rollback stops GitHub first and retains every
+   cursor; do not delete, recreate, purge, or reset a durable.
 
 ## Provisioning and inspection for Telegram
 

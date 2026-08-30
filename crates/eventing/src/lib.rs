@@ -37,9 +37,10 @@ pub use crate::publisher::{NatsPublisher, PublishError, Publisher};
 pub use crate::pump::{PumpReport, run_once};
 pub use crate::stream::{
     COMMAND_STREAM, COMMAND_SUBJECTS, EDGE_PROJECTION_CONSUMER, EVENT_STREAM, EVENT_SUBJECTS,
-    FixedConsumerSpec, SOCIAL_CAPTURE_CONSUMERS, StreamSpec, StreamState,
-    TELEGRAM_NOTIFICATION_CONSUMER, TELEGRAM_NOTIFICATION_SUBJECT, WhenFull,
-    ensure_social_capture_consumers, ensure_telegram_notification_consumer,
+    FixedConsumerSpec, GITHUB_CONSUMERS, GithubConsumerSpec, SOCIAL_CAPTURE_CONSUMERS, StreamSpec,
+    StreamState, TELEGRAM_NOTIFICATION_CONSUMER, TELEGRAM_NOTIFICATION_SUBJECT, WhenFull,
+    ensure_github_consumers, ensure_social_capture_consumers,
+    ensure_telegram_notification_consumer,
 };
 
 /// A failure in the outbox, the inbox, or the subject grammar.

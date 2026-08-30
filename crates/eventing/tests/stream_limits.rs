@@ -22,7 +22,8 @@ use async_nats::jetstream;
 use platform_eventing::{
     NatsPublisher, SOCIAL_CAPTURE_CONSUMERS, StreamSpec, StreamState,
     TELEGRAM_NOTIFICATION_CONSUMER, TELEGRAM_NOTIFICATION_SUBJECT, WhenFull,
-    ensure_social_capture_consumers, ensure_telegram_notification_consumer,
+    ensure_github_consumers, ensure_social_capture_consumers,
+    ensure_telegram_notification_consumer,
 };
 use uuid::Uuid;
 
@@ -343,4 +344,90 @@ async fn fixed_consumer_inventory_refuses_delivery_policy_drift() {
         result.is_err(),
         "a fixed consumer with a different delivery policy must be refused"
     );
+}
+
+/// S-9. GitHub's four independent cursors have an exact bounded delivery policy, and a second
+/// provisioning pass reuses them without resetting their configuration or history.
+#[tokio::test]
+async fn github_durables_have_exact_stream_filters_and_delivery_limits() {
+    const ACK_WAIT: Duration = Duration::from_mins(2);
+    const MAX_DELIVER: i64 = 10;
+    const EXPECTED: [(&str, bool, &str); 4] = [
+        (
+            "ratatoskr_github_sync",
+            true,
+            "cmd.github.sync.requested.v1",
+        ),
+        (
+            "ratatoskr_github_analysis_completed",
+            false,
+            "evt.knowledge.repository_analysis.completed.v1",
+        ),
+        (
+            "ratatoskr_github_analysis_failed",
+            false,
+            "evt.knowledge.repository_analysis.failed.v1",
+        ),
+        (
+            "ratatoskr_github_vault_policy_ack",
+            false,
+            "evt.vault.backup_policy.acknowledged.v1",
+        ),
+    ];
+
+    let publisher = NatsPublisher::connect(&nats_url())
+        .await
+        .expect("a broker; docker compose up -d");
+    let command_stream = platform_eventing::COMMAND_STREAM.to_owned();
+    let event_stream = platform_eventing::EVENT_STREAM.to_owned();
+    publisher
+        .ensure_stream(&StreamSpec::command_stream())
+        .await
+        .expect("the Platform command stream");
+    publisher
+        .ensure_stream(&StreamSpec::event_stream())
+        .await
+        .expect("the Platform event stream");
+
+    ensure_github_consumers(publisher.context(), &command_stream, &event_stream)
+        .await
+        .expect("Platform preprovisions GitHub durables");
+    ensure_github_consumers(publisher.context(), &command_stream, &event_stream)
+        .await
+        .expect("matching GitHub durables are reused idempotently");
+
+    for (durable, is_command, filter) in EXPECTED {
+        let stream_name = if is_command {
+            &command_stream
+        } else {
+            &event_stream
+        };
+        let stream = publisher
+            .context()
+            .get_stream(stream_name)
+            .await
+            .expect("the owning stream exists");
+        let consumer: jetstream::consumer::PullConsumer = stream
+            .get_consumer(durable)
+            .await
+            .expect("the GitHub durable exists");
+        let config = &consumer.cached_info().config;
+        assert_eq!(config.durable_name.as_deref(), Some(durable));
+        assert_eq!(config.filter_subject, filter);
+        assert_eq!(config.ack_policy, jetstream::consumer::AckPolicy::Explicit);
+        assert_eq!(
+            config.deliver_policy,
+            jetstream::consumer::DeliverPolicy::All
+        );
+        assert_eq!(
+            config.replay_policy,
+            jetstream::consumer::ReplayPolicy::Instant
+        );
+        assert_eq!(config.ack_wait, ACK_WAIT);
+        assert_eq!(config.max_deliver, MAX_DELIVER);
+        assert!(
+            config.deliver_subject.is_none(),
+            "the durable is pull-based"
+        );
+    }
 }

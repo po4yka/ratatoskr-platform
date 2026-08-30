@@ -116,6 +116,56 @@ pub struct FixedConsumerSpec {
     pub filter_subject: &'static str,
 }
 
+/// One GitHub durable together with its owning Platform stream and finite delivery limits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GithubConsumerSpec {
+    /// The Platform-owned stream that stores this family.
+    pub stream_name: &'static str,
+    /// The stable durable cursor name granted to the GitHub identity.
+    pub durable_name: &'static str,
+    /// The only subject delivered through this durable.
+    pub filter_subject: &'static str,
+    /// How long one delivery may remain unacknowledged before redelivery.
+    pub ack_wait: Duration,
+    /// The finite broker delivery-attempt ceiling.
+    pub max_deliver: i64,
+}
+
+const GITHUB_ACK_WAIT: Duration = Duration::from_mins(2);
+const GITHUB_MAX_DELIVER: i64 = 10;
+
+/// GitHub's fixed command and event durable inventory.
+pub const GITHUB_CONSUMERS: [GithubConsumerSpec; 4] = [
+    GithubConsumerSpec {
+        stream_name: COMMAND_STREAM,
+        durable_name: "ratatoskr_github_sync",
+        filter_subject: "cmd.github.sync.requested.v1",
+        ack_wait: GITHUB_ACK_WAIT,
+        max_deliver: GITHUB_MAX_DELIVER,
+    },
+    GithubConsumerSpec {
+        stream_name: EVENT_STREAM,
+        durable_name: "ratatoskr_github_analysis_completed",
+        filter_subject: "evt.knowledge.repository_analysis.completed.v1",
+        ack_wait: GITHUB_ACK_WAIT,
+        max_deliver: GITHUB_MAX_DELIVER,
+    },
+    GithubConsumerSpec {
+        stream_name: EVENT_STREAM,
+        durable_name: "ratatoskr_github_analysis_failed",
+        filter_subject: "evt.knowledge.repository_analysis.failed.v1",
+        ack_wait: GITHUB_ACK_WAIT,
+        max_deliver: GITHUB_MAX_DELIVER,
+    },
+    GithubConsumerSpec {
+        stream_name: EVENT_STREAM,
+        durable_name: "ratatoskr_github_vault_policy_ack",
+        filter_subject: "evt.vault.backup_policy.acknowledged.v1",
+        ack_wait: GITHUB_ACK_WAIT,
+        max_deliver: GITHUB_MAX_DELIVER,
+    },
+];
+
 /// Provider-specific browser-capture consumers pre-provisioned by Platform.
 ///
 /// Social identities can inspect and pull only their own durable. Giving them consumer-create
@@ -308,36 +358,52 @@ async fn ensure_fixed_consumers(
     stream_name: &str,
     specs: &[FixedConsumerSpec],
 ) -> Result<(), EventingError> {
+    for spec in specs {
+        ensure_fixed_consumer(context, stream_name, spec, None).await?;
+    }
+    Ok(())
+}
+
+async fn ensure_fixed_consumer(
+    context: &jetstream::Context,
+    stream_name: &str,
+    spec: &FixedConsumerSpec,
+    delivery_limits: Option<(Duration, i64)>,
+) -> Result<(), EventingError> {
     let stream = context
         .get_stream(stream_name)
         .await
         .map_err(|error| EventingError::Bus(error.to_string()))?;
-    for spec in specs {
-        let consumer = stream
-            .get_or_create_consumer(
-                spec.durable_name,
-                jetstream::consumer::pull::Config {
-                    durable_name: Some(spec.durable_name.to_owned()),
-                    filter_subject: spec.filter_subject.to_owned(),
-                    ack_policy: jetstream::consumer::AckPolicy::Explicit,
-                    ..jetstream::consumer::pull::Config::default()
-                },
-            )
-            .await
-            .map_err(|error| EventingError::Bus(error.to_string()))?;
-        let config = &consumer.cached_info().config;
-        if config.durable_name.as_deref() != Some(spec.durable_name)
-            || config.filter_subject != spec.filter_subject
-            || config.ack_policy != jetstream::consumer::AckPolicy::Explicit
-            || config.deliver_subject.is_some()
-            || config.deliver_policy != jetstream::consumer::DeliverPolicy::All
-            || config.replay_policy != jetstream::consumer::ReplayPolicy::Instant
-        {
-            return Err(EventingError::Bus(format!(
-                "the pre-provisioned consumer {} does not match its fixed filter and delivery policy",
-                spec.durable_name
-            )));
-        }
+    let mut wanted = jetstream::consumer::pull::Config {
+        durable_name: Some(spec.durable_name.to_owned()),
+        filter_subject: spec.filter_subject.to_owned(),
+        ack_policy: jetstream::consumer::AckPolicy::Explicit,
+        ..jetstream::consumer::pull::Config::default()
+    };
+    if let Some((ack_wait, max_deliver)) = delivery_limits {
+        wanted.ack_wait = ack_wait;
+        wanted.max_deliver = max_deliver;
+    }
+    let consumer = stream
+        .get_or_create_consumer(spec.durable_name, wanted)
+        .await
+        .map_err(|error| EventingError::Bus(error.to_string()))?;
+    let config = &consumer.cached_info().config;
+    let delivery_limits_match = delivery_limits.is_none_or(|(ack_wait, max_deliver)| {
+        config.ack_wait == ack_wait && config.max_deliver == max_deliver
+    });
+    if config.durable_name.as_deref() != Some(spec.durable_name)
+        || config.filter_subject != spec.filter_subject
+        || config.ack_policy != jetstream::consumer::AckPolicy::Explicit
+        || config.deliver_subject.is_some()
+        || config.deliver_policy != jetstream::consumer::DeliverPolicy::All
+        || config.replay_policy != jetstream::consumer::ReplayPolicy::Instant
+        || !delivery_limits_match
+    {
+        return Err(EventingError::Bus(format!(
+            "the pre-provisioned consumer {} does not match its fixed filter and delivery policy",
+            spec.durable_name
+        )));
     }
     Ok(())
 }
@@ -353,4 +419,34 @@ pub async fn ensure_telegram_notification_consumer(
     stream_name: &str,
 ) -> Result<(), EventingError> {
     ensure_fixed_consumers(context, stream_name, &TELEGRAM_NOTIFICATION_CONSUMERS).await
+}
+
+/// Ensures GitHub's fixed command and event durables exist on Platform-owned streams.
+///
+/// # Errors
+///
+/// Returns [`EventingError::Bus`] when a stream or consumer cannot be inspected.
+pub async fn ensure_github_consumers(
+    context: &jetstream::Context,
+    command_stream_name: &str,
+    event_stream_name: &str,
+) -> Result<(), EventingError> {
+    for spec in GITHUB_CONSUMERS {
+        let stream_name = if spec.stream_name == COMMAND_STREAM {
+            command_stream_name
+        } else {
+            event_stream_name
+        };
+        ensure_fixed_consumer(
+            context,
+            stream_name,
+            &FixedConsumerSpec {
+                durable_name: spec.durable_name,
+                filter_subject: spec.filter_subject,
+            },
+            Some((spec.ack_wait, spec.max_deliver)),
+        )
+        .await?;
+    }
+    Ok(())
 }
