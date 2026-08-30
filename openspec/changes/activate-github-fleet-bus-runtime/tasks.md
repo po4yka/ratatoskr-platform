@@ -10,4 +10,4 @@
 
 ## 3. Verification
 
-- [ ] 3.1 Run `openspec validate activate-github-fleet-bus-runtime --strict`, inspect the complete diff for scope and secrets, commit only GHB-017 paths, and publish the authorized branch with exact local/remote SHA verification.
+- [x] 3.1 Run `openspec validate activate-github-fleet-bus-runtime --strict`, inspect the complete diff for scope and secrets, commit only GHB-017 paths, and publish the authorized branch with exact local/remote SHA verification.
