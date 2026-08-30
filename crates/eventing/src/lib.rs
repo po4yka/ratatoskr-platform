@@ -37,8 +37,10 @@ pub use crate::publisher::{NatsPublisher, PublishError, Publisher};
 pub use crate::pump::{PumpReport, run_once};
 pub use crate::stream::{
     COMMAND_STREAM, COMMAND_SUBJECTS, EDGE_PROJECTION_CONSUMER, EVENT_STREAM, EVENT_SUBJECTS,
-    FixedConsumerSpec, SOCIAL_CAPTURE_CONSUMERS, StreamSpec, StreamState,
-    TELEGRAM_NOTIFICATION_CONSUMER, TELEGRAM_NOTIFICATION_SUBJECT, WhenFull,
+    FixedConsumerSpec, KNOWLEDGE_CHANNEL_RECAP_CONSUMER, KNOWLEDGE_CHANNEL_RECAP_SUBJECT,
+    KNOWLEDGE_MAIN_CONSUMER, KNOWLEDGE_MAIN_SUBJECTS, KNOWLEDGE_TERMINAL_SUBJECTS,
+    SOCIAL_CAPTURE_CONSUMERS, StreamSpec, StreamState, TELEGRAM_NOTIFICATION_CONSUMER,
+    TELEGRAM_NOTIFICATION_SUBJECT, WhenFull, ensure_knowledge_consumers,
     ensure_social_capture_consumers, ensure_telegram_notification_consumer,
 };
 

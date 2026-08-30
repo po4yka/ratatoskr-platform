@@ -16,6 +16,14 @@ acknowledge only `ratatoskr_telegram_notifications` on `ratatoskr_events`, filte
 `evt.platform.notification.raised.v1`. Edge pre-provisions and validates that pull consumer;
 Telegram never receives consumer-create authority and must refuse readiness if the durable differs.
 
+`ratatoskr-knowledge` has one identity for two Platform-owned cursors. It can inspect, pull from,
+and acknowledge only `ratatoskr_knowledge_main` on `ratatoskr_events` and
+`ratatoskr_knowledge_channel_recap` on `ratatoskr_commands`; it can publish only the six terminal
+Knowledge facts listed in `platform_eventing::KNOWLEDGE_TERMINAL_SUBJECTS`. The primary durable uses
+the exact multi-filter inventory in `platform_eventing::KNOWLEDGE_MAIN_SUBJECTS`. Multi-filter
+consumers require NATS Server 2.10 or newer; verify the installed server with
+`nats-server --version` before reloading this profile.
+
 The Threads identity additionally publishes only its durable facts:
 `evt.platform.operation.reported.v1`, `evt.social.source.captured.v1`, and
 `evt.social.source.updated.v1`. X and Instagram receive no event-publish permission until they
@@ -50,12 +58,20 @@ sets the primary group and does not add the user's other memberships, so a unit 
 `Group=ratatoskr` produces a process that cannot read this file. That is not hypothetical — it is
 how milestone 10's first start failed, with "the bus credential could not be read".
 
-Repeat generation and installation for `telegram.nkey`, `x.nkey`, `instagram.nkey`, and
-`threads.nkey`, using their matching service group. Telegram's seed is installed as:
+Repeat generation and installation for `telegram.nkey`, `knowledge.nkey`, `x.nkey`,
+`instagram.nkey`, and `threads.nkey`, using their matching service group. Telegram's seed is
+installed as:
 
 ```bash
 sudo install -m 0640 -o root -g ratatoskr-telegram-dispatcher \
   /path/to/generated-telegram-seed /etc/ratatoskr/telegram.nkey
+```
+
+Knowledge's seed has the same boundary under its own service group:
+
+```bash
+sudo install -m 0640 -o root -g ratatoskr-knowledge \
+  /path/to/generated-knowledge-seed /etc/ratatoskr/knowledge.nkey
 ```
 
 Put only each public `U...` key in `ratatoskr.conf`, replacing its matching
@@ -101,6 +117,35 @@ that module's constants and not a second copy of them:
 Durable consumers on `ratatoskr_events` are `platform_edge_projection` and the pull consumer
 `ratatoskr_telegram_notifications`, whose sole filter is
 `evt.platform.notification.raised.v1` and whose acknowledgement policy is explicit.
+
+Edge also creates `ratatoskr_knowledge_main` on `ratatoskr_events` with the exact thirteen-filter
+inventory printed by `nats consumer info`, and `ratatoskr_knowledge_channel_recap` on
+`ratatoskr_commands` with the sole filter `cmd.knowledge.channel_digest_recap.requested.v1`. Both
+are pull consumers with explicit acknowledgements, `DeliverPolicy::All`, and instant replay.
+
+## Provisioning and inspection for Knowledge
+
+1. Generate `knowledge.nkey`, install its seed at `/etc/ratatoskr/knowledge.nkey`, replace the
+   Knowledge public-key placeholder in `ratatoskr.conf`, and validate both the server version and
+   candidate configuration.
+2. Reload NATS, then restart Edge. Edge creates missing Knowledge durables and refuses startup if
+   either existing durable differs; it never repairs or resets a cursor.
+3. Inspect both durables before starting Knowledge:
+
+   ```bash
+   nats --server nats://127.0.0.1:4222 --nkey /etc/ratatoskr/edge.nkey \
+     consumer info ratatoskr_events ratatoskr_knowledge_main
+   nats --server nats://127.0.0.1:4222 --nkey /etc/ratatoskr/edge.nkey \
+     consumer info ratatoskr_commands ratatoskr_knowledge_channel_recap
+   ```
+
+   Confirm the exact filter inventory, explicit acknowledgements, pull delivery, deliver-all, and
+   instant replay. Only then start `ratatoskr-knowledge` with its seed-path configuration pointing
+   at `/etc/ratatoskr/knowledge.nkey`.
+
+Rollback stops Knowledge work claims and the process first, then restores its prior binary and
+configuration. Preserve both consumers: deleting either loses its cursor and can replay or skip
+accepted work.
 
 ## Provisioning and inspection for Telegram
 

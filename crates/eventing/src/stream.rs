@@ -107,13 +107,49 @@ pub const TELEGRAM_NOTIFICATION_CONSUMER: &str = "ratatoskr_telegram_notificatio
 /// The sole event subject delivered to [`TELEGRAM_NOTIFICATION_CONSUMER`].
 pub const TELEGRAM_NOTIFICATION_SUBJECT: &str = "evt.platform.notification.raised.v1";
 
+/// The primary durable through which Knowledge admits document and domain events.
+pub const KNOWLEDGE_MAIN_CONSUMER: &str = "ratatoskr_knowledge_main";
+
+/// The exact event subjects delivered to [`KNOWLEDGE_MAIN_CONSUMER`].
+pub const KNOWLEDGE_MAIN_SUBJECTS: [&str; 13] = [
+    "evt.content.document.extracted.v1",
+    "evt.social.source.captured.v1",
+    "evt.social.source.updated.v1",
+    "evt.social.source.removed.v1",
+    "evt.ai_archive.archive.imported.v1",
+    "evt.ai_archive.conversation.added.v1",
+    "evt.ai_archive.conversation.updated.v1",
+    "evt.ai_archive.project.added.v1",
+    "evt.ai_archive.project.updated.v1",
+    "evt.ai_archive.artifact.added.v1",
+    "evt.ai_archive.artifact.updated.v1",
+    "evt.ai_archive.subject.tombstoned.v1",
+    "evt.knowledge.repository_analysis.requested.v1",
+];
+
+/// The separate command durable used by the channel-digest recap workflow.
+pub const KNOWLEDGE_CHANNEL_RECAP_CONSUMER: &str = "ratatoskr_knowledge_channel_recap";
+
+/// The only command delivered to [`KNOWLEDGE_CHANNEL_RECAP_CONSUMER`].
+pub const KNOWLEDGE_CHANNEL_RECAP_SUBJECT: &str = "cmd.knowledge.channel_digest_recap.requested.v1";
+
+/// The terminal facts the Knowledge runtime is authorized to publish.
+pub const KNOWLEDGE_TERMINAL_SUBJECTS: [&str; 6] = [
+    "evt.knowledge.analysis.completed.v1",
+    "evt.knowledge.ai_archive_analysis.completed.v1",
+    "evt.knowledge.repository_analysis.completed.v1",
+    "evt.knowledge.repository_analysis.failed.v1",
+    "evt.knowledge.channel_digest_recap.completed.v1",
+    "evt.knowledge.channel_digest_recap.failed.v1",
+];
+
 /// One provider-owned durable consumer that Edge creates before that provider can become ready.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FixedConsumerSpec {
     /// The stable durable cursor name, also used by its NATS permission stanza.
     pub durable_name: &'static str,
-    /// The sole command subject this durable consumer may receive.
-    pub filter_subject: &'static str,
+    /// The exact non-empty subject set this durable consumer may receive.
+    pub filter_subjects: &'static [&'static str],
 }
 
 /// Provider-specific browser-capture consumers pre-provisioned by Platform.
@@ -124,21 +160,31 @@ pub struct FixedConsumerSpec {
 pub const SOCIAL_CAPTURE_CONSUMERS: [FixedConsumerSpec; 3] = [
     FixedConsumerSpec {
         durable_name: "ratatoskr_x_browser_capture",
-        filter_subject: "cmd.x.capture.requested.v1",
+        filter_subjects: &["cmd.x.capture.requested.v1"],
     },
     FixedConsumerSpec {
         durable_name: "ratatoskr_instagram_browser_capture",
-        filter_subject: "cmd.instagram.capture.requested.v1",
+        filter_subjects: &["cmd.instagram.capture.requested.v1"],
     },
     FixedConsumerSpec {
         durable_name: "threads_browser_capture",
-        filter_subject: "cmd.threads.capture.requested.v1",
+        filter_subjects: &["cmd.threads.capture.requested.v1"],
     },
 ];
 
 const TELEGRAM_NOTIFICATION_CONSUMERS: [FixedConsumerSpec; 1] = [FixedConsumerSpec {
     durable_name: TELEGRAM_NOTIFICATION_CONSUMER,
-    filter_subject: TELEGRAM_NOTIFICATION_SUBJECT,
+    filter_subjects: &[TELEGRAM_NOTIFICATION_SUBJECT],
+}];
+
+const KNOWLEDGE_MAIN_CONSUMERS: [FixedConsumerSpec; 1] = [FixedConsumerSpec {
+    durable_name: KNOWLEDGE_MAIN_CONSUMER,
+    filter_subjects: &KNOWLEDGE_MAIN_SUBJECTS,
+}];
+
+const KNOWLEDGE_RECAP_CONSUMERS: [FixedConsumerSpec; 1] = [FixedConsumerSpec {
+    durable_name: KNOWLEDGE_CHANNEL_RECAP_CONSUMER,
+    filter_subjects: &[KNOWLEDGE_CHANNEL_RECAP_SUBJECT],
 }];
 
 /// The default retention: seven days.
@@ -313,12 +359,23 @@ async fn ensure_fixed_consumers(
         .await
         .map_err(|error| EventingError::Bus(error.to_string()))?;
     for spec in specs {
+        let (filter_subject, filter_subjects) = match spec.filter_subjects {
+            [subject] => ((*subject).to_owned(), Vec::new()),
+            subjects => (
+                String::new(),
+                subjects
+                    .iter()
+                    .map(|subject| (*subject).to_owned())
+                    .collect(),
+            ),
+        };
         let consumer = stream
             .get_or_create_consumer(
                 spec.durable_name,
                 jetstream::consumer::pull::Config {
                     durable_name: Some(spec.durable_name.to_owned()),
-                    filter_subject: spec.filter_subject.to_owned(),
+                    filter_subject,
+                    filter_subjects,
                     ack_policy: jetstream::consumer::AckPolicy::Explicit,
                     ..jetstream::consumer::pull::Config::default()
                 },
@@ -326,8 +383,19 @@ async fn ensure_fixed_consumers(
             .await
             .map_err(|error| EventingError::Bus(error.to_string()))?;
         let config = &consumer.cached_info().config;
+        let filters_match = match spec.filter_subjects {
+            [subject] => config.filter_subject == *subject && config.filter_subjects.is_empty(),
+            subjects => {
+                config.filter_subject.is_empty()
+                    && config.filter_subjects
+                        == subjects
+                            .iter()
+                            .map(|subject| (*subject).to_owned())
+                            .collect::<Vec<_>>()
+            }
+        };
         if config.durable_name.as_deref() != Some(spec.durable_name)
-            || config.filter_subject != spec.filter_subject
+            || !filters_match
             || config.ack_policy != jetstream::consumer::AckPolicy::Explicit
             || config.deliver_subject.is_some()
             || config.deliver_policy != jetstream::consumer::DeliverPolicy::All
@@ -340,6 +408,25 @@ async fn ensure_fixed_consumers(
         }
     }
     Ok(())
+}
+
+/// Ensures both Platform-owned Knowledge durables exist with their exact filter sets.
+///
+/// The primary event consumer and recap command consumer keep separate cursors and failure
+/// domains. This function creates a missing durable, reuses a matching durable without resetting
+/// its cursor, and refuses a mismatched durable without reconciling it.
+///
+/// # Errors
+///
+/// Returns [`EventingError::Bus`] when either stream or consumer configuration cannot be read or
+/// created, or when an existing durable differs from the fixed specification.
+pub async fn ensure_knowledge_consumers(
+    context: &jetstream::Context,
+    command_stream_name: &str,
+    event_stream_name: &str,
+) -> Result<(), EventingError> {
+    ensure_fixed_consumers(context, event_stream_name, &KNOWLEDGE_MAIN_CONSUMERS).await?;
+    ensure_fixed_consumers(context, command_stream_name, &KNOWLEDGE_RECAP_CONSUMERS).await
 }
 
 /// Ensures the fixed Telegram notification durable exists on the Platform-owned event stream.

@@ -20,9 +20,11 @@ use std::time::Duration;
 
 use async_nats::jetstream;
 use platform_eventing::{
-    NatsPublisher, SOCIAL_CAPTURE_CONSUMERS, StreamSpec, StreamState,
+    KNOWLEDGE_CHANNEL_RECAP_CONSUMER, KNOWLEDGE_CHANNEL_RECAP_SUBJECT, KNOWLEDGE_MAIN_CONSUMER,
+    KNOWLEDGE_MAIN_SUBJECTS, NatsPublisher, SOCIAL_CAPTURE_CONSUMERS, StreamSpec, StreamState,
     TELEGRAM_NOTIFICATION_CONSUMER, TELEGRAM_NOTIFICATION_SUBJECT, WhenFull,
-    ensure_social_capture_consumers, ensure_telegram_notification_consumer,
+    ensure_knowledge_consumers, ensure_social_capture_consumers,
+    ensure_telegram_notification_consumer,
 };
 use uuid::Uuid;
 
@@ -277,7 +279,10 @@ async fn edge_preprovisions_each_fixed_social_browser_capture_consumer() {
             .expect("the provider durable exists");
         assert_eq!(
             consumer.cached_info().config.filter_subject,
-            spec.filter_subject
+            spec.filter_subjects
+                .first()
+                .copied()
+                .expect("the social consumer has one filter")
         );
         assert_eq!(
             consumer.cached_info().config.durable_name.as_deref(),
@@ -343,4 +348,164 @@ async fn fixed_consumer_inventory_refuses_delivery_policy_drift() {
         result.is_err(),
         "a fixed consumer with a different delivery policy must be refused"
     );
+}
+
+fn assert_knowledge_subject_inventory() {
+    assert_eq!(
+        KNOWLEDGE_MAIN_SUBJECTS,
+        [
+            "evt.content.document.extracted.v1",
+            "evt.social.source.captured.v1",
+            "evt.social.source.updated.v1",
+            "evt.social.source.removed.v1",
+            "evt.ai_archive.archive.imported.v1",
+            "evt.ai_archive.conversation.added.v1",
+            "evt.ai_archive.conversation.updated.v1",
+            "evt.ai_archive.project.added.v1",
+            "evt.ai_archive.project.updated.v1",
+            "evt.ai_archive.artifact.added.v1",
+            "evt.ai_archive.artifact.updated.v1",
+            "evt.ai_archive.subject.tombstoned.v1",
+            "evt.knowledge.repository_analysis.requested.v1",
+        ]
+    );
+}
+
+async fn assert_knowledge_filter_drift_is_refused(
+    publisher: &NatsPublisher,
+    command_stream: &str,
+    event_stream: &str,
+) {
+    let events = publisher
+        .context()
+        .get_stream(event_stream)
+        .await
+        .expect("the event stream for drift proof");
+    events
+        .delete_consumer(KNOWLEDGE_MAIN_CONSUMER)
+        .await
+        .expect("replacing the primary with a drifted fixture");
+    events
+        .create_consumer(jetstream::consumer::pull::Config {
+            durable_name: Some(KNOWLEDGE_MAIN_CONSUMER.to_owned()),
+            filter_subject: "evt.content.document.extracted.v1".to_owned(),
+            ack_policy: jetstream::consumer::AckPolicy::Explicit,
+            ..jetstream::consumer::pull::Config::default()
+        })
+        .await
+        .expect("the deliberately drifted primary durable");
+    let result =
+        ensure_knowledge_consumers(publisher.context(), command_stream, event_stream).await;
+    assert!(result.is_err(), "a drifted filter set must be refused");
+    let drifted: jetstream::consumer::PullConsumer = events
+        .get_consumer(KNOWLEDGE_MAIN_CONSUMER)
+        .await
+        .expect("the drifted durable remains present");
+    assert_eq!(
+        drifted.cached_info().config.filter_subject,
+        "evt.content.document.extracted.v1",
+        "the refusal must not repair or replace the durable"
+    );
+    assert!(drifted.cached_info().config.filter_subjects.is_empty());
+}
+
+/// KNO-018: Edge owns both Knowledge cursors, including the primary multi-filter event durable.
+/// Knowledge may only open them, so an absent durable is a fleet topology defect rather than a
+/// runtime permission the Knowledge process may repair for itself.
+#[tokio::test]
+async fn edge_preprovisions_exact_knowledge_consumers_and_refuses_drift() {
+    let publisher = NatsPublisher::connect(&nats_url())
+        .await
+        .expect("a broker; docker compose up -d");
+    let suffix = Uuid::now_v7().simple();
+    let command_stream = format!("kno_commands_{suffix}");
+    let event_stream = format!("kno_events_{suffix}");
+    publisher
+        .ensure_stream(&StreamSpec::commands(
+            &command_stream,
+            vec![format!("{command_stream}.>")],
+        ))
+        .await
+        .expect("the isolated command stream");
+    publisher
+        .ensure_stream(&StreamSpec::events(
+            &event_stream,
+            vec![format!("{event_stream}.>")],
+        ))
+        .await
+        .expect("the isolated event stream");
+
+    ensure_knowledge_consumers(publisher.context(), &command_stream, &event_stream)
+        .await
+        .expect("Edge preprovisions both Knowledge durables");
+
+    let events = publisher
+        .context()
+        .get_stream(&event_stream)
+        .await
+        .expect("the event stream");
+    let mut primary: jetstream::consumer::PullConsumer = events
+        .get_consumer(KNOWLEDGE_MAIN_CONSUMER)
+        .await
+        .expect("Edge must preprovision the primary Knowledge durable");
+    assert_eq!(
+        primary.cached_info().config.filter_subjects,
+        KNOWLEDGE_MAIN_SUBJECTS
+    );
+    assert!(primary.cached_info().config.filter_subject.is_empty());
+    assert_eq!(
+        primary.cached_info().config.ack_policy,
+        jetstream::consumer::AckPolicy::Explicit
+    );
+    assert_eq!(
+        primary.cached_info().config.deliver_policy,
+        jetstream::consumer::DeliverPolicy::All
+    );
+    assert_eq!(
+        primary.cached_info().config.replay_policy,
+        jetstream::consumer::ReplayPolicy::Instant
+    );
+    assert!(primary.cached_info().config.deliver_subject.is_none());
+    let before_reuse = primary.info().await.expect("primary consumer info").clone();
+
+    let commands = publisher
+        .context()
+        .get_stream(&command_stream)
+        .await
+        .expect("the command stream");
+    let recap: jetstream::consumer::PullConsumer = commands
+        .get_consumer(KNOWLEDGE_CHANNEL_RECAP_CONSUMER)
+        .await
+        .expect("Edge must preprovision the Knowledge recap durable");
+    assert_eq!(
+        recap.cached_info().config.filter_subject,
+        KNOWLEDGE_CHANNEL_RECAP_SUBJECT
+    );
+    assert!(recap.cached_info().config.filter_subjects.is_empty());
+
+    ensure_knowledge_consumers(publisher.context(), &command_stream, &event_stream)
+        .await
+        .expect("matching Knowledge durables are reused");
+    let mut reused: jetstream::consumer::PullConsumer = events
+        .get_consumer(KNOWLEDGE_MAIN_CONSUMER)
+        .await
+        .expect("the reused primary durable");
+    let after_reuse = reused.info().await.expect("reused consumer info").clone();
+    assert_eq!(after_reuse.created, before_reuse.created);
+    assert_eq!(after_reuse.delivered, before_reuse.delivered);
+    assert_eq!(after_reuse.ack_floor, before_reuse.ack_floor);
+
+    assert_knowledge_filter_drift_is_refused(&publisher, &command_stream, &event_stream).await;
+    assert_knowledge_subject_inventory();
+
+    publisher
+        .context()
+        .delete_stream(&command_stream)
+        .await
+        .expect("cleaning up the command stream");
+    publisher
+        .context()
+        .delete_stream(&event_stream)
+        .await
+        .expect("cleaning up the event stream");
 }

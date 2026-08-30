@@ -55,8 +55,10 @@ fn nkey_stanza<'a>(config: &'a str, identity: &str) -> &'a str {
     let after = config
         .get(start..)
         .unwrap_or_else(|| panic!("{identity} identity begins outside a character boundary"));
-    let end = after
-        .find("\n        {\n            nkey:")
+    let end = ["\n        {\n            nkey:", "\n{\nnkey:"]
+        .into_iter()
+        .filter_map(|delimiter| after.find(delimiter))
+        .min()
         .unwrap_or(after.len());
     after
         .get(..end)
@@ -296,6 +298,78 @@ fn telegram_bus_identity_is_limited_to_its_notification_durable() {
             "Telegram must not receive broad or direct access through {forbidden}"
         );
     }
+}
+
+#[test]
+fn knowledge_identity_is_limited_to_fixed_consumers_and_terminal_subjects() {
+    let raw = deploy("nats/ratatoskr.conf");
+    let config: String = raw
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.starts_with('#'))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let stanza = nkey_stanza(&config, "RATATOSKR_KNOWLEDGE");
+
+    for permission in [
+        format!(
+            "$JS.API.CONSUMER.INFO.{}.{}",
+            platform_eventing::EVENT_STREAM,
+            platform_eventing::KNOWLEDGE_MAIN_CONSUMER
+        ),
+        format!(
+            "$JS.API.CONSUMER.MSG.NEXT.{}.{}",
+            platform_eventing::EVENT_STREAM,
+            platform_eventing::KNOWLEDGE_MAIN_CONSUMER
+        ),
+        format!(
+            "$JS.ACK.{}.{}.>",
+            platform_eventing::EVENT_STREAM,
+            platform_eventing::KNOWLEDGE_MAIN_CONSUMER
+        ),
+        format!(
+            "$JS.API.CONSUMER.INFO.{}.{}",
+            platform_eventing::COMMAND_STREAM,
+            platform_eventing::KNOWLEDGE_CHANNEL_RECAP_CONSUMER
+        ),
+        format!(
+            "$JS.API.CONSUMER.MSG.NEXT.{}.{}",
+            platform_eventing::COMMAND_STREAM,
+            platform_eventing::KNOWLEDGE_CHANNEL_RECAP_CONSUMER
+        ),
+        format!(
+            "$JS.ACK.{}.{}.>",
+            platform_eventing::COMMAND_STREAM,
+            platform_eventing::KNOWLEDGE_CHANNEL_RECAP_CONSUMER
+        ),
+        "_INBOX.>".to_owned(),
+    ] {
+        assert!(
+            stanza.contains(&permission),
+            "Knowledge lacks required permission {permission}"
+        );
+    }
+    for subject in platform_eventing::KNOWLEDGE_TERMINAL_SUBJECTS {
+        assert!(
+            stanza.contains(subject),
+            "Knowledge lacks terminal publish permission {subject}"
+        );
+    }
+    for forbidden in [
+        "$JS.API.>",
+        "cmd.>",
+        "evt.>",
+        "evt.social.source.captured.v1",
+    ] {
+        assert!(
+            !stanza.contains(forbidden),
+            "Knowledge must not receive broad or source authority through {forbidden}"
+        );
+    }
+    assert!(
+        deploy("nats/README.md").contains("/etc/ratatoskr/knowledge.nkey"),
+        "the production seed path and installation boundary must be documented"
+    );
 }
 
 /// D-8. The operator guide and runtime use one fixed Telegram consumer contract and one seed path.
