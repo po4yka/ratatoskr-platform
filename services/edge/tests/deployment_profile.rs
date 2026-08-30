@@ -55,9 +55,7 @@ fn nkey_stanza<'a>(config: &'a str, identity: &str) -> &'a str {
     let after = config
         .get(start..)
         .unwrap_or_else(|| panic!("{identity} identity begins outside a character boundary"));
-    let end = after
-        .find("\n        {\n            nkey:")
-        .unwrap_or(after.len());
+    let end = after.find("\n{\nnkey:").unwrap_or(after.len());
     after
         .get(..end)
         .unwrap_or_else(|| panic!("{identity} stanza ends outside a character boundary"))
@@ -257,6 +255,55 @@ fn social_owner_bus_identities_are_limited_to_their_capture_subjects() {
             "Threads outbox cannot publish {subject}"
         );
     }
+}
+
+/// Instagram can publish only the three `SocialSource` facts it owns. Its existing browser-command
+/// durable remains pre-provisioned by Edge, and the identity gains no authority to select another
+/// consumer or subscribe directly to fleet events.
+#[test]
+fn instagram_bus_identity_has_only_its_three_event_subjects() {
+    let raw = deploy("nats/ratatoskr.conf");
+    let config: String = raw
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.starts_with('#'))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let stanza = nkey_stanza(&config, "RATATOSKR_INSTAGRAM");
+
+    for subject in [
+        "evt.social.source.captured.v1",
+        "evt.social.source.updated.v1",
+        "evt.social.source.removed.v1",
+    ] {
+        assert!(
+            stanza.contains(&format!("\"{subject}\"")),
+            "Instagram cannot publish owned fact {subject}",
+        );
+    }
+
+    for forbidden in [
+        "evt.>",
+        "evt.platform.",
+        "evt.notification.",
+        "evt.social.connection.",
+        "evt.social.source.>",
+        "cmd.",
+        "$JS.API.CONSUMER.CREATE",
+        "$JS.API.>",
+    ] {
+        assert!(
+            !stanza.contains(forbidden),
+            "Instagram unexpectedly has authority matching {forbidden}",
+        );
+    }
+
+    let subscribe = stanza
+        .split_once("subscribe:")
+        .map(|(_, value)| value)
+        .expect("Instagram stanza must declare reply subscription permissions");
+    assert!(subscribe.contains("_INBOX.>"));
+    assert!(!subscribe.contains("evt."));
 }
 
 /// D-7. Telegram can only inspect, fetch from, and acknowledge its pre-provisioned notification

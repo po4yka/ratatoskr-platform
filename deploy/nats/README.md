@@ -18,8 +18,16 @@ Telegram never receives consumer-create authority and must refuse readiness if t
 
 The Threads identity additionally publishes only its durable facts:
 `evt.platform.operation.reported.v1`, `evt.social.source.captured.v1`, and
-`evt.social.source.updated.v1`. X and Instagram receive no event-publish permission until they
-have a durable outbox publisher for a fact they actually produce.
+`evt.social.source.updated.v1`. The Instagram identity publishes only its durable SocialSource
+facts: `evt.social.source.captured.v1`, `evt.social.source.updated.v1`, and
+`evt.social.source.removed.v1`. These three grants must be deployed before Instagram's acknowledged
+outbox publisher; they do not add command publishing, direct event subscriptions, or consumer-create
+authority. X receives no event-publish permission until it has a durable outbox publisher for a fact
+it actually produces.
+
+The actual-config broker test proves only this policy boundary. A successful publish acknowledgement
+does not prove an Instagram database mark, consumer acknowledgement, Knowledge indexing, provider
+behavior, or deployment; IG-014 verifies the producer and policy together at the workspace layer.
 
 ## Generating it
 
