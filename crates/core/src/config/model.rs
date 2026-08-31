@@ -5,6 +5,7 @@
 
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
+use std::path::PathBuf;
 
 use secrecy::SecretString;
 use url::Url;
@@ -30,6 +31,10 @@ pub struct PlatformConfig {
     /// The loopback domain-service APIs that Edge composes into its public listener.
     #[serde(default)]
     pub gateway: GatewayConfig,
+
+    /// Private durable storage for incomplete AI archive transfers.
+    #[serde(default)]
+    pub archive_staging: ArchiveStagingConfig,
 
     /// The `PostgreSQL` connection. Optional until the first route that reads persisted data, which
     /// is milestone 5; a binary configured without it starts, serves its probes, and reports no
@@ -71,6 +76,22 @@ pub struct PlatformConfig {
 
     /// Logging, filtering and span export.
     pub telemetry: TelemetryConfig,
+}
+
+/// The private filesystem root used only for incomplete AI archive transfers.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ArchiveStagingConfig {
+    /// Absolute directory that survives Edge restart.
+    pub root: PathBuf,
+}
+
+impl Default for ArchiveStagingConfig {
+    fn default() -> Self {
+        Self {
+            root: PathBuf::from("/tmp/ratatoskr-platform-ai-archive-staging"),
+        }
+    }
 }
 
 /// The route table and its class budgets for Edge's domain-service gateway.

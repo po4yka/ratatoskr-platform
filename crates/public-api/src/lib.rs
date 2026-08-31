@@ -15,6 +15,7 @@
 //! someone else and an operation that does not exist produce the same 404, so the API is not an
 //! oracle for which identifiers are real.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::Router;
@@ -83,6 +84,8 @@ pub struct ApiState {
     pub pairing_limit: Arc<platform_http::ActorLimiter>,
     /// The configured loopback domain-service route table.
     pub gateway: gateway::Gateway,
+    /// Private durable root for operation-owned archive staging.
+    pub archive_staging_root: Arc<PathBuf>,
 }
 
 impl ApiState {
@@ -110,6 +113,9 @@ impl ApiState {
             assertion_key: None,
             oauth_completion_url: None,
             gateway: gateway::Gateway::disabled(),
+            archive_staging_root: Arc::new(PathBuf::from(
+                "/tmp/ratatoskr-platform-ai-archive-staging",
+            )),
         }
     }
 
@@ -173,8 +179,20 @@ fn table() -> Vec<Endpoint> {
             handler: post(archives::prepare),
         },
         Endpoint {
-            doc: archives::UPLOAD_DOC,
-            handler: put(archives::upload),
+            doc: archives::OPEN_DOC,
+            handler: post(archives::open_transfer),
+        },
+        Endpoint {
+            doc: archives::CHUNK_DOC,
+            handler: put(archives::put_chunk),
+        },
+        Endpoint {
+            doc: archives::STATUS_DOC,
+            handler: get(archives::transfer_status),
+        },
+        Endpoint {
+            doc: archives::FINALIZE_DOC,
+            handler: post(archives::finalize_transfer),
         },
         Endpoint {
             doc: operations::DOC,
@@ -318,6 +336,12 @@ fn register_schemas(generator: &mut schemars::SchemaGenerator) {
     generator.subschema_for::<captures::CaptureAccepted>();
     generator.subschema_for::<archives::PrepareArchive>();
     generator.subschema_for::<archives::ArchivePrepared>();
+    generator.subschema_for::<ratatoskr_blob_transfer_contracts::UploadSessionRequest>();
+    generator.subschema_for::<ratatoskr_blob_transfer_contracts::UploadSessionOpened>();
+    generator.subschema_for::<ratatoskr_blob_transfer_contracts::UploadChunkReceipt>();
+    generator.subschema_for::<ratatoskr_blob_transfer_contracts::UploadStatusResponse>();
+    generator.subschema_for::<ratatoskr_blob_transfer_contracts::UploadFinalizeRequest>();
+    generator.subschema_for::<ratatoskr_blob_transfer_contracts::UploadCompletionOutcome>();
     generator.subschema_for::<capabilities::CapabilityDocument>();
     generator.subschema_for::<sessions::ExchangeAssertion>();
     generator.subschema_for::<sessions::SessionMinted>();

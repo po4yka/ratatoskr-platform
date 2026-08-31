@@ -42,6 +42,11 @@ pub struct RuntimeState {
     bus: AtomicU8,
     /// Latest successful bus observation in Unix microseconds, or zero before one exists.
     bus_observed_at: AtomicI64,
+    archive_staging: AtomicU8,
+    archive_chatgpt_receipt: AtomicU8,
+    archive_chatgpt_report: AtomicU8,
+    archive_claude_receipt: AtomicU8,
+    archive_claude_report: AtomicU8,
 }
 
 impl RuntimeState {
@@ -56,6 +61,11 @@ impl RuntimeState {
             database_observed_at: AtomicI64::new(0),
             bus: AtomicU8::new(BUS_ABSENT),
             bus_observed_at: AtomicI64::new(0),
+            archive_staging: AtomicU8::new(BUS_ABSENT),
+            archive_chatgpt_receipt: AtomicU8::new(BUS_ABSENT),
+            archive_chatgpt_report: AtomicU8::new(BUS_ABSENT),
+            archive_claude_receipt: AtomicU8::new(BUS_ABSENT),
+            archive_claude_report: AtomicU8::new(BUS_ABSENT),
         };
         state.publish_readiness();
         state
@@ -122,6 +132,56 @@ impl RuntimeState {
     #[must_use]
     pub fn bus_observed_at(&self) -> Option<jiff::Timestamp> {
         observed_at(&self.bus_observed_at)
+    }
+
+    /// Record whether the private archive staging root is writable.
+    pub fn set_archive_staging_ready(&self, ready: bool) {
+        set_dependency(&self.archive_staging, ready);
+        self.publish_readiness();
+    }
+
+    /// Record whether one fixed provider receipt listener answered its last probe.
+    pub fn set_archive_receipt_ready(&self, provider: &str, ready: bool) {
+        if let Some(state) = self.archive_receipt(provider) {
+            set_dependency(state, ready);
+            self.publish_readiness();
+        }
+    }
+
+    /// Record whether one fixed provider report consumer is running.
+    pub fn set_archive_report_ready(&self, provider: &str, ready: bool) {
+        if let Some(state) = self.archive_report(provider) {
+            set_dependency(state, ready);
+            self.publish_readiness();
+        }
+    }
+
+    /// Whether staging, receipt and report paths are all live for one provider.
+    #[must_use]
+    pub fn archive_provider_ready(&self, provider: &str) -> bool {
+        self.archive_staging.load(Ordering::Acquire) == BUS_UP
+            && self
+                .archive_receipt(provider)
+                .is_some_and(|state| state.load(Ordering::Acquire) == BUS_UP)
+            && self
+                .archive_report(provider)
+                .is_some_and(|state| state.load(Ordering::Acquire) == BUS_UP)
+    }
+
+    fn archive_receipt(&self, provider: &str) -> Option<&AtomicU8> {
+        match provider {
+            "chatgpt" => Some(&self.archive_chatgpt_receipt),
+            "claude" => Some(&self.archive_claude_receipt),
+            _ => None,
+        }
+    }
+
+    fn archive_report(&self, provider: &str) -> Option<&AtomicU8> {
+        match provider {
+            "chatgpt" => Some(&self.archive_chatgpt_report),
+            "claude" => Some(&self.archive_claude_report),
+            _ => None,
+        }
     }
 
     /// What the last database probe found, or `None` when this role has no database configured.
@@ -200,6 +260,33 @@ impl RuntimeState {
             }
         }
 
+        for (name, state) in [
+            (
+                CheckName::ArchiveChatgptReceipt,
+                &self.archive_chatgpt_receipt,
+            ),
+            (
+                CheckName::ArchiveChatgptReport,
+                &self.archive_chatgpt_report,
+            ),
+            (
+                CheckName::ArchiveClaudeReceipt,
+                &self.archive_claude_receipt,
+            ),
+            (CheckName::ArchiveClaudeReport, &self.archive_claude_report),
+            (CheckName::ArchiveStaging, &self.archive_staging),
+        ] {
+            let state = state.load(Ordering::Acquire);
+            if state != BUS_ABSENT {
+                let up = state == BUS_UP;
+                checks.push(Check {
+                    name,
+                    state: CheckState::from_pass(up),
+                    reason: (!up).then_some(CheckReason::DependencyUnavailable),
+                });
+            }
+        }
+
         checks.sort_unstable_by_key(|check| check.name);
         checks
     }
@@ -207,7 +294,12 @@ impl RuntimeState {
     /// Whether new work may be routed to this process.
     #[must_use]
     pub fn is_ready(&self) -> bool {
-        self.startup_complete.load(Ordering::Acquire) && !self.draining.load(Ordering::Acquire)
+        self.startup_complete.load(Ordering::Acquire)
+            && !self.draining.load(Ordering::Acquire)
+            && self
+                .checks()
+                .iter()
+                .all(|check| check.state == CheckState::Pass)
     }
 
     /// `platform_readiness{role}`, the aggregate of [`Self::checks`].
@@ -242,6 +334,16 @@ pub struct Check {
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum CheckName {
+    /// The `ChatGPT` receipt listener answered its last bounded capability probe.
+    ArchiveChatgptReceipt,
+    /// The `ChatGPT` report durable consumer is running.
+    ArchiveChatgptReport,
+    /// The Claude receipt listener answered its last bounded capability probe.
+    ArchiveClaudeReceipt,
+    /// The Claude report durable consumer is running.
+    ArchiveClaudeReport,
+    /// The private staging root is writable.
+    ArchiveStaging,
     /// The `NATS` client holds a connection. Present only for the role that opens one, which is
     /// `ratatoskr-edge` alone (ADR-0013).
     Bus,
@@ -253,6 +355,10 @@ pub enum CheckName {
     Drain,
     /// Configuration, telemetry and every configured listener are up.
     Startup,
+}
+
+fn set_dependency(state: &AtomicU8, ready: bool) {
+    state.store(if ready { BUS_UP } else { BUS_DOWN }, Ordering::Release);
 }
 
 /// Whether one check passes.

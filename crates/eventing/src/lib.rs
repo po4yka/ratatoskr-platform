@@ -36,10 +36,11 @@ pub use crate::outbox::{ClaimedMessage, Outbox, OutboxStats};
 pub use crate::publisher::{NatsPublisher, PublishError, Publisher};
 pub use crate::pump::{PumpReport, run_once};
 pub use crate::stream::{
-    COMMAND_STREAM, COMMAND_SUBJECTS, EDGE_PROJECTION_CONSUMER, EVENT_STREAM, EVENT_SUBJECTS,
-    FixedConsumerSpec, SOCIAL_CAPTURE_CONSUMERS, StreamSpec, StreamState,
-    TELEGRAM_NOTIFICATION_CONSUMER, TELEGRAM_NOTIFICATION_SUBJECT, WhenFull,
-    ensure_social_capture_consumers, ensure_telegram_notification_consumer,
+    AI_ARCHIVE_REPORT_CONSUMERS, COMMAND_STREAM, COMMAND_SUBJECTS, EDGE_PROJECTION_CONSUMER,
+    EVENT_STREAM, EVENT_SUBJECTS, FixedConsumerSpec, SOCIAL_CAPTURE_CONSUMERS, StreamSpec,
+    StreamState, TELEGRAM_NOTIFICATION_CONSUMER, TELEGRAM_NOTIFICATION_SUBJECT, WhenFull,
+    ensure_ai_archive_report_consumers, ensure_social_capture_consumers,
+    ensure_telegram_notification_consumer,
 };
 
 /// A failure in the outbox, the inbox, or the subject grammar.
@@ -131,7 +132,7 @@ impl Subject {
         }
         for segment in &segments {
             if !is_token(segment) {
-                return Err(invalid("every segment is ^[a-z][a-z0-9_]{0,31}$"));
+                return Err(invalid("every segment is ^[a-z][a-z0-9_-]{0,31}$"));
             }
         }
 
@@ -191,7 +192,9 @@ fn is_token(segment: &str) -> bool {
     if !first.is_ascii_lowercase() || segment.len() > 32 {
         return false;
     }
-    bytes.all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+    bytes.all(|byte| {
+        byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'_' | b'-')
+    })
 }
 
 pub(crate) fn to_offset(value: jiff::Timestamp) -> time::OffsetDateTime {

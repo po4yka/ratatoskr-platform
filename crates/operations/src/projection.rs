@@ -29,6 +29,30 @@ impl Handler for ProgressProjection {
             return Ok(Outcome::Rejected);
         };
 
+        if let Some(binding) =
+            crate::find_ai_archive_acceptance(&mut **transaction, report.operation_id)
+                .await
+                .map_err(map_operation_error)?
+        {
+            let (expected_subject, expected_producer) = match binding.provider.as_str() {
+                "chatgpt" => (
+                    "evt.ai-archive.chatgpt.operation.reported.v1",
+                    "ratatoskr-chatgpt",
+                ),
+                "claude" => (
+                    "evt.ai-archive.claude.operation.reported.v1",
+                    "ratatoskr-claude",
+                ),
+                _ => return Ok(Outcome::Rejected),
+            };
+            if message.subject.as_str() != expected_subject || message.producer != expected_producer
+            {
+                return Ok(Outcome::Rejected);
+            }
+        } else if message.subject.as_str().starts_with("evt.ai-archive.") {
+            return Ok(Outcome::Rejected);
+        }
+
         let now = jiff::Timestamp::now();
         let outcome = crate::record_status(
             transaction,

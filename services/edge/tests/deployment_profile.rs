@@ -321,6 +321,19 @@ fn telegram_consumer_profile_matches_runtime_constants() {
 fn edge_profile_declares_the_canonical_domain_gateway_table() {
     let text = environment(RuntimeRole::Edge);
     assert_eq!(
+        setting(&text, "RATATOSKR__ARCHIVE_STAGING__ROOT").as_deref(),
+        Some("/mnt/nvme/ratatoskr/archive-staging")
+    );
+    assert!(
+        unit(RuntimeRole::Edge).contains("ReadWritePaths=/mnt/nvme/ratatoskr/archive-staging"),
+        "the sandbox must permit writes only to the configured staging root"
+    );
+    let tmpfiles = include_str!("../../../deploy/tmpfiles.d/ratatoskr-platform.conf");
+    assert_eq!(
+        tmpfiles.trim(),
+        "d /mnt/nvme/ratatoskr/archive-staging 0700 ratatoskr-edge ratatoskr-edge -"
+    );
+    assert_eq!(
         setting(&text, "RATATOSKR__PUBLIC__MAX_BODY_BYTES").as_deref(),
         Some("104857600")
     );
@@ -334,6 +347,8 @@ fn edge_profile_declares_the_canonical_domain_gateway_table() {
         ("VAULT", "/v1/vault", "127.0.0.1:8093", "transfer"),
         ("SOCIAL", "/v1/social", "127.0.0.1:8094", "stream"),
         ("AI", "/v1/ai", "127.0.0.1:8095", "stream"),
+        ("CHATGPT", "/v1/chatgpt", "127.0.0.1:8096", "transfer"),
+        ("CLAUDE", "/v1/claude", "127.0.0.1:8097", "transfer"),
     ] {
         let root = format!("RATATOSKR__GATEWAY__ROUTES__{service}");
         assert_eq!(
@@ -348,5 +363,11 @@ fn edge_profile_declares_the_canonical_domain_gateway_table() {
             setting(&text, &format!("{root}__CLASS")).as_deref(),
             Some(class)
         );
+        if matches!(service, "CHATGPT" | "CLAUDE") {
+            assert_eq!(
+                setting(&text, &format!("{root}__ARCHIVE_RECEIPT_PATH")).as_deref(),
+                Some("/v1/ai-archives/receipt")
+            );
+        }
     }
 }

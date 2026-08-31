@@ -2021,6 +2021,240 @@
         "title": "TraceId",
         "type": "string"
       },
+      "UploadChunkReceipt": {
+        "additionalProperties": true,
+        "description": "One chunk accepted. Answers idempotently: the same bytes delivered twice for one index yield\ntwo identical-success receipts and leave the recorded state unchanged.",
+        "properties": {
+          "chunk_index": {
+            "description": "The zero-based index the bytes were recorded under. Required.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "idempotent_replay": {
+            "description": "`true` when this delivery replayed an already-recorded index with matching bytes and\nchanged nothing. Required; lets an at-least-once client distinguish news from echo.",
+            "type": "boolean"
+          },
+          "received_chunks_count": {
+            "description": "How many distinct indices are now recorded, including this one when newly recorded.\nRequired.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "resumption_token": {
+            "$ref": "#/components/schemas/UploadResumptionToken",
+            "description": "The session the chunk joined. Required."
+          }
+        },
+        "required": [
+          "resumption_token",
+          "chunk_index",
+          "received_chunks_count",
+          "idempotent_replay"
+        ],
+        "type": "object",
+        "x-ratatoskr-unknown-policy": "preserve"
+      },
+      "UploadCompletionOutcome": {
+        "description": "The terminal answer to finalize. Both variants are truthful answers at `200` in the canonical\nbinding: a mismatch is an anticipated fact about the bytes, not a transport fault.",
+        "oneOf": [
+          {
+            "additionalProperties": true,
+            "description": "The streamed digest equaled the declaration. The reference below is everything the\nworkspace store spec `blob-references` requires to resolve the stored bytes.",
+            "properties": {
+              "blob_ref": {
+                "$ref": "#/components/schemas/BlobRef",
+                "description": "The content-addressed reference to the sealed bytes, owned by the receiving service."
+              },
+              "outcome": {
+                "const": "stored",
+                "type": "string"
+              }
+            },
+            "required": [
+              "outcome",
+              "blob_ref"
+            ],
+            "type": "object",
+            "x-ratatoskr-unknown-policy": "preserve"
+          },
+          {
+            "additionalProperties": true,
+            "description": "The streamed digest differed from the declaration. Terminal-failed: the token is dead\nafterwards, and the client restarts with a new session rather than patching chunks.",
+            "properties": {
+              "computed_sha256_hex": {
+                "$ref": "#/components/schemas/DigestHex",
+                "description": "The digest the streamed bytes actually produced."
+              },
+              "declared_sha256_hex": {
+                "$ref": "#/components/schemas/DigestHex",
+                "description": "The digest the declaration carried."
+              },
+              "outcome": {
+                "const": "digest_mismatch",
+                "type": "string"
+              }
+            },
+            "required": [
+              "outcome",
+              "declared_sha256_hex",
+              "computed_sha256_hex"
+            ],
+            "type": "object",
+            "x-ratatoskr-unknown-policy": "preserve"
+          }
+        ]
+      },
+      "UploadFinalizeRequest": {
+        "additionalProperties": true,
+        "description": "Asks the receiver to verify and seal a completed session. Required after every derived chunk\nindex is recorded; premature calls are refused with\n`blob_transfer.finalize_incomplete` while the session stays open.",
+        "properties": {
+          "resumption_token": {
+            "$ref": "#/components/schemas/UploadResumptionToken",
+            "description": "The session to seal. Required."
+          }
+        },
+        "required": [
+          "resumption_token"
+        ],
+        "type": "object",
+        "x-ratatoskr-unknown-policy": "preserve"
+      },
+      "UploadResumptionToken": {
+        "description": "Server-issued handle naming one upload session. Required on every chunk receipt, status\nand finalize call after opening.\n\nOpaque by contract: a client compares tokens, stores them and presents them back, and\nnever parses one. The issuing service mints it unguessable — at least 128 bits of entropy\n— because whoever holds the token drives the session; expiry is the server's decision,\ncarried beside the token as `expires_at`, and an expired token is refused with\n`blob_transfer.session_expired`, distinct from `blob_transfer.session_unknown`.",
+        "examples": [
+          "rst_0v8k4a2j9pm1d7n5tp3es6uabfhij1cm4nop5qrs"
+        ],
+        "maxLength": 68,
+        "pattern": "^rst_[0-9a-v]{24,64}$",
+        "title": "UploadResumptionToken",
+        "type": "string"
+      },
+      "UploadSessionOpened": {
+        "additionalProperties": true,
+        "description": "The receiver's answer to a session declaration: the session exists, here is its handle.",
+        "properties": {
+          "chunk_size_bytes": {
+            "description": "The chunk size the session actually runs with. Required; equals the requested value —\nversion 1 has no negotiation: a receiver that cannot accept the declared chunking refuses\nthe session outright instead of answering a different arithmetic.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "expires_at": {
+            "$ref": "#/components/schemas/WireTimestamp",
+            "description": "Instant after which the receiver refuses the token with\n`blob_transfer.session_expired`. Required; server-asserted; RFC 3339 UTC canonical."
+          },
+          "resumption_token": {
+            "$ref": "#/components/schemas/UploadResumptionToken",
+            "description": "The opaque handle driving every later call. Required; see [`UploadResumptionToken`]."
+          }
+        },
+        "required": [
+          "resumption_token",
+          "chunk_size_bytes",
+          "expires_at"
+        ],
+        "type": "object",
+        "x-ratatoskr-unknown-policy": "preserve"
+      },
+      "UploadSessionRequest": {
+        "additionalProperties": true,
+        "description": "Opens an upload session: the digest-first declaration a client sends before any payload byte\nmoves.\n\nThe declaration is what a receiver refuses on when it refuses at all — size, media type and\ndigest are all known here, so an unwanted upload never transfers its first chunk. The digest\nalgorithm travels inside `digest` and version 1 speaks exactly\n[`DigestAlgorithm::Sha256`]; the closed enum leaves no stringly-typed escape hatch, and a\nfuture algorithm arrives as an additive variant.",
+        "properties": {
+          "chunk_size_bytes": {
+            "description": "Fixed size of every chunk except, possibly, the last. Required; within\n[`CHUNK_SIZE_MIN_BYTES`](crate::CHUNK_SIZE_MIN_BYTES) ..\n[`CHUNK_SIZE_MAX_BYTES`](crate::CHUNK_SIZE_MAX_BYTES).",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "declared_size_bytes": {
+            "description": "Exact byte size of the whole payload. Required; greater than zero; the chunk count and\nthe last chunk's length derive from this and `chunk_size_bytes` alone.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "digest": {
+            "$ref": "#/components/schemas/ContentDigest",
+            "description": "Digest of the whole payload. Required; finalize verifies the streamed bytes against it."
+          },
+          "media_type": {
+            "$ref": "#/components/schemas/MediaType",
+            "description": "Internet media type of the payload, without parameters. Required; grammar per\n[`MediaType`]. Whether the type is wanted is the receiver's admission policy, surfaced as\n`blob_transfer.media_type_rejected`."
+          }
+        },
+        "required": [
+          "declared_size_bytes",
+          "media_type",
+          "digest",
+          "chunk_size_bytes"
+        ],
+        "type": "object",
+        "x-ratatoskr-unknown-policy": "preserve"
+      },
+      "UploadSessionState": {
+        "description": "The phase of the session answering a status or finalize call.",
+        "oneOf": [
+          {
+            "const": "open",
+            "description": "Chunks are still being accepted.",
+            "type": "string"
+          },
+          {
+            "const": "finalized",
+            "description": "Finalize verified the streamed digest; the blob is sealed under its reference.",
+            "type": "string"
+          },
+          {
+            "const": "failed",
+            "description": "Finalize proved the streamed digest differs from the declaration; the session is dead.",
+            "type": "string"
+          }
+        ]
+      },
+      "UploadStatusResponse": {
+        "additionalProperties": true,
+        "description": "The resume view an interrupted client asks for: exactly which indices are recorded, so the\nremaining chunks can be sent without duplication or guessed gaps.",
+        "properties": {
+          "missing_chunks_count": {
+            "description": "How many derived indices remain unrecorded. Required.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "received_chunks": {
+            "description": "Every recorded index, sorted ascending. Required; empty only for a fresh open session.",
+            "items": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "received_chunks_count": {
+            "description": "How many indices are recorded. Required; equals `received_chunks`' length.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "resumption_token": {
+            "$ref": "#/components/schemas/UploadResumptionToken",
+            "description": "The session being surveyed. Required."
+          },
+          "session_state": {
+            "$ref": "#/components/schemas/UploadSessionState",
+            "description": "The phase of the session. Required."
+          }
+        },
+        "required": [
+          "resumption_token",
+          "session_state",
+          "received_chunks",
+          "received_chunks_count",
+          "missing_chunks_count"
+        ],
+        "type": "object",
+        "x-ratatoskr-unknown-policy": "preserve"
+      },
       "UserId": {
         "description": "Identity of a Ratatoskr end user. Bare canonical lowercase hyphenated UUID; not namespaced.",
         "examples": [
@@ -2616,13 +2850,13 @@
         ]
       }
     },
-    "/v1/ai-archives/{provider}/{operation_id}/content": {
-      "put": {
-        "description": "Streams bytes to the configured provider importer. Edge injects the operation, digest and size claims; callers cannot set them.",
-        "operationId": "uploadAiArchiveContent",
+    "/v1/ai-archives/{provider}/{operation_id}/uploads": {
+      "post": {
+        "description": "Opens bounded resumable staging under the prepared provider and operation.",
+        "operationId": "openAiArchiveTransfer",
         "parameters": [
           {
-            "description": "The provider selected during preparation.",
+            "description": "The prepared provider.",
             "in": "path",
             "name": "provider",
             "required": true,
@@ -2631,12 +2865,118 @@
             }
           },
           {
-            "description": "The prepared operation identifier.",
+            "description": "The prepared operation.",
             "in": "path",
             "name": "operation_id",
             "required": true,
             "schema": {
               "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UploadSessionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadSessionOpened"
+                }
+              }
+            },
+            "description": "The resumable session is durable."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The declaration is invalid."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The credential does not authenticate."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The bound operation is unavailable to this device."
+          }
+        },
+        "security": [
+          {
+            "sessionBearer": []
+          }
+        ],
+        "summary": "Open an AI archive transfer",
+        "tags": [
+          "ai-archives"
+        ]
+      }
+    },
+    "/v1/ai-archives/{provider}/{operation_id}/uploads/{token}/chunks/{index}": {
+      "put": {
+        "description": "Stores one exact indexed chunk beneath the operation-owned session.",
+        "operationId": "putAiArchiveTransferChunk",
+        "parameters": [
+          {
+            "description": "The prepared provider.",
+            "in": "path",
+            "name": "provider",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The prepared operation.",
+            "in": "path",
+            "name": "operation_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The opaque resumption token.",
+            "in": "path",
+            "name": "token",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The zero-based chunk index.",
+            "in": "path",
+            "name": "index",
+            "required": true,
+            "schema": {
               "type": "string"
             }
           }
@@ -2653,10 +2993,17 @@
           "required": true
         },
         "responses": {
-          "202": {
-            "description": "The importer accepted the streamed archive for asynchronous processing."
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadChunkReceipt"
+                }
+              }
+            },
+            "description": "The chunk is acknowledged."
           },
-          "401": {
+          "400": {
             "content": {
               "application/json": {
                 "schema": {
@@ -2664,7 +3011,7 @@
                 }
               }
             },
-            "description": "No credential, or one that does not authenticate here."
+            "description": "The chunk does not match the declared plan."
           },
           "404": {
             "content": {
@@ -2674,27 +3021,7 @@
                 }
               }
             },
-            "description": "The operation is not a deliverable archive owned by this device."
-          },
-          "503": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "The configured importer could not be reached; the operation is marked failed with a safe retryable diagnostic."
-          },
-          "504": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "The configured importer did not respond within its bounded receipt budget."
+            "description": "The bound session is unavailable to this device."
           }
         },
         "security": [
@@ -2702,7 +3029,161 @@
             "sessionBearer": []
           }
         ],
-        "summary": "Deliver prepared AI archive bytes",
+        "summary": "Store one AI archive chunk",
+        "tags": [
+          "ai-archives"
+        ]
+      }
+    },
+    "/v1/ai-archives/{provider}/{operation_id}/uploads/{token}/finalize": {
+      "post": {
+        "description": "Verifies ordered staged bytes and delivers them only to the operation-bound provider receipt.",
+        "operationId": "finalizeAiArchiveTransfer",
+        "parameters": [
+          {
+            "description": "The prepared provider.",
+            "in": "path",
+            "name": "provider",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The prepared operation.",
+            "in": "path",
+            "name": "operation_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The opaque resumption token.",
+            "in": "path",
+            "name": "token",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UploadFinalizeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadCompletionOutcome"
+                }
+              }
+            },
+            "description": "Verification produced a truthful stored or digest-mismatch outcome."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Chunks are incomplete or the finalize request is invalid."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The bound session is unavailable to this device."
+          }
+        },
+        "security": [
+          {
+            "sessionBearer": []
+          }
+        ],
+        "summary": "Finalize an AI archive transfer",
+        "tags": [
+          "ai-archives"
+        ]
+      }
+    },
+    "/v1/ai-archives/{provider}/{operation_id}/uploads/{token}/status": {
+      "get": {
+        "description": "Returns the exact acknowledged indices for restart-safe resume.",
+        "operationId": "readAiArchiveTransferStatus",
+        "parameters": [
+          {
+            "description": "The prepared provider.",
+            "in": "path",
+            "name": "provider",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The prepared operation.",
+            "in": "path",
+            "name": "operation_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The opaque resumption token.",
+            "in": "path",
+            "name": "token",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadStatusResponse"
+                }
+              }
+            },
+            "description": "The current resumable view."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The bound session is unavailable to this device."
+          }
+        },
+        "security": [
+          {
+            "sessionBearer": []
+          }
+        ],
+        "summary": "Read AI archive transfer status",
         "tags": [
           "ai-archives"
         ]

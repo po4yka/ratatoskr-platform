@@ -25,6 +25,12 @@ which is host state no repository owns and which a reflash resets to the boot de
 | Database dumps | `/mnt/nvme/backups/ratatoskr` | daily local custom dumps and transient off-host staging |
 | Local Borg copy | `/mnt/backup/borg` | a second volume on the SAME machine, never an off-host replica |
 | Off-host copies | configured S3-compatible bucket | age-encrypted dump, Borg export, and configuration recovery set |
+| AI archive staging | `/mnt/nvme/ratatoskr/archive-staging` | `ratatoskr-edge`, mode `0700`, provisioned by `deploy/tmpfiles.d/ratatoskr-platform.conf` |
+
+Install `tmpfiles.d/ratatoskr-platform.conf` as
+`/etc/tmpfiles.d/ratatoskr-platform.conf` and run
+`systemd-tmpfiles --create /etc/tmpfiles.d/ratatoskr-platform.conf` before starting
+`ratatoskr-edge`.
 
 **PostgreSQL and `JetStream` must never write to the boot device.** Their pattern is small
 synchronous fsyncs, which is the worst case for flash wear, and the SD card that wears out takes the

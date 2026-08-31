@@ -432,7 +432,9 @@ async fn every_documented_path_is_served() {
             .path
             .replace("{operation_id}", "01a018ae-b4e5-7f90-a17f-1e60c8ce61be")
             .replace("{relay_id}", "01a018ae-b4e5-7f90-a17f-1e60c8ce61be")
-            .replace("{provider}", "github");
+            .replace("{provider}", "github")
+            .replace("{token}", "rst_0v8k4a2j9pm1d7n5tp3es6uab")
+            .replace("{index}", "0");
         let method = match route.method {
             platform_api_doc::Method::Get => "GET",
             platform_api_doc::Method::Post => "POST",

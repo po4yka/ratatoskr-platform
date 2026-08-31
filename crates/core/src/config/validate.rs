@@ -135,6 +135,14 @@ pub(crate) fn validate(role: RuntimeRole, config: &PlatformConfig) -> Vec<Violat
     found.extend(operations_violations(config));
     found.extend(gateway_violations(role, config));
 
+    if !config.archive_staging.root.is_absolute() {
+        found.push(Violation {
+            key: "archive_staging.root",
+            env_var: "RATATOSKR__ARCHIVE_STAGING__ROOT",
+            rule: "must be an absolute private directory so staging never depends on process cwd",
+        });
+    }
+
     found
 }
 
@@ -152,6 +160,15 @@ fn gateway_violations(role: RuntimeRole, config: &PlatformConfig) -> Vec<Violati
 
     let mut prefixes = std::collections::BTreeSet::new();
     found.extend(gateway_budget_violations(&config.gateway.budgets));
+    let chatgpt = config.gateway.routes.contains_key("chatgpt");
+    let claude = config.gateway.routes.contains_key("claude");
+    if chatgpt != claude {
+        found.push(Violation {
+            key: "gateway.routes.archive_receivers",
+            env_var: "RATATOSKR__GATEWAY__ROUTES",
+            rule: "must configure both canonical ChatGPT and Claude archive receivers or neither",
+        });
+    }
     for (service, route) in &config.gateway.routes {
         gateway_route_violations(config, service, route, &mut found, &mut prefixes);
     }

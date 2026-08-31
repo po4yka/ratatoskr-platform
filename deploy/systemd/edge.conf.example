@@ -22,6 +22,10 @@ RATATOSKR__PUBLIC__BIND=127.0.0.1:8080
 RATATOSKR__PUBLIC__REQUEST_TIMEOUT_SECONDS=300
 RATATOSKR__PUBLIC__MAX_BODY_BYTES=104857600
 
+# Incomplete resumable archives survive Edge restart on the durable NVMe mount. This directory is
+# private to ratatoskr-edge and is writable through the unit's otherwise read-only filesystem.
+RATATOSKR__ARCHIVE_STAGING__ROOT=/mnt/nvme/ratatoskr/archive-staging
+
 # Domain APIs are loopback-only. Edge owns the public prefixes, validates the session and mints
 # only x-ratatoskr-user-id, optional x-ratatoskr-device-id and x-correlation-id for each request.
 RATATOSKR__GATEWAY__ROUTES__KNOWLEDGE__PREFIX=/v1/k
@@ -39,6 +43,14 @@ RATATOSKR__GATEWAY__ROUTES__SOCIAL__CLASS=stream
 RATATOSKR__GATEWAY__ROUTES__AI__PREFIX=/v1/ai
 RATATOSKR__GATEWAY__ROUTES__AI__LISTENER=127.0.0.1:8095
 RATATOSKR__GATEWAY__ROUTES__AI__CLASS=stream
+RATATOSKR__GATEWAY__ROUTES__CHATGPT__PREFIX=/v1/chatgpt
+RATATOSKR__GATEWAY__ROUTES__CHATGPT__LISTENER=127.0.0.1:8096
+RATATOSKR__GATEWAY__ROUTES__CHATGPT__CLASS=transfer
+RATATOSKR__GATEWAY__ROUTES__CHATGPT__ARCHIVE_RECEIPT_PATH=/v1/ai-archives/receipt
+RATATOSKR__GATEWAY__ROUTES__CLAUDE__PREFIX=/v1/claude
+RATATOSKR__GATEWAY__ROUTES__CLAUDE__LISTENER=127.0.0.1:8097
+RATATOSKR__GATEWAY__ROUTES__CLAUDE__CLASS=transfer
+RATATOSKR__GATEWAY__ROUTES__CLAUDE__ARCHIVE_RECEIPT_PATH=/v1/ai-archives/receipt
 
 # The whole URL is a secret: a PostgreSQL URL carries its password in the user information.
 RATATOSKR__DATABASE__URL=postgres://ratatoskr_edge:CHANGE-ME@127.0.0.1:5432/ratatoskr

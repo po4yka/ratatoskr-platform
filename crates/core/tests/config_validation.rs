@@ -107,6 +107,53 @@ fn gateway_accepts_configured_chatgpt_and_claude_transfer_receivers() {
     .expect("the configured archive receivers are a valid Edge route table");
 }
 
+#[test]
+fn gateway_requires_both_distinct_archive_receivers_when_archive_ingress_is_enabled() {
+    let mut configured = PlatformConfig::defaults(RuntimeRole::Edge);
+    configured.gateway.routes.insert(
+        "chatgpt".to_owned(),
+        GatewayRouteConfig {
+            prefix: "/v1/chatgpt".to_owned(),
+            listener: "127.0.0.1:8096".parse().unwrap(),
+            class: Some(GatewayRouteClass::Transfer),
+            capabilities_path: "/v1/capabilities".to_owned(),
+            archive_receipt_path: "/v1/ai-archives/receipt".to_owned(),
+        },
+    );
+    let error = config::load_from(
+        RuntimeRole::Edge,
+        Figment::from(Serialized::defaults(configured)),
+    )
+    .expect_err("one archive receiver cannot enable a half-routed product");
+    let ConfigError::Invalid(found) = error else {
+        panic!("expected semantic gateway validation failure");
+    };
+    assert!(names(&found, "gateway.routes.archive_receivers"));
+
+    let mut collided = PlatformConfig::defaults(RuntimeRole::Edge);
+    for (service, prefix) in [("chatgpt", "/v1/chatgpt"), ("claude", "/v1/claude")] {
+        collided.gateway.routes.insert(
+            service.to_owned(),
+            GatewayRouteConfig {
+                prefix: prefix.to_owned(),
+                listener: "127.0.0.1:8096".parse().unwrap(),
+                class: Some(GatewayRouteClass::Transfer),
+                capabilities_path: "/v1/capabilities".to_owned(),
+                archive_receipt_path: "/v1/ai-archives/receipt".to_owned(),
+            },
+        );
+    }
+    let error = config::load_from(
+        RuntimeRole::Edge,
+        Figment::from(Serialized::defaults(collided)),
+    )
+    .expect_err("provider receivers cannot collide");
+    let ConfigError::Invalid(found) = error else {
+        panic!("expected semantic gateway validation failure");
+    };
+    assert!(names(&found, "gateway.routes.listener"));
+}
+
 /// C-7. `ARCHITECTURE.md` S18: the edge role serves the public API, so a missing public listener is
 /// a startup failure and not a quietly headless process.
 #[test]

@@ -15,8 +15,9 @@ use jiff::SignedDuration;
 use platform_core::RuntimeRole;
 use platform_core::config::{PlatformConfig, RetentionConfig};
 use platform_eventing::{
-    COMMAND_STREAM, EDGE_PROJECTION_CONSUMER, NatsPublisher, StreamSpec,
-    ensure_social_capture_consumers, ensure_telegram_notification_consumer, pump,
+    AI_ARCHIVE_REPORT_CONSUMERS, COMMAND_STREAM, EDGE_PROJECTION_CONSUMER, NatsPublisher,
+    StreamSpec, ensure_ai_archive_report_consumers, ensure_social_capture_consumers,
+    ensure_telegram_notification_consumer, pump,
 };
 use platform_http::{RuntimeState, Serving};
 use platform_operations::ProgressProjection;
@@ -182,6 +183,20 @@ impl platform_http::PublicRoutes for EdgeRoutes {
             ));
         }
         state.gateway = platform_public_api::gateway::Gateway::from_config(&config.gateway);
+        state.archive_staging_root = Arc::new(config.archive_staging.root.clone());
+        let archive_enabled = ["chatgpt", "claude"]
+            .iter()
+            .any(|provider| state.gateway.has_archive_receiver(provider));
+        if archive_enabled {
+            health
+                .set_archive_staging_ready(staging_is_writable(&config.archive_staging.root).await);
+        }
+        for provider in ["chatgpt", "claude"] {
+            if state.gateway.has_archive_receiver(provider) {
+                health.set_archive_receipt_ready(provider, false);
+                health.set_archive_report_ready(provider, true);
+            }
+        }
 
         // Shared with the observer rather than moved into the router, so the capability gauges are
         // computed from the SAME state the route reports (ADR-0008: one source for that fact, or
@@ -190,6 +205,11 @@ impl platform_http::PublicRoutes for EdgeRoutes {
         let tasks = vec![
             spawn_publisher(database.pool().clone(), publisher.clone()),
             spawn_projection(database.pool().clone(), publisher.clone()),
+            spawn_archive_projections(
+                database.pool().clone(),
+                publisher.clone(),
+                Arc::clone(health),
+            ),
             spawn_schedule_registration(
                 database.pool().clone(),
                 publisher.clone(),
@@ -256,6 +276,11 @@ async fn ensure_fixed_bus_topology(publisher: &NatsPublisher) -> Result<(), Stri
         .await
         .map_err(|error| {
             format!("the fixed Telegram notification consumer could not be declared: {error}")
+        })?;
+    ensure_ai_archive_report_consumers(publisher.context(), platform_eventing::EVENT_STREAM)
+        .await
+        .map_err(|error| {
+            format!("the fixed AI archive report consumers could not be declared: {error}")
         })
 }
 
@@ -328,6 +353,14 @@ fn spawn_observer(
             let now = jiff::Timestamp::now();
             platform_public_api::capabilities::sample(&state);
             state.gateway.refresh_capabilities().await;
+            for provider in ["chatgpt", "claude"] {
+                if state.gateway.has_archive_receiver(provider) {
+                    state.health.set_archive_receipt_ready(
+                        provider,
+                        state.gateway.service_available(provider).await,
+                    );
+                }
+            }
             if let Err(error) = platform_eventing::observe::sample(&pool, now).await {
                 tracing::warn!(%error, "the outbox and inbox gauges could not be sampled");
             }
@@ -503,6 +536,75 @@ fn spawn_projection(pool: PgPool, publisher: NatsPublisher) -> tokio::task::Join
             tracing::error!(%error, "the operation-event consumer stopped");
         }
     })
+}
+
+/// Apply provider-scoped archive progress reports to their operation projection.
+fn spawn_archive_projections(
+    pool: PgPool,
+    publisher: NatsPublisher,
+    health: Arc<RuntimeState>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut tasks = tokio::task::JoinSet::new();
+        for consumer in AI_ARCHIVE_REPORT_CONSUMERS {
+            let pool = pool.clone();
+            let publisher = publisher.clone();
+            let health = Arc::clone(&health);
+            tasks.spawn(async move {
+                let provider = if consumer.filter_subject.contains(".chatgpt.") {
+                    "chatgpt"
+                } else {
+                    "claude"
+                };
+                let outcome = platform_eventing::consumer::run(
+                    publisher.context(),
+                    &StreamSpec::event_stream(),
+                    consumer.durable_name,
+                    consumer.filter_subject,
+                    &pool,
+                    &ProgressProjection,
+                    std::future::pending::<()>(),
+                )
+                .await;
+                health.set_archive_report_ready(provider, false);
+                outcome
+            });
+        }
+        while let Some(result) = tasks.join_next().await {
+            match result {
+                Ok(Ok(_)) => tracing::error!("an AI archive report consumer stopped"),
+                Ok(Err(error)) => {
+                    tracing::error!(%error, "an AI archive report consumer failed");
+                }
+                Err(error) => {
+                    health.set_archive_report_ready("chatgpt", false);
+                    health.set_archive_report_ready("claude", false);
+                    tracing::error!(%error, "an AI archive report task failed");
+                }
+            }
+        }
+    })
+}
+
+async fn staging_is_writable(root: &std::path::Path) -> bool {
+    if tokio::fs::create_dir_all(root).await.is_err() {
+        return false;
+    }
+    let probe = root.join(format!(".readiness-{}", uuid::Uuid::now_v7()));
+    match tokio::fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&probe)
+        .await
+    {
+        Ok(file) => {
+            let synced = file.sync_all().await.is_ok();
+            drop(file);
+            let removed = tokio::fs::remove_file(probe).await.is_ok();
+            synced && removed
+        }
+        Err(_) => false,
+    }
 }
 
 /// Receive domain schedule registrations through Edge's sole bus connection.

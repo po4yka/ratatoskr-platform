@@ -101,6 +101,18 @@ pub const EVENT_SUBJECTS: &str = "evt.>";
 /// stream or skipping what arrived while the process was down.
 pub const EDGE_PROJECTION_CONSUMER: &str = "platform_edge_projection";
 
+/// Provider-scoped archive report consumers owned by Edge.
+pub const AI_ARCHIVE_REPORT_CONSUMERS: [FixedConsumerSpec; 2] = [
+    FixedConsumerSpec {
+        durable_name: "platform_ai_archive_chatgpt_projection",
+        filter_subject: "evt.ai-archive.chatgpt.operation.reported.v1",
+    },
+    FixedConsumerSpec {
+        durable_name: "platform_ai_archive_claude_projection",
+        filter_subject: "evt.ai-archive.claude.operation.reported.v1",
+    },
+];
+
 /// The durable Telegram reads raised notification events through.
 pub const TELEGRAM_NOTIFICATION_CONSUMER: &str = "ratatoskr_telegram_notifications";
 
@@ -353,4 +365,16 @@ pub async fn ensure_telegram_notification_consumer(
     stream_name: &str,
 ) -> Result<(), EventingError> {
     ensure_fixed_consumers(context, stream_name, &TELEGRAM_NOTIFICATION_CONSUMERS).await
+}
+
+/// Ensures the two fixed provider-scoped archive report durables exist.
+///
+/// # Errors
+///
+/// Returns [`EventingError::Bus`] if the stream or either immutable durable cannot be declared.
+pub async fn ensure_ai_archive_report_consumers(
+    context: &jetstream::Context,
+    stream_name: &str,
+) -> Result<(), EventingError> {
+    ensure_fixed_consumers(context, stream_name, &AI_ARCHIVE_REPORT_CONSUMERS).await
 }

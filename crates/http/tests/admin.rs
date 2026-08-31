@@ -143,6 +143,35 @@ async fn readiness_reports_the_named_checks_and_nothing_else() {
     }
 }
 
+#[tokio::test]
+async fn archive_readiness_reports_each_provider_path_independently() {
+    let state = started(RuntimeRole::Edge);
+    state.set_archive_staging_ready(true);
+    state.set_archive_receipt_ready("chatgpt", true);
+    state.set_archive_report_ready("chatgpt", false);
+    state.set_archive_receipt_ready("claude", false);
+    state.set_archive_report_ready("claude", true);
+
+    let (status, body) = json(admin(&state), "/health/ready").await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    let checks = body["checks"].as_array().expect("readiness checks");
+    for (name, expected) in [
+        ("archive_chatgpt_receipt", "pass"),
+        ("archive_chatgpt_report", "fail"),
+        ("archive_claude_receipt", "fail"),
+        ("archive_claude_report", "pass"),
+        ("archive_staging", "pass"),
+    ] {
+        assert_eq!(
+            checks
+                .iter()
+                .find(|check| check["name"] == name)
+                .expect("the named archive check")["state"],
+            expected
+        );
+    }
+}
+
 /// H-5: a reason is a token from a closed set, never a formatted dependency error.
 #[tokio::test]
 async fn the_readiness_reason_comes_from_the_closed_set() {

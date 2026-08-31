@@ -20,6 +20,8 @@ pub struct AiArchiveAcceptance {
     pub operation_id: Uuid,
     /// The user that may deliver the archive.
     pub owner_user_id: Uuid,
+    /// The export-agent device that prepared this operation.
+    pub device_id: Uuid,
     /// The bounded provider routing token.
     pub provider: String,
     /// Lowercase SHA-256 of the exact archive bytes.
@@ -47,11 +49,12 @@ where
 {
     sqlx::query(
         "insert into operations.ai_archive_acceptances
-             (operation_id, owner_user_id, provider, sha256, byte_size, accepted_at)
-         values ($1, $2, $3, $4, $5, $6)",
+             (operation_id, owner_user_id, device_id, provider, sha256, byte_size, accepted_at)
+         values ($1, $2, $3, $4, $5, $6, $7)",
     )
     .bind(acceptance.operation_id)
     .bind(acceptance.owner_user_id)
+    .bind(acceptance.device_id)
     .bind(&acceptance.provider)
     .bind(&acceptance.sha256)
     .bind(acceptance.byte_size)
@@ -75,7 +78,7 @@ where
     E: PgExecutor<'e>,
 {
     let row = sqlx::query(
-        "select operation_id, owner_user_id, provider, sha256, byte_size, accepted_at
+        "select operation_id, owner_user_id, device_id, provider, sha256, byte_size, accepted_at
            from operations.ai_archive_acceptances where operation_id = $1",
     )
     .bind(operation_id)
@@ -91,6 +94,7 @@ where
             owner_user_id: row
                 .try_get("owner_user_id")
                 .map_err(PersistenceError::Query)?,
+            device_id: row.try_get("device_id").map_err(PersistenceError::Query)?,
             provider: row.try_get("provider").map_err(PersistenceError::Query)?,
             sha256: row.try_get("sha256").map_err(PersistenceError::Query)?,
             byte_size: row.try_get("byte_size").map_err(PersistenceError::Query)?,

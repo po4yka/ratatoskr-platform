@@ -110,6 +110,115 @@ async fn a_published_report_advances_the_projection() {
 }
 
 #[tokio::test]
+async fn archive_report_requires_subject_producer_and_bound_provider() {
+    let harness = TestDatabase::create().await.expect("a test database");
+    let pool = harness.pool();
+    let owner = Uuid::now_v7();
+    let operation =
+        platform_operations::accept(pool, owner, "ai_archive.import", CORRELATION, None, now())
+            .await
+            .expect("accepting");
+    platform_operations::record_ai_archive_acceptance(
+        pool,
+        &platform_operations::AiArchiveAcceptance {
+            operation_id: operation.operation_id,
+            owner_user_id: owner,
+            device_id: Uuid::now_v7(),
+            provider: "chatgpt".to_owned(),
+            sha256: "00".repeat(32),
+            byte_size: 1,
+            accepted_at: now(),
+        },
+    )
+    .await
+    .expect("recording the archive binding");
+
+    for (subject, producer) in [
+        (
+            "evt.ai-archive.claude.operation.reported.v1",
+            "ratatoskr-claude",
+        ),
+        (
+            "evt.ai-archive.chatgpt.operation.reported.v1",
+            "ratatoskr-claude",
+        ),
+        ("evt.platform.operation.reported.v1", "ratatoskr-chatgpt"),
+    ] {
+        let message = Incoming {
+            message_id: Uuid::now_v7(),
+            subject: Subject::parse(subject).expect("the report subject"),
+            producer: producer.to_owned(),
+            payload: serde_json::to_value(report(operation.operation_id, OperationStatus::Running))
+                .expect("the report serializes"),
+        };
+        assert_eq!(
+            deliver(pool, &ProgressProjection, &message, now())
+                .await
+                .expect("delivering the mismatched report"),
+            Some(Outcome::Rejected)
+        );
+    }
+
+    let valid = Incoming {
+        message_id: Uuid::now_v7(),
+        subject: Subject::parse("evt.ai-archive.chatgpt.operation.reported.v1")
+            .expect("the report subject"),
+        producer: "ratatoskr-chatgpt".to_owned(),
+        payload: serde_json::to_value(report(operation.operation_id, OperationStatus::Running))
+            .expect("the report serializes"),
+    };
+    assert_eq!(
+        deliver(pool, &ProgressProjection, &valid, now())
+            .await
+            .expect("delivering the bound report"),
+        Some(Outcome::Applied)
+    );
+
+    harness.cleanup().await.expect("cleanup");
+}
+
+#[tokio::test]
+async fn provider_scoped_archive_report_requires_an_archive_binding() {
+    let harness = TestDatabase::create().await.expect("a test database");
+    let pool = harness.pool();
+    let operation = platform_operations::accept(
+        pool,
+        Uuid::now_v7(),
+        "content.capture.submit",
+        CORRELATION,
+        None,
+        now(),
+    )
+    .await
+    .expect("accepting");
+    let message = Incoming {
+        message_id: Uuid::now_v7(),
+        subject: Subject::parse("evt.ai-archive.chatgpt.operation.reported.v1")
+            .expect("the provider-scoped report subject"),
+        producer: "ratatoskr-chatgpt".to_owned(),
+        payload: serde_json::to_value(report(operation.operation_id, OperationStatus::Running))
+            .expect("the report serializes"),
+    };
+
+    assert_eq!(
+        deliver(pool, &ProgressProjection, &message, now())
+            .await
+            .expect("delivering the unbound provider report"),
+        Some(Outcome::Rejected)
+    );
+    assert_eq!(
+        platform_operations::find(pool, operation.operation_id)
+            .await
+            .expect("reading")
+            .expect("the operation")
+            .status,
+        OperationStatus::Accepted
+    );
+
+    harness.cleanup().await.expect("cleanup");
+}
+
+#[tokio::test]
 async fn a_success_report_round_trips_complete_blob_ref() {
     let harness = TestDatabase::create().await.expect("a test database");
     let pool = harness.pool();

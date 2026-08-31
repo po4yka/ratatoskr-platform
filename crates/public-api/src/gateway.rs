@@ -187,6 +187,15 @@ impl Gateway {
             .collect()
     }
 
+    /// Whether the most recent bounded capability probe for a configured service succeeded.
+    pub async fn service_available(&self, service: &str) -> bool {
+        self.capabilities
+            .read()
+            .await
+            .get(service)
+            .is_some_and(|snapshot| !snapshot.stale)
+    }
+
     /// Whether the last background Knowledge observation succeeded.
     #[must_use]
     pub fn knowledge_available(&self) -> bool {

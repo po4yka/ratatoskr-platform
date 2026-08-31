@@ -28,6 +28,8 @@ struct NatsFixture {
     url: String,
     admin_seed: String,
     telegram_seed: String,
+    chatgpt_seed: String,
+    claude_seed: String,
 }
 
 impl NatsFixture {
@@ -41,8 +43,15 @@ impl NatsFixture {
 
         let admin = KeyPair::new_user();
         let telegram = KeyPair::new_user();
+        let chatgpt = KeyPair::new_user();
+        let claude = KeyPair::new_user();
         let telegram_public = include_telegram_identity.then(|| telegram.public_key());
-        let config = nats_config(&admin.public_key(), telegram_public.as_deref());
+        let config = nats_config(
+            &admin.public_key(),
+            telegram_public.as_deref(),
+            &chatgpt.public_key(),
+            &claude.public_key(),
+        );
         let config_path = directory.join("nats.conf");
         std::fs::write(&config_path, config).expect("the disposable NATS configuration");
 
@@ -101,6 +110,8 @@ impl NatsFixture {
             url: format!("nats://127.0.0.1:{port}"),
             admin_seed: admin.seed().expect("the disposable admin seed"),
             telegram_seed: telegram.seed().expect("the disposable Telegram seed"),
+            chatgpt_seed: chatgpt.seed().expect("the disposable ChatGPT seed"),
+            claude_seed: claude.seed().expect("the disposable Claude seed"),
         }
     }
 
@@ -123,7 +134,12 @@ impl NatsFixture {
     }
 }
 
-fn nats_config(admin_public: &str, telegram_public: Option<&str>) -> String {
+fn nats_config(
+    admin_public: &str,
+    telegram_public: Option<&str>,
+    chatgpt_public: &str,
+    claude_public: &str,
+) -> String {
     let stream = EVENT_STREAM;
     let consumer = TELEGRAM_NOTIFICATION_CONSUMER;
     let telegram_user = telegram_public.map_or_else(String::new, |public_key| {
@@ -144,20 +160,97 @@ fn nats_config(admin_public: &str, telegram_public: Option<&str>) -> String {
         }}"#
         )
     });
-    let admin_separator = if telegram_public.is_some() { "," } else { "" };
+    let telegram_separator = if telegram_public.is_some() { "," } else { "" };
     format!(
-        r"
+        r#"
 port: 4222
 host: 0.0.0.0
 jetstream {{ store_dir: /data }}
 authorization {{
     users: [
-        {{ nkey: {admin_public} }}{admin_separator}
-        {telegram_user}
+        {{ nkey: {admin_public} }},
+        {telegram_user}{telegram_separator}
+        {{
+            nkey: {chatgpt_public}
+            permissions: {{
+                publish: {{ allow: ["evt.ai-archive.chatgpt.operation.reported.v1"] }}
+                subscribe: {{ allow: ["_INBOX.>"] }}
+            }}
+        }},
+        {{
+            nkey: {claude_public}
+            permissions: {{
+                publish: {{ allow: ["evt.ai-archive.claude.operation.reported.v1"] }}
+                subscribe: {{ allow: ["_INBOX.>"] }}
+            }}
+        }}
     ]
 }}
-"
+"#
     )
+}
+
+#[tokio::test]
+async fn ai_archive_provider_nkeys_cannot_impersonate_or_subscribe() {
+    const CHATGPT: &str = "evt.ai-archive.chatgpt.operation.reported.v1";
+    const CLAUDE: &str = "evt.ai-archive.claude.operation.reported.v1";
+    let deployed = include_str!("../../../deploy/nats/ratatoskr.conf");
+    for required in [
+        "UREPLACE_ME_WITH_THE_PUBLIC_NKEY_OF_RATATOSKR_CHATGPT",
+        "UREPLACE_ME_WITH_THE_PUBLIC_NKEY_OF_RATATOSKR_CLAUDE",
+        CHATGPT,
+        CLAUDE,
+    ] {
+        assert!(
+            deployed.contains(required),
+            "the deployed NATS policy is missing {required}"
+        );
+    }
+    let fixture = NatsFixture::start(false);
+    let admin = fixture.connect(&fixture.admin_seed).await;
+    let chatgpt = fixture.connect(&fixture.chatgpt_seed).await;
+    let claude = fixture.connect(&fixture.claude_seed).await;
+
+    chatgpt
+        .publish(CHATGPT, "chatgpt".into())
+        .await
+        .expect("ChatGPT can publish only its own report subject");
+    claude
+        .publish(CLAUDE, "claude".into())
+        .await
+        .expect("Claude can publish only its own report subject");
+
+    for (client, forbidden) in [(&chatgpt, CLAUDE), (&claude, CHATGPT)] {
+        let response = timeout(
+            REQUEST_TIMEOUT + Duration::from_millis(250),
+            client.request(forbidden, "impersonation".into()),
+        )
+        .await;
+        assert!(
+            !matches!(response, Ok(Ok(_))),
+            "a provider unexpectedly published a foreign report"
+        );
+        let mut subscription = client
+            .subscribe("evt.>")
+            .await
+            .expect("the client accepts the subscription request before server authorization");
+        admin
+            .publish(CHATGPT, "private".into())
+            .await
+            .expect("the admin publishes the denial probe");
+        assert!(
+            !matches!(
+                timeout(Duration::from_millis(250), subscription.next()).await,
+                Ok(Some(_))
+            ),
+            "a provider unexpectedly received a direct event subscription"
+        );
+    }
+
+    assert!(
+        async_nats::connect(&fixture.url).await.is_err(),
+        "anonymous access must be refused"
+    );
 }
 
 impl Drop for NatsFixture {

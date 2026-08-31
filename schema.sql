@@ -693,6 +693,7 @@ create unique index operations_idempotency_key_scope_key
 create table operations.ai_archive_acceptances (
     operation_id  uuid        primary key references operations.operations (operation_id) on delete cascade,
     owner_user_id uuid        not null,
+    device_id     uuid        not null,
     provider      text        not null,
     sha256        text        not null,
     byte_size     bigint      not null,
@@ -707,11 +708,57 @@ create table operations.ai_archive_acceptances (
 );
 
 comment on table operations.ai_archive_acceptances is
-    'The edge-owned binding from a durable ai_archive import operation to its provider, digest and '
-    'declared byte length. It deliberately stores no archive bytes, source paths or parser state.';
+    'The edge-owned binding from a durable ai_archive import operation to its preparing device, '
+    'provider, digest and declared byte length. It stores no source path or parser state.';
 
 create index ai_archive_acceptances_owner_operation_idx
     on operations.ai_archive_acceptances (owner_user_id, operation_id);
+
+create table operations.ai_archive_transfers (
+    resumption_token text        primary key,
+    operation_id     uuid        not null unique references operations.ai_archive_acceptances (operation_id) on delete cascade,
+    declared_size_bytes bigint   not null,
+    media_type       text        not null,
+    digest_sha256    text        not null,
+    chunk_size_bytes integer     not null,
+    expected_chunks  integer     not null,
+    session_state    text        not null default 'open',
+    expires_at       timestamptz not null,
+    opened_at        timestamptz not null,
+
+    constraint ai_archive_transfers_token_is_bounded
+        check (resumption_token ~ '^rst_[0-9a-v]{24,64}$'),
+    constraint ai_archive_transfers_size_is_positive check (declared_size_bytes > 0),
+    constraint ai_archive_transfers_digest_is_lower_hex
+        check (digest_sha256 ~ '^[a-f0-9]{64}$'),
+    constraint ai_archive_transfers_chunk_size_is_bounded
+        check (chunk_size_bytes between 65536 and 16777216),
+    constraint ai_archive_transfers_chunk_count_is_bounded
+        check (expected_chunks between 1 and 10000),
+    constraint ai_archive_transfers_state_is_known
+        check (session_state in ('open', 'finalized', 'failed')),
+    constraint ai_archive_transfers_expiry_follows_open
+        check (expires_at > opened_at)
+);
+
+comment on table operations.ai_archive_transfers is
+    'One bounded resumable staging session owned by an AI archive operation. The token is opaque; '
+    'chunk bytes live under the private configured staging root.';
+
+create table operations.ai_archive_transfer_chunks (
+    resumption_token text    not null references operations.ai_archive_transfers (resumption_token) on delete cascade,
+    chunk_index      integer not null,
+    sha256           text    not null,
+    byte_size        integer not null,
+    received_at      timestamptz not null,
+    primary key (resumption_token, chunk_index),
+
+    constraint ai_archive_transfer_chunks_index_is_bounded
+        check (chunk_index between 0 and 9999),
+    constraint ai_archive_transfer_chunks_sha256_is_lower_hex
+        check (sha256 ~ '^[a-f0-9]{64}$'),
+    constraint ai_archive_transfer_chunks_size_is_positive check (byte_size > 0)
+);
 
 -- ---------------------------------------------------------------------------------------------
 -- The transition guard
@@ -933,7 +980,7 @@ create table operations.outbox (
     -- permissions per subject, and a row that can hold an arbitrary string can hold one outside the
     -- allowlist the credential was issued for.
     constraint outbox_subject_is_a_valid_subject
-        check (subject ~ '^(cmd|evt)\.[a-z][a-z0-9_]{0,31}(\.[a-z][a-z0-9_]{0,31}){1,3}\.v[1-9][0-9]{0,2}$'),
+        check (subject ~ '^(cmd|evt)\.[a-z][a-z0-9_-]{0,31}(\.[a-z][a-z0-9_-]{0,31}){1,3}\.v[1-9][0-9]{0,2}$'),
     constraint outbox_attempts_is_not_negative
         check (attempts >= 0),
     constraint outbox_claim_is_whole
@@ -1026,7 +1073,7 @@ create table operations.inbox (
     outcome       text,
 
     constraint inbox_subject_is_a_valid_subject
-        check (subject ~ '^(cmd|evt)\.[a-z][a-z0-9_]{0,31}(\.[a-z][a-z0-9_]{0,31}){1,3}\.v[1-9][0-9]{0,2}$'),
+        check (subject ~ '^(cmd|evt)\.[a-z][a-z0-9_-]{0,31}(\.[a-z][a-z0-9_-]{0,31}){1,3}\.v[1-9][0-9]{0,2}$'),
     -- The wire producer identity, whose grammar `ratatoskr-contracts` validates. Bounded here so an
     -- unbounded value cannot arrive from a forged message (THREAT_MODEL.md, event forgery).
     constraint inbox_producer_is_bounded

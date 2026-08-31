@@ -50,8 +50,10 @@ sets the primary group and does not add the user's other memberships, so a unit 
 `Group=ratatoskr` produces a process that cannot read this file. That is not hypothetical — it is
 how milestone 10's first start failed, with "the bus credential could not be read".
 
-Repeat generation and installation for `telegram.nkey`, `x.nkey`, `instagram.nkey`, and
-`threads.nkey`, using their matching service group. Telegram's seed is installed as:
+Repeat generation and installation for `telegram.nkey`, `x.nkey`, `instagram.nkey`,
+`threads.nkey`, `chatgpt.nkey`, and `claude.nkey`, using their matching service group. The AI
+archive services configure their `bus.nkey_seed_path` to `/etc/ratatoskr/chatgpt.nkey` and
+`/etc/ratatoskr/claude.nkey` respectively. Telegram's seed is installed as:
 
 ```bash
 sudo install -m 0640 -o root -g ratatoskr-telegram-dispatcher \
