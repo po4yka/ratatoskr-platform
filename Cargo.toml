@@ -127,10 +127,11 @@ async-stream = "0.3.6"
 futures-util = { version = "0.3.31", default-features = false, features = ["std"] }
 
 # ---- schema generation ----
-# The SAME pin `ratatoskr-contracts` uses, and it must stay the same: two schemars versions in one
+# The SAME major `ratatoskr-contracts` uses, and it must stay the same: two schemars majors in one
 # graph are two `JsonSchema` traits, so a contract type would not implement the one this
-# repository's generator calls. Q5 in DEVELOPMENT.md records that this pin is graph-wide.
-schemars = { version = "=1.2.2", features = ["uuid1", "jiff02"] }
+# repository's generator calls. Cargo resolves every `1.x` requirement to one version, and
+# `Cargo.lock` records which; Q5 in DEVELOPMENT.md records that contracts' constraint is graph-wide.
+schemars = { version = "1.2.2", features = ["uuid1", "jiff02"] }
 
 # ---- hashing and signatures ----
 # SHA-256 for the idempotency key and request fingerprint. Not a password hash and not used as one.
