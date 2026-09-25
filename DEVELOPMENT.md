@@ -136,7 +136,6 @@ makes it real.
 
 ```bash
 cargo fetch --locked
-cargo deny check
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 git ls-files -z "*.rs" | xargs -0 -r wc -l | awk '$2 != "total" && $1 > 850 { print; bad = 1 } END { exit bad }'
@@ -156,9 +155,11 @@ This list and the step list in `.github/workflows/ci.yml` are the same list. If 
 document is wrong.  That is now asserted by a step in the workflow rather than left to
 whoever edits one of the two files.
 
-`cargo deny check` is in the list because nothing else in the gate reads RustSec. When it was first
-run against this graph it reported five advisories, four of them a rustls-webpki reachable from
-`ratatoskr-edge` and one an unmaintained crate with no safe upgrade — none of which `cargo clippy` or
+`cargo deny check` is not in the list: it runs in its own `deny` job in the same workflow, so a new
+RustSec advisory fails that job without hiding a clippy or test failure in the gate behind it. Run
+it locally before a pull request all the same. It exists because nothing else in CI reads RustSec.
+When it was first run against this graph it reported five advisories, four of them a rustls-webpki
+reachable from `ratatoskr-edge` and one an unmaintained crate with no safe upgrade — none of which `cargo clippy` or
 `cargo test` can see. `deny.toml` also pins the dependency-source policy, including
 `required-git-spec = "rev"`, which turns the prose rule in `Cargo.toml` about branches and tags not
 pinning into an exit code.

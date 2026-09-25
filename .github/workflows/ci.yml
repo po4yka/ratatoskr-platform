@@ -9,6 +9,9 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Weekly on main, so a date-dependent test or a runner change is caught without a push.
+  schedule:
+    - cron: "40 5 * * 1"
 
 # SECURITY.md: deny by default. The gate reads the tree and needs nothing else.
 permissions:
@@ -112,14 +115,6 @@ jobs:
 
       - run: cargo fetch --locked
 
-      # Reads RustSec, the licence set, duplicate versions and the source policy. Nothing else in the
-      # gate looks at any of them, and the graph was carrying five advisories in the TLS path of the
-      # public-facing binary for six milestones because of it.
-      - uses: taiki-e/install-action@4076c08d76dba979c11a7285295b0716c1d67908 # v2.87.15
-        with:
-          tool: cargo-deny
-      - run: cargo deny check
-
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
@@ -133,7 +128,7 @@ jobs:
       # `ratatoskr-contracts` `tools/contractsc/src/compat.rs`, 716 here. A ratchet, not a target.
       # `*.rs` only, so `Cargo.lock`, `openapi/openapi.json` and `schema.sql` need no exclusion list —
       # an exclusion list is a second source of truth that goes stale in silence.
-      - run: git ls-files -z "*.rs" | xargs -0 -r wc -l | awk '$2 != "total" && $1 > 850 { print; bad = 1 } END { exit bad }'
+      - run: set -o pipefail; git ls-files -z "*.rs" | xargs -0 -r wc -l | awk '$2 != "total" && $1 > 850 { print; bad = 1 } END { exit bad }'
 
       # Before the tests, not after: services/edge/tests/boot.rs executes ratatoskr-ingest and
       # ratatoskr-scheduler as child processes, and `cargo test` builds the binary of the package
@@ -169,6 +164,28 @@ jobs:
           fi
           echo "the two lists are identical:"
           echo "$in_ci" | awk '{print "  " $0}'
+
+  # Separate from the gate so a new RustSec advisory cannot hide a clippy or test failure behind it.
+  #
+  # Reads RustSec, the licence set, duplicate versions and the source policy. Nothing else in CI
+  # looks at any of them, and the graph was carrying five advisories in the TLS path of the
+  # public-facing binary for six milestones because of it.
+  deny:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Show the pinned toolchain
+        run: rustup show           # rust-toolchain.toml is the only supported toolchain
+
+      - uses: taiki-e/install-action@4076c08d76dba979c11a7285295b0716c1d67908 # v2.87.15
+        with:
+          tool: cargo-deny
+      - run: cargo deny check
 
   # The artifact the deployment actually runs, built for the architecture it runs on.
   #
