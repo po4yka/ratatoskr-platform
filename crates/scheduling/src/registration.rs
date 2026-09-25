@@ -132,8 +132,9 @@ impl Handler for RegistrationHandler {
         &self,
         transaction: &mut sqlx::PgTransaction<'_>,
         message: &Incoming,
+        now: Timestamp,
     ) -> Result<Outcome, platform_eventing::EventingError> {
-        match self.apply(transaction, message, Timestamp::now()).await {
+        match self.apply(transaction, message, now).await {
             Ok(ScheduleRegistration::Applied) => Ok(Outcome::Applied),
             Ok(ScheduleRegistration::Rejected) => Ok(Outcome::Rejected),
             Err(error) => Err(platform_eventing::EventingError::Persistence(match error {

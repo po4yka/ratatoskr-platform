@@ -14,8 +14,9 @@ use ratatoskr_identifiers::{EntityRef, Extensions};
 use ratatoskr_operation_contracts::{OperationResultKind, OperationResultRef, OperationStatus};
 use uuid::Uuid;
 
+/// The instant the whole file runs at, so no assertion depends on the day the suite runs.
 fn now() -> jiff::Timestamp {
-    jiff::Timestamp::now()
+    jiff::Timestamp::from_second(1_700_000_000).expect("a fixed timestamp")
 }
 
 fn owner() -> Uuid {

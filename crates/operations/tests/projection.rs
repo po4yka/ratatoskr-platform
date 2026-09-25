@@ -36,8 +36,9 @@ fn nats_url() -> String {
     std::env::var("PLATFORM_TEST_NATS_URL").unwrap_or_else(|_| "nats://127.0.0.1:4222".to_owned())
 }
 
+/// The instant the whole file runs at, so no assertion depends on the day the suite runs.
 fn now() -> jiff::Timestamp {
-    jiff::Timestamp::now()
+    jiff::Timestamp::from_second(1_700_000_000).expect("a fixed timestamp")
 }
 
 fn report(operation_id: Uuid, status: OperationStatus) -> OperationReported {

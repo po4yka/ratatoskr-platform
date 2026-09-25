@@ -33,8 +33,9 @@ use uuid::Uuid;
 const TOKEN: &str = "webhook-source-credential-00000000";
 const SIGNAL: &str = r#"{"url":"https://example.test/feed/1"}"#;
 
+/// The instant the seeded rows are written at, so no assertion depends on the day the suite runs.
 fn now() -> jiff::Timestamp {
-    jiff::Timestamp::now()
+    jiff::Timestamp::from_second(1_700_000_000).expect("a fixed timestamp")
 }
 
 fn app_with(harness: &TestDatabase, per_minute: u32) -> Router {

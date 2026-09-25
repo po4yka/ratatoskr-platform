@@ -22,6 +22,7 @@ impl Handler for ProgressProjection {
         &self,
         transaction: &mut sqlx::PgTransaction<'_>,
         message: &Incoming,
+        now: jiff::Timestamp,
     ) -> Result<Outcome, EventingError> {
         let Some(report) = ProgressReport::read(&message.payload) else {
             // A message this build cannot read is recorded as rejected rather than retried: its
@@ -53,7 +54,6 @@ impl Handler for ProgressProjection {
             return Ok(Outcome::Rejected);
         }
 
-        let now = jiff::Timestamp::now();
         let outcome = crate::record_status(
             transaction,
             report.operation_id,

@@ -38,11 +38,13 @@ pub trait Handler: Send + Sync {
     /// Apply the message inside `transaction`.
     ///
     /// The transaction already holds the inbox row, so the handler's writes and the record that the
-    /// message was seen commit together. A handler that fails leaves neither.
+    /// message was seen commit together. A handler that fails leaves neither. `now` is the instant
+    /// [`deliver`] was given, so a handler never reads the wall clock itself.
     fn handle(
         &self,
         transaction: &mut sqlx::PgTransaction<'_>,
         message: &Incoming,
+        now: jiff::Timestamp,
     ) -> impl Future<Output = Result<Handled, EventingError>> + Send;
 }
 
@@ -80,7 +82,7 @@ pub async fn deliver<H: Handler>(
         return Ok(None);
     }
 
-    let outcome = handler.handle(&mut transaction, message).await?;
+    let outcome = handler.handle(&mut transaction, message, now).await?;
     Inbox::finish(&mut *transaction, message.message_id, outcome, now).await?;
     transaction.commit().await.map_err(|error| {
         EventingError::Persistence(platform_persistence::PersistenceError::Query(error))

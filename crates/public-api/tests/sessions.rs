@@ -28,8 +28,10 @@ use uuid::Uuid;
 
 const AUDIENCE: &str = "edge";
 
+/// The handlers read the wall clock themselves — the API state carries no clock — so a session
+/// or grant seeded here has to be minted on that same clock to be live when the handler checks it.
 fn now() -> jiff::Timestamp {
-    jiff::Timestamp::now()
+    jiff::Timestamp::now() // wall-clock: the handlers under test read the clock themselves
 }
 
 fn issuer() -> Ed25519KeyPair {
