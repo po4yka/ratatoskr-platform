@@ -1,23 +1,35 @@
 # Type-level API techniques
 
 Ways to move a check from run time to compile time. Each entry states what the technique buys,
-what it costs, and when the cost is not worth paying. Every example compiles on rustc 1.97,
+what it costs, and when the cost is not worth paying. Every example compiles on rustc 1.98.1,
 edition 2024.
 
 The order is by how often the technique is the right answer. Read the first two before the rest;
 they cover most cases, and the later ones are easy to over-apply.
+
+Contents:
+
+- Newtype for an invariant
+- `#[non_exhaustive]` on anything a downstream crate matches
+- Sealed trait
+- Typestate
+- `const fn` and const generics
+- Assert an invariant at compile time
+- Let the compiler narrow control flow
+- When not to reach for any of these
 
 ## Newtype for an invariant
 
 The cheapest technique, and the one that is nearly always right. A validated value gets its own
 type, the constructor is the only way in, and no later code repeats the check.
 
-```rust
+```rust,run
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Port(u16);
+pub struct NonZeroPort(u16);
 
-impl Port {
-    /// Returns `None` for port 0, which cannot be bound.
+impl NonZeroPort {
+    /// Returns `None` for port 0, which means "ask the OS for an ephemeral port"
+    /// and is outside this type's non-zero domain contract.
     pub fn new(value: u16) -> Option<Self> {
         (value != 0).then_some(Self(value))
     }
@@ -26,11 +38,21 @@ impl Port {
         self.0
     }
 }
+
+fn main() {
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0))
+        .expect("bind an ephemeral loopback port");
+    let assigned = listener.local_addr().expect("read assigned port").port();
+    assert_ne!(assigned, 0);
+    assert!(NonZeroPort::new(assigned).is_some());
+    assert!(NonZeroPort::new(0).is_none());
+}
 ```
 
-Keep the field private. A `pub struct Port(pub u16)` proves nothing: any code can build an
-invalid one, and the type is then only a comment. See the `rust-serde` skill for the
-`#[serde(try_from = "..")]` form that applies the same rule at a deserialization boundary.
+Keep the field private. A `pub struct NonZeroPort(pub u16)` proves nothing:
+any code can build an invalid one, and the type is then only a comment. See the
+`rust-serde` skill for the `#[serde(try_from = "..")]` form that applies the same
+rule at a deserialization boundary.
 
 ## `#[non_exhaustive]` on anything a downstream crate matches
 
@@ -271,9 +293,9 @@ pub struct Header {
 // Fails to compile if the layout ever changes.
 // 8 bytes, align 4, measured on rustc 1.97.0.
 #[cfg(target_pointer_width = "64")]
-const _: () = assert!(size_of::<Header>() == 8);
+const _: () = assert!(std::mem::size_of::<Header>() == 8);
 #[cfg(target_pointer_width = "64")]
-const _: () = assert!(align_of::<Header>() == 4);
+const _: () = assert!(std::mem::align_of::<Header>() == 4);
 ```
 
 Gate the assertion on the target whose layout you measured. A size that depends on a pointer, a
@@ -281,10 +303,10 @@ Gate the assertion on the target whose layout you measured. A size that depends 
 passes on a 64-bit host fails the build with E0080 when the same file is cross-compiled to
 `i686-unknown-linux-gnu`.
 
-This costs nothing at run time and needs no dependency: `size_of` and `align_of` are in the
-edition-2024 prelude, so neither the `std::mem::` path nor a crate is required. Put one assert
-next to every type whose size or alignment another language depends on. See the `rust-unsafe`
-skill for the layout rules these assertions protect.
+This costs nothing at run time and needs no dependency. `size_of` and `align_of` are in the
+prelude since Rust 1.80. On an older MSRV, qualify them with `std::mem::`. Put one
+assert next to every type whose size or alignment another language depends on.
+See the `rust-unsafe` skill for the layout rules these assertions protect.
 
 ## Let the compiler narrow control flow
 
@@ -299,7 +321,7 @@ pub fn parse_port(text: &str) -> u16 {
     value
 }
 
-// let chains (edition 2024): bind and test in one condition, no nesting.
+// let chains (edition 2024, rustc 1.88+): bind and test in one condition, no nesting.
 pub fn difference(left: Option<u32>, right: Option<u32>) -> u32 {
     if let Some(a) = left
         && let Some(b) = right
@@ -312,8 +334,8 @@ pub fn difference(left: Option<u32>, right: Option<u32>) -> u32 {
 }
 ```
 
-Let chains need edition 2024. Under edition 2021 the same code fails with `let chains are only
-allowed in Rust 2024 or later`, so a crate that has not migrated must keep the nested form.
+Let chains need edition 2024 and rustc 1.88+. The `rust-pattern-semantics` skill, when it is
+installed, has the gate errors and the fallback.
 
 ## When not to reach for any of these
 
