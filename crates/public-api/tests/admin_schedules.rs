@@ -31,8 +31,10 @@ const PRIVATE_PAYLOAD_VALUE: &str = "schedule-secret-account";
 const PRIVATE_ENDPOINT: &str = "postgresql://scheduler.internal/private";
 const PRIVATE_CRON: &str = "0 3 * * *";
 
+/// The handlers read the wall clock themselves — the API state carries no clock — so a session
+/// or grant seeded here has to be minted on that same clock to be live when the handler checks it.
 fn now() -> Timestamp {
-    Timestamp::now()
+    Timestamp::now() // wall-clock: the handlers under test read the clock themselves
 }
 
 fn state(harness: &TestDatabase) -> ApiState {

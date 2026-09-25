@@ -32,8 +32,10 @@ const SYSTEM_CORRELATION: &str = "correlation:01a0153f-63e5-7010-a4c9-1fe6c43bcc
 const USER_CORRELATION: &str = "correlation:01a0153f-63e5-7010-a4c9-1fe6c43bcc42";
 const OLDER_CORRELATION: &str = "correlation:01a0153f-63e5-7010-a4c9-1fe6c43bcc43";
 
+/// The handlers read the wall clock themselves — the API state carries no clock — so a session
+/// or grant seeded here has to be minted on that same clock to be live when the handler checks it.
 fn now() -> jiff::Timestamp {
-    jiff::Timestamp::now()
+    jiff::Timestamp::now() // wall-clock: the handlers under test read the clock themselves
 }
 
 fn state(harness: &TestDatabase) -> ApiState {

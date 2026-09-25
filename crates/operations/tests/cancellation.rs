@@ -16,8 +16,14 @@ use platform_persistence::test_support::TestDatabase;
 use ratatoskr_operation_contracts::OperationStatus;
 use uuid::Uuid;
 
+/// The instant the whole file runs at, so no assertion depends on the day the suite runs.
 fn now() -> jiff::Timestamp {
-    jiff::Timestamp::now()
+    jiff::Timestamp::from_second(1_700_000_000).expect("a fixed timestamp")
+}
+
+fn to_offset(value: jiff::Timestamp) -> time::OffsetDateTime {
+    time::OffsetDateTime::from_unix_timestamp_nanos(value.as_nanosecond())
+        .expect("a timestamp inside the supported range")
 }
 
 fn owner() -> Uuid {
@@ -44,14 +50,15 @@ async fn seeded_in_status(pool: &sqlx::PgPool, owner_id: Uuid, status: Operation
         "insert into operations.operations
              (operation_id, owner_user_id, kind, status, correlation_id,
               accepted_at, status_changed_at, terminated_at)
-         values ($1, $2, 'content.capture.submit', $3, $4, now(), now(),
-                 case when $5 then now() end)",
+         values ($1, $2, 'content.capture.submit', $3, $4, $6, $6,
+                 case when $5 then $6 end)",
     )
     .bind(operation_id)
     .bind(owner_id)
     .bind(token)
     .bind(CORRELATION)
     .bind(transition::is_terminal(status))
+    .bind(to_offset(now()))
     .execute(pool)
     .await
     .expect("seeding an operation");
@@ -343,12 +350,12 @@ async fn cancellation_races_resolve_to_one_truthful_outcome() {
         "insert into operations.operations
              (operation_id, owner_user_id, kind, status, correlation_id,
               accepted_at, status_changed_at)
-         values ($1, $2, 'content.capture.submit', 'accepted', $3,
-                 now() - interval '48 hours', now() - interval '48 hours')",
+         values ($1, $2, 'content.capture.submit', 'accepted', $3, $4, $4)",
     )
     .bind(stale_id)
     .bind(owner_id)
     .bind(CORRELATION)
+    .bind(to_offset(now() - jiff::SignedDuration::from_hours(48)))
     .execute(pool)
     .await
     .expect("seeding the stale operation");

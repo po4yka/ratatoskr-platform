@@ -45,7 +45,7 @@ multiple-versions = "warn"
 #
 # None of them is in the graph today, which is why this is cheap to write now: it costs one denial
 # nobody trips, and it turns "add jemalloc, it is faster" — a reasonable-sounding suggestion for a
-# service under load — into a failed `cargo deny check` in the gate rather than a crash-loop on the
+# service under load — into a failed `cargo deny check` in CI rather than a crash-loop on the
 # one machine this runs on. `ratatoskr-workspace/docs/DEPLOYMENT_TARGET.md` records the page size.
 #
 # The system allocator is glibc's, which reads the page size at run time. That is the whole reason

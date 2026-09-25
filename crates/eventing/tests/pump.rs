@@ -18,8 +18,9 @@ use platform_eventing::{
 use platform_persistence::test_support::TestDatabase;
 use uuid::Uuid;
 
+/// The instant the whole file runs at, so no assertion depends on the day the suite runs.
 fn now() -> jiff::Timestamp {
-    jiff::Timestamp::now()
+    jiff::Timestamp::from_second(1_700_000_000).expect("a fixed timestamp")
 }
 
 fn subject() -> Subject {

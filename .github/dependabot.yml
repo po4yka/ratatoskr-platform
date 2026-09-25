@@ -1,7 +1,13 @@
-# Only the github-actions ecosystem. `cargo` is deliberately absent: this repository commits its
-# Cargo.lock and runs every command with `--locked`, which makes a dependency bump a deliberate act
-# rather than a chore, and `cargo deny check` in the gate already reports an advisory the moment it is
-# published. A monthly pull request rewriting the lockfile would be reviewing our own noise.
+# Only the github-actions ecosystem for version updates. `cargo` is deliberately absent: this
+# repository commits its Cargo.lock and runs every command with `--locked`, which makes a dependency
+# bump a deliberate act rather than a chore. A monthly pull request rewriting the lockfile would be
+# reviewing our own noise.
+#
+# A security fix is the exception, and it needs no entry here. Dependabot security updates are
+# enabled in the repository settings, so an advisory against a locked crate opens its own pull
+# request once GitHub's advisory database carries it. `cargo deny check` finds the same advisory, but
+# only as a red gate that someone then fixes by hand in every repository: RUSTSEC-2026-0285 in rustls
+# turned twelve repositories red that way in September 2026.
 #
 # Action pins are the opposite case: they rot silently, and a pin whose `# vX.Y.Z` comment no longer
 # matches its SHA cannot be checked by reading the diff. Dependabot updates the SHA and the comment

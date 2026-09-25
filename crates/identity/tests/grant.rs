@@ -18,8 +18,9 @@ use uuid::Uuid;
 
 const CAPABILITY: &str = "oauth.claim.github";
 
+/// The instant the whole file runs at, so no assertion depends on the day the suite runs.
 fn now() -> jiff::Timestamp {
-    jiff::Timestamp::now()
+    jiff::Timestamp::from_second(1_700_000_000).expect("a fixed timestamp")
 }
 
 async fn a_user(pool: &sqlx::PgPool) -> Uuid {

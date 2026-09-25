@@ -281,7 +281,11 @@ async fn a_late_report_after_reconciliation_does_not_resurrect() {
 
     let mut transaction = pool.begin().await.expect("a transaction");
     let outcome = platform_operations::ProgressProjection
-        .handle(&mut transaction, &message)
+        .handle(
+            &mut transaction,
+            &message,
+            at(T0) + SignedDuration::from_hours(26),
+        )
         .await
         .expect("applying a valid message");
     transaction.commit().await.expect("committing");

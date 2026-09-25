@@ -114,8 +114,10 @@ impl metrics::GaugeFn for RecordingGauge {
 const CREDENTIAL: &str = "capabilities-credential-000000000000";
 const AUDIENCE: &str = "edge";
 
+/// The handlers read the wall clock themselves — the API state carries no clock — so a session
+/// or grant seeded here has to be minted on that same clock to be live when the handler checks it.
 fn now() -> jiff::Timestamp {
-    jiff::Timestamp::now()
+    jiff::Timestamp::now() // wall-clock: the handlers under test read the clock themselves
 }
 
 /// The real public pipeline, so a refusal is rendered by the same middleware production uses.

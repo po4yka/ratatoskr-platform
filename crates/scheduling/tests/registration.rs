@@ -49,7 +49,7 @@ async fn invalid_cron_registration_is_rejected() {
         .register(
             database.pool(),
             &registration("bad cron", "ratatoskr-github"),
-            Timestamp::now(),
+            Timestamp::from_second(1_700_000_000).expect("a timestamp"),
         )
         .await
         .expect("invalid input is a rejected outcome, not an infrastructure error");
@@ -70,7 +70,7 @@ async fn unauthorized_producer_registration_is_rejected() {
         .register(
             database.pool(),
             &registration("0 3 * * *", "ratatoskr-x"),
-            Timestamp::now(),
+            Timestamp::from_second(1_700_000_000).expect("a timestamp"),
         )
         .await
         .expect("a refusal is recorded");
@@ -81,7 +81,7 @@ async fn unauthorized_producer_registration_is_rejected() {
 #[tokio::test]
 async fn malformed_registration_fields_are_rejected_before_persistence() {
     let database = TestDatabase::create().await.expect("a test database");
-    let now = Timestamp::now();
+    let now = Timestamp::from_second(1_700_000_000).expect("a timestamp");
     let owner = create_user(database.pool(), now).await.expect("an owner");
     let mut message = registration("0 3 * * *", "ratatoskr-github");
     message.payload["payload"]["owner_user_id"] = serde_json::json!(owner.user_id);
@@ -107,7 +107,7 @@ async fn malformed_registration_fields_are_rejected_before_persistence() {
 #[tokio::test]
 async fn redelivery_updates_one_service_named_schedule() {
     let database = TestDatabase::create().await.expect("a test database");
-    let now = Timestamp::now();
+    let now = Timestamp::from_second(1_700_000_000).expect("a timestamp");
     let owner = create_user(database.pool(), now).await.expect("an owner");
     let mut message = registration("0 3 * * *", "ratatoskr-github");
     message.payload["payload"]["owner_user_id"] = serde_json::json!(owner.user_id);
