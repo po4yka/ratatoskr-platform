@@ -451,3 +451,30 @@ fn library_routes_are_session_authenticated_and_schema_complete() {
         assert!(schemas.contains_key(schema), "missing {schema}");
     }
 }
+
+/// O-8. The routes added for blob captures and channel digests are in the document under the
+/// operation ids the generated clients are written against.
+#[test]
+fn the_capture_and_channel_digest_operations_are_documented() {
+    let document = generated();
+    let mut ids = BTreeSet::new();
+    for item in document["paths"].as_object().expect("paths").values() {
+        for (_, operation) in item.as_object().expect("a path item") {
+            ids.insert(operation["operationId"].as_str().expect("an id").to_owned());
+        }
+    }
+    for expected in [
+        "submitCapture",
+        "submitBlobCapture",
+        "setChannelDigestSubscription",
+        "requestChannelDigestRun",
+        "listChannelDigestSubscriptions",
+        "listChannelDigestResults",
+        "getChannelDigestResult",
+    ] {
+        assert!(
+            ids.contains(expected),
+            "{expected} is not documented: {ids:?}"
+        );
+    }
+}

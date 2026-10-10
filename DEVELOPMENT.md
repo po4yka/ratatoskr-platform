@@ -67,6 +67,44 @@ there is no public grant or role-management route. Public status is distinct fro
 operator listener's `/health/ready`: status is anonymous and sanitized, while operator health keeps
 the detailed process checks on the private listener.
 
+Present since the fleet integration fixes (XR-021). Which routes are real, and what an operator
+must do for each:
+
+- Content capture. `POST /v1/captures` and the webhook adapter emit `content.capture.requested.v1`
+  as a contract `CommandEnvelope` (producer `ratatoskr-platform`, tenant `user:<id>`), not the
+  legacy command document; the extractor decodes the same shape. `POST /v1/captures/blobs`
+  (`submitBlobCapture`) accepts a Telegram Mini App session's reference to a PDF the Telegram
+  service stored, between 1 byte and 50 MiB, and emits the same command in its blob form. Any other
+  session kind, and any blob not owned by `ratatoskr-telegram`, is `403`. The blob store is
+  content-addressed and shared across users, so the session kind, the owner check and the
+  unguessable 256-bit digest are what stand between a caller and someone else's bytes.
+- AI archives. A chunk may be up to 16 MiB (`PUT .../chunks/{index}` raises axum's 2 MiB default
+  for that one route; the public listener's `RATATOSKR__PUBLIC__MAX_BODY_BYTES` must still be at
+  least the chunk size, and a deployment left on the compiled 1 MiB default cannot take chunks
+  above 1 MiB). The archive ceiling is `RATATOSKR__ARCHIVE_STAGING__MAX_ARCHIVE_BYTES` (default
+  2 GiB, rule V21); a larger declaration is `413`, and staging needs about twice the ceiling in free
+  space per in-flight archive. Opening a session with a media type other than `application/zip` is
+  `400`. Finalize forwards `POST` with `Content-Type: application/zip`, streamed from the verified
+  file in 64 KiB frames, and removes the staging directory once the receiver has the bytes. An
+  archive route is open only while the receiver's capability document says it serves
+  `ai_archive.receipt` for that route, not merely while the port answers.
+- Operation reports. A report that contradicts itself (`partially_succeeded` with neither a warning
+  nor an error, `failed` without an error, `succeeded` with one) is rejected and recorded in the
+  inbox instead of being applied; the operation stays readable at its previous status.
+- Channel digests. `PUT /v1/channel-digests/subscriptions/{channel_username}` and
+  `POST /v1/channel-digests/runs` accept work as operations (`channel_digest.subscription.set`,
+  `channel_digest.run`) and hand it to `ratatoskr-channel-digests` as typed commands. The three
+  `GET` routes read through `RATATOSKR__CHANNEL_DIGESTS__LISTENER` (loopback, port 8098) and
+  `RATATOSKR__CHANNEL_DIGESTS__SERVICE_SECRET`, both or neither (rule V22). Without them the reads
+  answer `503` and the commands still work.
+- Schedules. The scheduler publishes `channel_digest.schedule.occurrence_requested.v1` as a contract
+  envelope whose interval is the schedule's cron grid (previous grid point clamped to seven days).
+  `RATATOSKR__SCHEDULING__ALLOWED_REGISTRARS` must name `ratatoskr-channel-digests`, and the
+  digest worker's `RATATOSKR__SCHEDULE__OWNER_USER_ID` must be a user that exists in
+  `identity.users`, because Platform has no system principal.
+- The bus. `deploy/nats/README.md` is the operator guide for the thirteen identities and the fixed
+  durables Edge provisions at startup: reload NATS, restart Edge, then start the services.
+
 Present since milestone 6: the outbox publisher and the operation-event consumer run inside
 `ratatoskr-edge`, and `GET /v1/operations/{id}/events` streams progress as Server-Sent Events with
 `Last-Event-ID` replay. The bus is optional — a developer polling `/v1/operations` needs no broker —
@@ -189,8 +227,12 @@ cargo test -p ratatoskr-platform-core --locked --test config_validation
 ```
 
 No test opens a network socket to anything but `127.0.0.1` or reads a production credential. The
-NATS permission-matrix test starts one disposable local `nats:2-alpine` container, generates its own
-short-lived NKeys, and removes both container and seed-bearing fixture directory before returning.
+NATS permission-matrix tests start disposable local `nats:2-alpine` containers, generate their own
+short-lived NKeys, and remove both container and seed-bearing fixture directory before returning.
+`crates/eventing/tests/deployed_nats_config.rs` runs the real `deploy/nats/ratatoskr.conf`, rendered
+by `platform-nats-profile` (the only way to start `nats-server` on it: the committed file carries
+placeholder keys), one test per identity, on a container with its client port published, so the
+bind address, every grant and every refusal are proven on a real broker.
 Production credentials are never required for the default tests.
 
 Configuration tests use `figment::Jail`, which gives each test an isolated environment and working

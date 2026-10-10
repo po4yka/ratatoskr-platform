@@ -164,7 +164,7 @@
             "type": "string"
           },
           "upload_path": {
-            "description": "Relative operation-bound endpoint to which the archive bytes may be streamed with `PUT`.",
+            "description": "Relative operation-bound path at which the upload session is opened with `POST`; the chunks\nare then sent with `PUT` to the paths that session returns.",
             "type": "string"
           }
         },
@@ -405,6 +405,271 @@
           "status"
         ],
         "type": "object"
+      },
+      "ChannelDigestAccepted": {
+        "description": "What a client gets back from either command route: an operation to poll, never a result.",
+        "properties": {
+          "operation_id": {
+            "description": "The operation to poll at `/v1/operations/{id}`.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "status": {
+            "description": "Always `accepted` here.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation_id",
+          "status"
+        ],
+        "type": "object"
+      },
+      "ChannelDigestFailureClass": {
+        "description": "Content-free operational class explaining why a digest run or result failed, such as\n`provider_unavailable` or `manifest_invalid`.\n\nOpen on purpose: the digest service owns the vocabulary and a consumer treats an\nunrecognized class as opaque display text.",
+        "examples": [
+          "provider_unavailable",
+          "manifest_invalid"
+        ],
+        "maxLength": 64,
+        "pattern": "^[a-z][a-z0-9_.-]{0,63}$",
+        "title": "ChannelDigestFailureClass",
+        "type": "string"
+      },
+      "ChannelDigestOutcome": {
+        "description": "How a digest result ended.\n\nClosed on purpose: a client branches on it to decide whether a recap exists, and an\nunrecognized outcome must stop processing instead of being read as a success.",
+        "oneOf": [
+          {
+            "const": "completed",
+            "description": "Every selected source entered the recap.",
+            "type": "string"
+          },
+          {
+            "const": "partial",
+            "description": "A recap exists, but some selected sources were omitted from it.",
+            "type": "string"
+          },
+          {
+            "const": "failed",
+            "description": "No recap exists; `safe_failure_class` says why.",
+            "type": "string"
+          }
+        ]
+      },
+      "ChannelDigestRecapDocument": {
+        "additionalProperties": true,
+        "description": "The recap of a digest result: an opaque JSON object owned by Knowledge.\n\nThe digest service relays the object after checking its identity and digest against the stored\ncompletion fact, and never interprets it. The contract names it so that an absent recap is a\ntyped optional member; its members are Knowledge's to define. On the wire it is exactly the\nobject, with no wrapper member.",
+        "type": "object"
+      },
+      "ChannelDigestResultId": {
+        "description": "Canonical channel-digest UUID identity.",
+        "format": "uuid",
+        "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+        "title": "ChannelDigestResultId",
+        "type": "string"
+      },
+      "ChannelDigestResultPage": {
+        "additionalProperties": true,
+        "description": "Response of `GET /v1/results`: the owner's results, newest first, summaries only.",
+        "properties": {
+          "results": {
+            "description": "The result summaries in this page.",
+            "items": {
+              "$ref": "#/components/schemas/ChannelDigestResultSummary"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "results"
+        ],
+        "type": "object",
+        "x-ratatoskr-unknown-policy": "preserve"
+      },
+      "ChannelDigestResultSummary": {
+        "additionalProperties": true,
+        "description": "One entry of the result listing: linkage and outcome only, never recap content.",
+        "properties": {
+          "created_at": {
+            "$ref": "#/components/schemas/WireTimestamp",
+            "description": "Instant the digest service recorded the result, on its own clock."
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/ChannelDigestOutcome",
+            "description": "How the result ended."
+          },
+          "result_id": {
+            "$ref": "#/components/schemas/ChannelDigestResultId",
+            "description": "Identity of the result."
+          },
+          "run_id": {
+            "$ref": "#/components/schemas/ChannelDigestRunId",
+            "description": "The digest run the result belongs to."
+          },
+          "safe_failure_class": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ChannelDigestFailureClass"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Why a failed result failed. Present exactly for failed results."
+          }
+        },
+        "required": [
+          "result_id",
+          "run_id",
+          "outcome",
+          "created_at"
+        ],
+        "type": "object",
+        "x-ratatoskr-unknown-policy": "preserve"
+      },
+      "ChannelDigestResultView": {
+        "additionalProperties": true,
+        "description": "Response of `GET /v1/results/{result_id}`.\n\nA completed or partial result carries the local linkage and the Knowledge-owned recap, which\nthe digest service returns only after the analysis identity and digest match the stored\ncompletion fact. A failed result is local and minimized to `result_id`, `run_id`, `outcome`\nand `safe_failure_class`. Absent optionals are not serialized.",
+        "properties": {
+          "citation_count": {
+            "description": "Number of citations the recap carries. Absent for a failed result.",
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/ChannelDigestOutcome",
+            "description": "How the result ended."
+          },
+          "recap": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ChannelDigestRecapDocument"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The recap itself, an opaque JSON object owned by Knowledge. Absent for a failed result."
+          },
+          "recap_id": {
+            "description": "Knowledge's analysis identity of the recap, a bare canonical UUID. Absent for a failed\nresult.",
+            "format": "uuid",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "result_digest": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ContentDigest"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "SHA-256 identity of the stored recap result. Absent for a failed result."
+          },
+          "result_id": {
+            "$ref": "#/components/schemas/ChannelDigestResultId",
+            "description": "Identity of the result."
+          },
+          "run_id": {
+            "$ref": "#/components/schemas/ChannelDigestRunId",
+            "description": "The digest run the result belongs to."
+          },
+          "safe_failure_class": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ChannelDigestFailureClass"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Why a failed result failed. Present exactly for failed results."
+          }
+        },
+        "required": [
+          "result_id",
+          "run_id",
+          "outcome"
+        ],
+        "type": "object",
+        "x-ratatoskr-unknown-policy": "preserve"
+      },
+      "ChannelDigestRunId": {
+        "description": "Canonical channel-digest UUID identity.",
+        "format": "uuid",
+        "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+        "title": "ChannelDigestRunId",
+        "type": "string"
+      },
+      "ChannelDigestSubscriptionId": {
+        "description": "Canonical channel-digest UUID identity.",
+        "format": "uuid",
+        "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+        "title": "ChannelDigestSubscriptionId",
+        "type": "string"
+      },
+      "ChannelDigestSubscriptionPage": {
+        "additionalProperties": true,
+        "description": "Response of `GET /v1/subscriptions`: the owner's subscriptions, newest first.",
+        "properties": {
+          "subscriptions": {
+            "description": "The subscriptions in this page.",
+            "items": {
+              "$ref": "#/components/schemas/ChannelDigestSubscriptionView"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "subscriptions"
+        ],
+        "type": "object",
+        "x-ratatoskr-unknown-policy": "preserve"
+      },
+      "ChannelDigestSubscriptionView": {
+        "additionalProperties": true,
+        "description": "One owner subscription to a public channel.",
+        "properties": {
+          "channel_username": {
+            "$ref": "#/components/schemas/ChannelUsername",
+            "description": "Canonical public channel username the owner subscribed to."
+          },
+          "enabled": {
+            "description": "Whether the subscription currently feeds digest runs.",
+            "type": "boolean"
+          },
+          "subscription_id": {
+            "$ref": "#/components/schemas/ChannelDigestSubscriptionId",
+            "description": "Identity of the subscription."
+          }
+        },
+        "required": [
+          "subscription_id",
+          "channel_username",
+          "enabled"
+        ],
+        "type": "object",
+        "x-ratatoskr-unknown-policy": "preserve"
+      },
+      "ChannelUsername": {
+        "description": "Canonical lowercase public Telegram channel username.",
+        "examples": [
+          "example_channel"
+        ],
+        "maxLength": 32,
+        "minLength": 5,
+        "pattern": "^[a-z][a-z0-9_]{4,31}$",
+        "title": "ChannelUsername",
+        "type": "string"
       },
       "ContentDigest": {
         "additionalProperties": false,
@@ -1237,6 +1502,21 @@
         ],
         "type": "object"
       },
+      "OutputLanguage": {
+        "description": "Language of the requested first-version recap projection.",
+        "oneOf": [
+          {
+            "const": "ru",
+            "description": "Russian recap.",
+            "type": "string"
+          },
+          {
+            "const": "en",
+            "description": "English recap.",
+            "type": "string"
+          }
+        ]
+      },
       "PairDevice": {
         "description": "What a pairing device presents.",
         "properties": {
@@ -1576,6 +1856,20 @@
         ],
         "type": "object"
       },
+      "RequestRun": {
+        "additionalProperties": false,
+        "description": "What a client submits to ask for a digest now.",
+        "properties": {
+          "output_language": {
+            "$ref": "#/components/schemas/OutputLanguage",
+            "description": "The language of the recap. Required: there is no default language."
+          }
+        },
+        "required": [
+          "output_language"
+        ],
+        "type": "object"
+      },
       "RevokedAll": {
         "description": "What revoke-all answers.",
         "properties": {
@@ -1910,6 +2204,20 @@
         ],
         "type": "object"
       },
+      "SetSubscription": {
+        "additionalProperties": false,
+        "description": "What a client submits to set a subscription's state.",
+        "properties": {
+          "desired_state": {
+            "$ref": "#/components/schemas/SubscriptionDesiredState",
+            "description": "The state the subscription should end up in."
+          }
+        },
+        "required": [
+          "desired_state"
+        ],
+        "type": "object"
+      },
       "SignalAccepted": {
         "description": "What a source gets back.",
         "properties": {
@@ -1977,6 +2285,19 @@
           }
         ]
       },
+      "SubmitBlobCapture": {
+        "description": "The members of `SubmitCapture`'s sibling for stored bytes: the blob a client names by reference.\n\nTop-level members this struct does not name (the Telegram bot sends an `origin` that has no\nmeaning here) are tolerated and ignored, so the bot can add routing hints without a Platform\nrelease. The blob itself is strict: a member the contract does not define is refused.",
+        "properties": {
+          "blob": {
+            "$ref": "#/components/schemas/BlobRef",
+            "description": "The stored bytes to extract. Owned by the Telegram service, between 1 byte and 50 MiB."
+          }
+        },
+        "required": [
+          "blob"
+        ],
+        "type": "object"
+      },
       "SubmitCapture": {
         "description": "What a client submits.",
         "properties": {
@@ -2000,6 +2321,21 @@
           "url"
         ],
         "type": "object"
+      },
+      "SubscriptionDesiredState": {
+        "description": "Desired state of one owner/public-channel subscription.",
+        "oneOf": [
+          {
+            "const": "active",
+            "description": "Acquire the public channel for future digest runs.",
+            "type": "string"
+          },
+          {
+            "const": "inactive",
+            "description": "Stop acquiring the public channel for future digest runs.",
+            "type": "string"
+          }
+        ]
       },
       "TenantRef": {
         "description": "The owner of the data a record concerns, wire form `user:<uuid>`. The kind set is closed: a consumer that cannot understand the owner kind must reject the record rather than process it.",
@@ -2837,6 +3173,16 @@
               }
             },
             "description": "The idempotency key is in use for different metadata."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The declared archive is larger than this deployment accepts. Permanent for this archive: retrying cannot help."
           }
         },
         "security": [
@@ -2852,7 +3198,7 @@
     },
     "/v1/ai-archives/{provider}/{operation_id}/uploads": {
       "post": {
-        "description": "Opens bounded resumable staging under the prepared provider and operation.",
+        "description": "Opens bounded resumable staging under the prepared provider and operation. The declared media type must be `application/zip`; any other type is refused before a byte moves.",
         "operationId": "openAiArchiveTransfer",
         "parameters": [
           {
@@ -3331,6 +3677,596 @@
         "summary": "Submit an address for capture",
         "tags": [
           "captures"
+        ]
+      }
+    },
+    "/v1/captures/blobs": {
+      "post": {
+        "description": "Accepts, durably, a request to extract a document from bytes another service already stored, named by reference rather than carried. It returns the operation that tracks the work and no result: `GET /v1/operations/{operation_id}` is where the outcome appears.\n\nOnly the Telegram bot's session may call this route, and only for bytes the Telegram service owns (`owner_service` must be `ratatoskr-telegram`). The blob must declare between 1 byte and 50 MiB. Platform does not judge whether the media type can be extracted; the extractor reports that on the operation.\n\n`Idempotency-Key` is required, exactly as on `POST /v1/captures`: the same key and body return the ORIGINAL operation, and the same key with a different body is refused. Members of the body other than `blob` are ignored.",
+        "operationId": "submitBlobCapture",
+        "parameters": [
+          {
+            "description": "A client-chosen key, 1 to 255 characters, unique per distinct request. It is hashed before it is stored, so it may carry meaning the client considers private.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SubmitBlobCapture"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CaptureAccepted"
+                }
+              }
+            },
+            "description": "Accepted durably. The body carries the operation to poll."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No `Idempotency-Key`, a body that is not readable, or a blob outside the accepted size. The `code` in the envelope distinguishes them."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No credential, or one that does not authenticate here."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The session is not a Telegram Mini App session, or the blob is owned by another service."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The key is in use for a different body, or an earlier attempt with it has not finished."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "This caller has spent its request allowance. Retryable: the allowance refills continuously, so waiting is the fix."
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "A dependency did not answer in time. Nothing was written; retrying with the same key is safe and is the intended response."
+          }
+        },
+        "security": [
+          {
+            "sessionBearer": []
+          }
+        ],
+        "summary": "Submit stored bytes for capture",
+        "tags": [
+          "captures"
+        ]
+      }
+    },
+    "/v1/channel-digests/results": {
+      "get": {
+        "description": "Summaries of the caller's digest results, newest first, without recap content. Read from the digest service on the caller's behalf; the response is never cached.",
+        "operationId": "listChannelDigestResults",
+        "parameters": [
+          {
+            "description": "Page size from 1 through 100; the digest service applies its own default when absent.",
+            "in": "query",
+            "name": "page_size",
+            "required": false,
+            "schema": {
+              "format": "uint32",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChannelDigestResultPage"
+                }
+              }
+            },
+            "description": "A page of result summaries."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "An invalid page size."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No credential, or one that does not authenticate here."
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The digest service returned an invalid response."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The digest service is unavailable or not configured."
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The digest service did not answer in time."
+          }
+        },
+        "security": [
+          {
+            "sessionBearer": []
+          }
+        ],
+        "summary": "List the caller's digest results",
+        "tags": [
+          "channel-digests"
+        ]
+      }
+    },
+    "/v1/channel-digests/results/{result_id}": {
+      "get": {
+        "description": "One of the caller's digest results, with its recap when it has one. A result that does not exist and one that belongs to someone else are the same 404. The response is never cached.",
+        "operationId": "getChannelDigestResult",
+        "parameters": [
+          {
+            "description": "The result's identity, as a lowercase UUID.",
+            "in": "path",
+            "name": "result_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChannelDigestResultView"
+                }
+              }
+            },
+            "description": "The result."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "An identifier that is not a result id."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No credential, or one that does not authenticate here."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No such result for this caller."
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The digest service returned an invalid response."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The digest service is unavailable or not configured."
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The digest service did not answer in time."
+          }
+        },
+        "security": [
+          {
+            "sessionBearer": []
+          }
+        ],
+        "summary": "Read one digest result",
+        "tags": [
+          "channel-digests"
+        ]
+      }
+    },
+    "/v1/channel-digests/runs": {
+      "post": {
+        "description": "Accepts the request durably and returns the operation that tracks it. The digest covers the 24 hours before acceptance. `Idempotency-Key` is required; retrying with the same key and body returns the original operation.",
+        "operationId": "requestChannelDigestRun",
+        "parameters": [
+          {
+            "description": "A client-chosen key, 1 to 255 characters, unique per distinct request. It is hashed before it is stored.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RequestRun"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChannelDigestAccepted"
+                }
+              }
+            },
+            "description": "Accepted durably; the body carries the operation to poll."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "A key or body that is not valid; the language is required."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No credential, or one that does not authenticate here."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The key is in use for a different request."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "This caller has spent its request allowance."
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "A dependency did not answer in time; retrying with the same key is safe."
+          }
+        },
+        "security": [
+          {
+            "sessionBearer": []
+          }
+        ],
+        "summary": "Request a digest of the last 24 hours",
+        "tags": [
+          "channel-digests"
+        ]
+      }
+    },
+    "/v1/channel-digests/subscriptions": {
+      "get": {
+        "description": "The caller's subscriptions, newest first. Read from the digest service on the caller's behalf; the response is never cached.",
+        "operationId": "listChannelDigestSubscriptions",
+        "parameters": [
+          {
+            "description": "Page size from 1 through 100; the digest service applies its own default when absent.",
+            "in": "query",
+            "name": "page_size",
+            "required": false,
+            "schema": {
+              "format": "uint32",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChannelDigestSubscriptionPage"
+                }
+              }
+            },
+            "description": "A page of subscriptions."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "An invalid page size."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No credential, or one that does not authenticate here."
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The digest service returned an invalid response."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The digest service is unavailable or not configured."
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The digest service did not answer in time."
+          }
+        },
+        "security": [
+          {
+            "sessionBearer": []
+          }
+        ],
+        "summary": "List the caller's channel subscriptions",
+        "tags": [
+          "channel-digests"
+        ]
+      }
+    },
+    "/v1/channel-digests/subscriptions/{channel_username}": {
+      "put": {
+        "description": "Accepts the change durably and returns the operation that tracks it; the digest service applies it and reports the outcome on the operation. The username must already be canonical: lowercase, 5 to 32 characters, starting with a letter. `Idempotency-Key` is required; retrying with the same key and body returns the original operation.",
+        "operationId": "setChannelDigestSubscription",
+        "parameters": [
+          {
+            "description": "The canonical public channel username.",
+            "in": "path",
+            "name": "channel_username",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "A client-chosen key, 1 to 255 characters, unique per distinct request. It is hashed before it is stored.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetSubscription"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChannelDigestAccepted"
+                }
+              }
+            },
+            "description": "Accepted durably; the body carries the operation to poll."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "A username, key or body that is not valid."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No credential, or one that does not authenticate here."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The key is in use for a different request."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "This caller has spent its request allowance."
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "A dependency did not answer in time; retrying with the same key is safe."
+          }
+        },
+        "security": [
+          {
+            "sessionBearer": []
+          }
+        ],
+        "summary": "Subscribe to or unsubscribe from a public channel",
+        "tags": [
+          "channel-digests"
         ]
       }
     },

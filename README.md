@@ -164,6 +164,14 @@ the public projection. Platform also owns the full-snapshot
 read the projection through REST and SSE. Open question Q3 in `DEVELOPMENT.md` records this resolved
 ownership split.
 
+`cmd.content.capture.requested.v1` is a typed contract `CommandEnvelope` (producer
+`ratatoskr-platform`) whether it comes from `POST /v1/captures`, from `POST /v1/captures/blobs` (a
+Telegram Mini App session naming a PDF the Telegram service stored, by reference) or from the
+webhook adapter. The channel-digest commands are typed envelopes too, and so is the scheduler's
+digest occurrence. AI archive acceptance for a provider is open only while the receiver's own
+capability document says it serves `ai_archive.receipt` for that route; the probe is the single
+loopback request that needs no minted claims ([ADR-0015](docs/adr/0015-edge-routing-model.md)).
+
 Commands use at-least-once delivery through NATS JetStream. Platform uses transactional outbox/inbox records, globally unique event IDs, and idempotent state transitions. Exactly-once execution is not assumed.
 
 ## Authentication model

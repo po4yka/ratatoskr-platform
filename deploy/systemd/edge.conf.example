@@ -25,6 +25,12 @@ RATATOSKR__PUBLIC__MAX_BODY_BYTES=104857600
 # Incomplete resumable archives survive Edge restart on the durable NVMe mount. This directory is
 # private to ratatoskr-edge and is writable through the unit's otherwise read-only filesystem.
 RATATOSKR__ARCHIVE_STAGING__ROOT=/mnt/nvme/ratatoskr/archive-staging
+# The largest archive a device may prepare (rule V21: 1048576..=10737418240). Larger declarations
+# are refused with 413. It is not the request-body ceiling above: an archive arrives as many chunk
+# requests of at most 16 MiB each. Staging needs about twice this much free space on the mount above
+# per in-flight archive, because the chunks and the assembled copy coexist until the receiver has
+# the bytes.
+RATATOSKR__ARCHIVE_STAGING__MAX_ARCHIVE_BYTES=2147483648
 
 # Domain APIs are loopback-only. Edge owns the public prefixes, validates the session and mints
 # only x-ratatoskr-user-id, optional x-ratatoskr-device-id and x-correlation-id for each request.
@@ -52,6 +58,14 @@ RATATOSKR__GATEWAY__ROUTES__CLAUDE__LISTENER=127.0.0.1:8097
 RATATOSKR__GATEWAY__ROUTES__CLAUDE__CLASS=transfer
 RATATOSKR__GATEWAY__ROUTES__CLAUDE__ARCHIVE_RECEIPT_PATH=/v1/ai-archives/receipt
 
+# The channel-digests read API, behind GET /v1/channel-digests/{subscriptions,results}. Both keys or
+# neither (rule V22). The listener is loopback on the allocated port 8098; the secret equals the
+# service's RATATOSKR__AUTH__SERVICE_SECRET and lives in this file's 0640 root:ratatoskr-edge
+# EnvironmentFile mode like the database URL below. Without them the three read routes answer 503
+# and the command routes keep working.
+RATATOSKR__CHANNEL_DIGESTS__LISTENER=127.0.0.1:8098
+RATATOSKR__CHANNEL_DIGESTS__SERVICE_SECRET=CHANGE-ME
+
 # The whole URL is a secret: a PostgreSQL URL carries its password in the user information.
 RATATOSKR__DATABASE__URL=postgres://ratatoskr_edge:CHANGE-ME@127.0.0.1:5432/ratatoskr
 
@@ -75,6 +89,14 @@ RATATOSKR__BUS__NKEY_SEED_PATH=/etc/ratatoskr/edge.nkey
 
 RATATOSKR__TELEMETRY__LOG_FORMAT=json
 
-# Interim envelope allowlist for domain schedule registrations. Fleet must also give each named
-# service an authenticated NATS identity permitted only on cmd.platform.schedule.registration_requested.v1.
-RATATOSKR__SCHEDULING__ALLOWED_REGISTRARS=["ratatoskr-github"]
+# Envelope allowlist for domain schedule registrations. ratatoskr-channel-digests registers its daily
+# digest at worker start; ratatoskr-github stays allowlisted with no producer wired. The NATS ACL
+# (deploy/nats/ratatoskr.conf) is what limits who may publish the subject at all, and the envelope
+# producer must equal the registration's service_name.
+#
+# Operator prerequisite for the digest schedule: RATATOSKR__SCHEDULE__OWNER_USER_ID, set on the
+# channel-digests worker, must name a user that exists in identity.users. Platform has no system
+# principal: every occurrence creates an operation owned by the schedule's owner, who is the only
+# one able to read it. Nothing in the schema checks that the id is a user, so a wrong id registers
+# and publishes without complaint and its operations belong to nobody.
+RATATOSKR__SCHEDULING__ALLOWED_REGISTRARS=["ratatoskr-github","ratatoskr-channel-digests"]

@@ -98,8 +98,11 @@ docker exec -i shared-postgres psql -U postgres -d postgres < deploy/postgres/01
 printf "alter role ratatoskr_edge password '%s';\n" "$(openssl rand -base64 24 | tr -d '=+/')" \
   | docker exec -i shared-postgres psql -U postgres -q -d postgres      # and ingest, and scheduler
 
-# 4. The bus credential, then the server. deploy/nats/README.md generates the pair; the public half
-#    goes into ratatoskr.conf and the seed into a file only edge can read.
+# 4. The bus credential, then the server. deploy/nats/README.md generates the thirteen pairs (one per
+#    identity), lists each seed file and the variable that names it, and gives the mandatory order:
+#    reload NATS, restart Edge (it provisions every durable and the completion bucket), then start
+#    the other services. The public half goes into ratatoskr.conf and the seed into a file only its
+#    service can read.
 sudo install -d -m 0755 /etc/nats
 sudo cp deploy/nats/ratatoskr.conf /etc/nats/ratatoskr.conf   # with the public nkey substituted
 sudo install -m 0644 deploy/nats/compose.yaml /etc/nats/compose.yaml
@@ -192,6 +195,17 @@ that command through its durable inbox and scheduler reads the reconciled row. T
 not cryptographic service authentication: provision a distinct NATS identity per service, restricted
 to this exact subject, before relying on it as an authorization boundary.
 
+The allowlist names two registrars: `ratatoskr-github` (allowlisted, no producer wired) and
+`ratatoskr-channel-digests`, which registers its daily digest (`daily-digest`, cron from its own
+`RATATOSKR__SCHEDULE__CRON`, default `0 6 * * *`) when its worker starts. The registration is the
+contract command `platform.schedule.registration_requested.v1`, and Edge refuses a document that is
+not exactly that envelope or whose producer is not the `service_name` it names. **Operator
+prerequisite:** the channel-digests worker's `RATATOSKR__SCHEDULE__OWNER_USER_ID` must be a user that
+already exists in `identity.users`. Platform has no system principal, and every occurrence creates an
+operation owned by that user, who is the only one who can read it. The schema has no foreign key to
+enforce this (`DATA_MODEL.md` forbids cross-schema references), so a schedule owned by an id that is
+not a user registers and publishes without complaint, and its operations belong to nobody.
+
 ```sql
 -- docker exec -i shared-postgres psql -U postgres -d ratatoskr
 select service_name, name, owner_user_id, next_due_at, enabled, last_outcome
@@ -208,6 +222,21 @@ select service_name, name, owner_user_id, next_due_at, enabled, last_outcome
 Watch it with `platform_scheduler_drift_seconds{schedule}` and
 `platform_scheduler_occurrences_total{schedule,outcome}`. A `suppressed` count above zero means
 something is republishing an occurrence that already happened.
+
+## Routes added by the fleet integration fixes
+
+- `POST /v1/captures/blobs`: a Telegram Mini App session submits a PDF the Telegram service stored,
+  by reference. Nothing to deploy on Edge; the extractor must be able to read the Telegram blob root
+  (`ratatoskr-workspace` deployment notes).
+- `PUT /v1/channel-digests/subscriptions/{channel_username}`, `POST /v1/channel-digests/runs` and the
+  three `GET /v1/channel-digests/...` reads. The reads need `RATATOSKR__CHANNEL_DIGESTS__LISTENER`
+  (loopback, `127.0.0.1:8098`) and `RATATOSKR__CHANNEL_DIGESTS__SERVICE_SECRET` in
+  `deploy/systemd/edge.conf.example`; without them the reads answer `503` and the commands still work.
+- AI archive uploads: chunks up to 16 MiB are accepted, so keep
+  `RATATOSKR__PUBLIC__MAX_BODY_BYTES` at least that large (the shipped value is 100 MiB; a deployment
+  on the compiled 1 MiB default still cannot take chunks above 1 MiB). The archive ceiling is
+  `RATATOSKR__ARCHIVE_STAGING__MAX_ARCHIVE_BYTES` (default 2 GiB); staging needs about twice that
+  in free space on the staging mount per in-flight archive.
 
 ## What the services now report
 
