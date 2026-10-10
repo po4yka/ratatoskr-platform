@@ -18,6 +18,8 @@ ratatoskr-platform-telemetry.workspace  = true
 metrics.workspace    = true
 ratatoskr-identifiers.workspace          = true
 ratatoskr-event-envelope.workspace       = true
+ratatoskr-document-contracts.workspace   = true
+sha2.workspace       = true
 async-nats.workspace  = true
 futures-util.workspace = true
 sqlx.workspace       = true
@@ -32,6 +34,7 @@ tracing.workspace    = true
 
 [dev-dependencies]
 nkeys = "0.4.5"
+platform-nats-profile.workspace = true
 ratatoskr-platform-persistence = { workspace = true, features = ["test-support"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
 

@@ -21,8 +21,8 @@ use std::time::Duration;
 use async_nats::jetstream;
 use platform_eventing::{
     NatsPublisher, SOCIAL_CAPTURE_CONSUMERS, StreamSpec, StreamState,
-    TELEGRAM_NOTIFICATION_CONSUMER, TELEGRAM_NOTIFICATION_SUBJECT, WhenFull,
-    ensure_social_capture_consumers, ensure_telegram_notification_consumer,
+    TELEGRAM_NOTIFICATION_CONSUMER, TELEGRAM_NOTIFICATION_CONSUMERS, TELEGRAM_NOTIFICATION_SUBJECT,
+    WhenFull, ensure_fixed_consumers,
 };
 use uuid::Uuid;
 
@@ -256,21 +256,20 @@ async fn edge_preprovisions_each_fixed_social_browser_capture_consumer() {
     let publisher = NatsPublisher::connect(&nats_url())
         .await
         .expect("a broker; docker compose up -d");
-    let name = format!("t_{}", Uuid::now_v7().simple());
     publisher
-        .ensure_stream(&StreamSpec::commands(&name, vec![format!("{name}.>")]))
+        .ensure_stream(&StreamSpec::command_stream())
         .await
-        .expect("the isolated command stream");
+        .expect("the command stream");
 
-    ensure_social_capture_consumers(publisher.context(), &name)
+    ensure_fixed_consumers(publisher.context(), &SOCIAL_CAPTURE_CONSUMERS)
         .await
         .expect("Edge preprovisions provider durables");
-    let stream = publisher
-        .context()
-        .get_stream(&name)
-        .await
-        .expect("the stream");
     for spec in SOCIAL_CAPTURE_CONSUMERS {
+        let stream = publisher
+            .context()
+            .get_stream(spec.stream)
+            .await
+            .expect("the stream");
         let consumer: jetstream::consumer::PullConsumer = stream
             .get_consumer(spec.durable_name)
             .await
@@ -284,37 +283,33 @@ async fn edge_preprovisions_each_fixed_social_browser_capture_consumer() {
             Some(spec.durable_name)
         );
     }
-
-    publisher
-        .context()
-        .delete_stream(&name)
-        .await
-        .expect("cleaning up");
 }
 
 /// S-8. Fixed pull consumers are idempotent, and delivery-policy drift is a startup error rather
 /// than a silent change in which historical messages a provider receives.
+///
+/// The durable is the real one on the real stream, because a spec names its stream. The drifted copy
+/// is replaced by the correct one before the test returns.
 #[tokio::test]
 async fn fixed_consumer_inventory_refuses_delivery_policy_drift() {
     let publisher = NatsPublisher::connect(&nats_url())
         .await
         .expect("a broker; docker compose up -d");
-    let name = format!("t_{}", Uuid::now_v7().simple());
     publisher
-        .ensure_stream(&StreamSpec::events(&name, vec![format!("{name}.>")]))
+        .ensure_stream(&StreamSpec::event_stream())
         .await
-        .expect("the isolated event stream");
+        .expect("the event stream");
 
-    ensure_telegram_notification_consumer(publisher.context(), &name)
+    ensure_fixed_consumers(publisher.context(), &TELEGRAM_NOTIFICATION_CONSUMERS)
         .await
         .expect("the fixed durable is created");
-    ensure_telegram_notification_consumer(publisher.context(), &name)
+    ensure_fixed_consumers(publisher.context(), &TELEGRAM_NOTIFICATION_CONSUMERS)
         .await
         .expect("the matching durable is reused idempotently");
 
     let stream = publisher
         .context()
-        .get_stream(&name)
+        .get_stream(platform_eventing::EVENT_STREAM)
         .await
         .expect("the event stream");
     stream
@@ -332,12 +327,15 @@ async fn fixed_consumer_inventory_refuses_delivery_policy_drift() {
         .await
         .expect("the deliberately mismatched durable");
 
-    let result = ensure_telegram_notification_consumer(publisher.context(), &name).await;
-    publisher
-        .context()
-        .delete_stream(&name)
+    let result =
+        ensure_fixed_consumers(publisher.context(), &TELEGRAM_NOTIFICATION_CONSUMERS).await;
+    stream
+        .delete_consumer(TELEGRAM_NOTIFICATION_CONSUMER)
         .await
-        .expect("cleaning up");
+        .expect("removing the mismatched durable");
+    ensure_fixed_consumers(publisher.context(), &TELEGRAM_NOTIFICATION_CONSUMERS)
+        .await
+        .expect("the correct durable is restored");
 
     assert!(
         result.is_err(),

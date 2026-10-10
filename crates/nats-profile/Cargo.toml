@@ -1,0 +1,28 @@
+[package]
+name        = "platform-nats-profile"
+description = "Development tooling that reads the deployed NATS ACL and renders a startable copy of it with generated nkeys."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+# Dev tooling for tests and CI. Nothing in production depends on it and nothing publishes it.
+publish = false
+
+[lib]
+name = "platform_nats_profile"
+path = "src/lib.rs"
+
+[[bin]]
+name = "render-nats-config"
+path = "src/bin/render-nats-config.rs"
+
+[dependencies]
+nkeys = "0.4.5"
+thiserror.workspace = true
+
+[dev-dependencies]
+uuid.workspace = true
+
+[lints]
+workspace = true

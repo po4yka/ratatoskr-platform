@@ -16,8 +16,7 @@ use platform_core::RuntimeRole;
 use platform_core::config::{PlatformConfig, RetentionConfig};
 use platform_eventing::{
     AI_ARCHIVE_REPORT_CONSUMERS, COMMAND_STREAM, EDGE_PROJECTION_CONSUMER, NatsPublisher,
-    StreamSpec, ensure_ai_archive_report_consumers, ensure_social_capture_consumers,
-    ensure_telegram_notification_consumer, pump,
+    StreamSpec, ensure_fixed_topology, pump,
 };
 use platform_http::{RuntimeState, Serving};
 use platform_operations::ProgressProjection;
@@ -184,6 +183,15 @@ impl platform_http::PublicRoutes for EdgeRoutes {
         }
         state.gateway = platform_public_api::gateway::Gateway::from_config(&config.gateway);
         state.archive_staging_root = Arc::new(config.archive_staging.root.clone());
+        state.archive_max_bytes = config.archive_staging.max_archive_bytes;
+        state.channel_digests = config.channel_digests.as_ref().map(|digests| {
+            Arc::new(
+                platform_public_api::channel_digests::ChannelDigestsClient::new(
+                    digests.listener,
+                    digests.service_secret.clone(),
+                ),
+            )
+        });
         let archive_enabled = ["chatgpt", "claude"]
             .iter()
             .any(|provider| state.gateway.has_archive_receiver(provider));
@@ -252,11 +260,6 @@ async fn ensure_fixed_bus_topology(publisher: &NatsPublisher) -> Result<(), Stri
              reconciled; update or delete it on the broker"
         );
     }
-    ensure_social_capture_consumers(publisher.context(), COMMAND_STREAM)
-        .await
-        .map_err(|error| {
-            format!("the fixed social browser-capture consumers could not be declared: {error}")
-        })?;
 
     let event_stream = StreamSpec::event_stream();
     let event_state = publisher
@@ -272,15 +275,15 @@ async fn ensure_fixed_bus_topology(publisher: &NatsPublisher) -> Result<(), Stri
             "the event stream on the broker was created with different limits and was NOT reconciled"
         );
     }
-    ensure_telegram_notification_consumer(publisher.context(), platform_eventing::EVENT_STREAM)
+
+    // Both streams exist, so every durable and the browser-worker completion bucket can be created
+    // in one place. A service verifies its durable at startup and never creates it (CONTRACTS.md
+    // S02 rule 6), so a durable missing here is a service that never becomes ready, and a durable
+    // that differs from its spec stops this process rather than being modified.
+    ensure_fixed_topology(publisher.context())
         .await
         .map_err(|error| {
-            format!("the fixed Telegram notification consumer could not be declared: {error}")
-        })?;
-    ensure_ai_archive_report_consumers(publisher.context(), platform_eventing::EVENT_STREAM)
-        .await
-        .map_err(|error| {
-            format!("the fixed AI archive report consumers could not be declared: {error}")
+            format!("the fixed consumers and KV bucket could not be declared: {error}")
         })
 }
 
@@ -357,7 +360,7 @@ fn spawn_observer(
                 if state.gateway.has_archive_receiver(provider) {
                     state.health.set_archive_receipt_ready(
                         provider,
-                        state.gateway.service_available(provider).await,
+                        state.gateway.archive_receiver_available(provider).await,
                     );
                 }
             }

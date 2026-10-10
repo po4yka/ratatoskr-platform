@@ -252,8 +252,16 @@ jobs:
             -e POSTGRES_USER=platform -e POSTGRES_PASSWORD=platform -e POSTGRES_DB=platform \
             -e POSTGRES_INITDB_ARGS="--locale-provider=icu --icu-locale=und-x-icu --encoding=UTF8" \
             postgres:17
-          docker run -d --name smoke-bus --network host \
-            nats:2-alpine --jetstream --store_dir=/data
+          # The broker runs the DEPLOYED ACL, not an open one. `ratatoskr.conf` carries placeholder
+          # nkeys that nats-server refuses, so `render-nats-config` replaces them with generated keys
+          # and writes the EDGE seed beside the rendered copy. A permission the binary needs and the
+          # ACL withholds fails here and not on the host. The earlier unauthenticated NATS step stays
+          # for the `PLATFORM_TEST_NATS_URL` tests, which create their own throwaway streams.
+          rustup show >/dev/null
+          cargo run --locked -p platform-nats-profile --bin render-nats-config -- deploy/nats/ratatoskr.conf "$RUNNER_TEMP/nats"
+          docker run -d --name smoke-bus --network host --user root \
+            -v "$RUNNER_TEMP/nats:/etc/nats-test:ro" \
+            nats:2-alpine -c /etc/nats-test/ratatoskr.conf
           for _ in $(seq 1 60); do
             if docker exec smoke-db pg_isready -U platform -d platform >/dev/null 2>&1; then break; fi
             sleep 1
@@ -263,6 +271,8 @@ jobs:
             -e RATATOSKR__PUBLIC__BIND=127.0.0.1:8080 \
             -e RATATOSKR__DATABASE__URL=postgres://platform:platform@127.0.0.1:5432/platform \
             -e RATATOSKR__BUS__URL=nats://127.0.0.1:4222 \
+            -e RATATOSKR__BUS__NKEY_SEED_PATH=/etc/nats-test/edge.nkey \
+            -v "$RUNNER_TEMP/nats:/etc/nats-test:ro" \
             ratatoskr-platform:ci ratatoskr-edge
           for _ in $(seq 1 60); do
             if curl -sf http://127.0.0.1:9464/health/ready >/dev/null; then break; fi

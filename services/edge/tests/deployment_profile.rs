@@ -19,6 +19,10 @@
 use platform_core::RuntimeRole;
 use platform_core::config::SHUTDOWN_CEILING_SECONDS;
 
+mod support;
+
+use support::{CMD, EVT, expected_publish_allow};
+
 /// Read a file from `deploy/`, relative to this crate.
 fn deploy(path: &str) -> String {
     let full = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -45,22 +49,6 @@ fn unit(role: RuntimeRole) -> String {
 /// The environment template of one role.
 fn environment(role: RuntimeRole) -> String {
     deploy(&format!("systemd/{}.conf.example", role.as_str()))
-}
-
-/// The permission stanza for one `NKey` identity, delimited by its public-key placeholder.
-fn nkey_stanza<'a>(config: &'a str, identity: &str) -> &'a str {
-    let start = config
-        .find(identity)
-        .unwrap_or_else(|| panic!("missing {identity} identity"));
-    let after = config
-        .get(start..)
-        .unwrap_or_else(|| panic!("{identity} identity begins outside a character boundary"));
-    let end = after
-        .find("\n        {\n            nkey:")
-        .unwrap_or(after.len());
-    after
-        .get(..end)
-        .unwrap_or_else(|| panic!("{identity} stanza ends outside a character boundary"))
 }
 
 /// D-1. Every unit's stop timeout EXCEEDS the shutdown ceiling the configuration accepts.
@@ -203,74 +191,15 @@ fn the_bus_profile_names_the_streams_the_code_declares() {
     );
 }
 
-/// Every social owner has a distinct, least-privilege NATS identity rather than sharing Edge's
-/// broad command publishing credential.
-#[test]
-fn social_owner_bus_identities_are_limited_to_their_capture_subjects() {
-    let raw = deploy("nats/ratatoskr.conf");
-    let config: String = raw
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.starts_with('#'))
-        .collect::<Vec<_>>()
-        .join("\n");
-    let readme = deploy("nats/README.md");
-
-    for (identity, subject) in [
-        ("RATATOSKR_X", "cmd.x.capture.requested.v1"),
-        ("RATATOSKR_INSTAGRAM", "cmd.instagram.capture.requested.v1"),
-        ("RATATOSKR_THREADS", "cmd.threads.capture.requested.v1"),
-    ] {
-        let stanza = nkey_stanza(&config, identity);
-        assert!(
-            readme.contains(subject),
-            "{identity} consumer route {subject} is undocumented"
-        );
-        assert!(
-            !stanza.contains("$JS.API.>"),
-            "{identity} must not create an arbitrary filtered consumer"
-        );
-        let durable = match identity {
-            "RATATOSKR_X" => "ratatoskr_x_browser_capture",
-            "RATATOSKR_INSTAGRAM" => "ratatoskr_instagram_browser_capture",
-            "RATATOSKR_THREADS" => "threads_browser_capture",
-            _ => unreachable!("the table above is closed"),
-        };
-        for permission in [
-            format!("$JS.API.CONSUMER.INFO.ratatoskr_commands.{durable}"),
-            format!("$JS.API.CONSUMER.MSG.NEXT.ratatoskr_commands.{durable}"),
-            format!("$JS.ACK.ratatoskr_commands.{durable}.>"),
-        ] {
-            assert!(
-                stanza.contains(&permission),
-                "{identity} lacks required permission {permission}"
-            );
-        }
-    }
-    for subject in [
-        "evt.platform.operation.reported.v1",
-        "evt.social.source.captured.v1",
-        "evt.social.source.updated.v1",
-    ] {
-        assert!(
-            config.contains(subject),
-            "Threads outbox cannot publish {subject}"
-        );
-    }
-}
-
 /// D-7. Telegram can only inspect, fetch from, and acknowledge its pre-provisioned notification
 /// durable. It cannot create a consumer, publish a domain fact, or subscribe directly to events.
 #[test]
 fn telegram_bus_identity_is_limited_to_its_notification_durable() {
-    let raw = deploy("nats/ratatoskr.conf");
-    let config: String = raw
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.starts_with('#'))
-        .collect::<Vec<_>>()
-        .join("\n");
-    let stanza = nkey_stanza(&config, "RATATOSKR_TELEGRAM");
+    let identities = deployed_identities();
+    let telegram = identities
+        .iter()
+        .find(|identity| identity.name == "TELEGRAM")
+        .expect("the Telegram identity exists");
     let stream = platform_eventing::EVENT_STREAM;
     let durable = platform_eventing::TELEGRAM_NOTIFICATION_CONSUMER;
 
@@ -278,13 +207,19 @@ fn telegram_bus_identity_is_limited_to_its_notification_durable() {
         format!("$JS.API.CONSUMER.INFO.{stream}.{durable}"),
         format!("$JS.API.CONSUMER.MSG.NEXT.{stream}.{durable}"),
         format!("$JS.ACK.{stream}.{durable}.>"),
-        "_INBOX.>".to_owned(),
     ] {
         assert!(
-            stanza.contains(&permission),
+            telegram.publish_allow.contains(&permission),
             "Telegram lacks required permission {permission}"
         );
     }
+    assert_eq!(
+        telegram.publish_allow.len(),
+        3,
+        "{:?}",
+        telegram.publish_allow
+    );
+    assert_eq!(telegram.subscribe_allow, ["_INBOX.>"]);
     for forbidden in [
         "$JS.API.>",
         "cmd.>",
@@ -292,7 +227,10 @@ fn telegram_bus_identity_is_limited_to_its_notification_durable() {
         platform_eventing::TELEGRAM_NOTIFICATION_SUBJECT,
     ] {
         assert!(
-            !stanza.contains(forbidden),
+            !telegram
+                .publish_allow
+                .iter()
+                .any(|subject| subject == forbidden),
             "Telegram must not receive broad or direct access through {forbidden}"
         );
     }
@@ -312,6 +250,20 @@ fn telegram_consumer_profile_matches_runtime_constants() {
             readme.contains(value),
             "the NATS operator guide does not name `{value}`"
         );
+    }
+    // Every fixed durable of every table, so a rename in `stream.rs` fails here instead of leaving
+    // the operator guide naming a consumer that no longer exists.
+    for spec in platform_eventing::SOCIAL_CAPTURE_CONSUMERS
+        .iter()
+        .chain(platform_eventing::AI_ARCHIVE_REPORT_CONSUMERS.iter())
+        .chain(platform_eventing::DOMAIN_CONSUMERS.iter())
+    {
+        for value in [spec.durable_name, spec.filter_subject] {
+            assert!(
+                readme.contains(value),
+                "the NATS operator guide does not name `{value}`"
+            );
+        }
     }
 }
 
@@ -370,4 +322,299 @@ fn edge_profile_declares_the_canonical_domain_gateway_table() {
             );
         }
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// The deployed ACL, statically (XR-021 CONTRACTS.md section S03). The real-broker matrix in
+// `crates/eventing/tests/deployed_nats_config.rs` proves the same table on the wire.
+// ---------------------------------------------------------------------------------------------
+
+fn deployed_identities() -> Vec<platform_nats_profile::Identity> {
+    platform_nats_profile::parse(&deploy("nats/ratatoskr.conf")).expect("the deployed ACL parses")
+}
+
+fn sorted(mut list: Vec<String>) -> Vec<String> {
+    list.sort();
+    list
+}
+
+/// S03. Thirteen identities, each with exactly the publish list of the contract, subscribing to
+/// replies only, and only EDGE carrying a deny list.
+#[test]
+fn the_deployed_acl_has_the_thirteen_identities_with_exactly_the_contract_grants() {
+    let identities = deployed_identities();
+    let mut names: Vec<&str> = identities
+        .iter()
+        .map(|identity| identity.name.as_str())
+        .collect();
+    names.sort_unstable();
+    let mut expected: Vec<&str> = expected_publish_allow()
+        .iter()
+        .map(|(name, _)| *name)
+        .collect();
+    expected.sort_unstable();
+    assert_eq!(
+        names, expected,
+        "the deployed identities are not the thirteen of S03"
+    );
+    assert_eq!(identities.len(), 13);
+
+    for (name, allow) in expected_publish_allow() {
+        let identity = identities
+            .iter()
+            .find(|identity| identity.name == name)
+            .unwrap_or_else(|| panic!("{name} is missing"));
+        assert_eq!(
+            sorted(identity.publish_allow.clone()),
+            allow,
+            "{name} publish allow"
+        );
+        assert_eq!(
+            identity.subscribe_allow,
+            ["_INBOX.>"],
+            "{name} may subscribe to replies only"
+        );
+        if name == "EDGE" {
+            assert_eq!(
+                sorted(identity.publish_deny.clone()),
+                ["$JS.API.STREAM.DELETE.>", "$JS.API.STREAM.PURGE.>"]
+            );
+        } else {
+            assert!(
+                identity.publish_deny.is_empty(),
+                "{name} carries a deny block"
+            );
+        }
+    }
+}
+
+/// S03 invariants 1 to 3: only EDGE holds the control plane, and no other grant creates a consumer
+/// or a stream, reads a message by sequence, or uses a wildcard outside the three allowed shapes.
+#[test]
+fn only_edge_holds_the_control_plane_and_wildcards_are_confined() {
+    for identity in deployed_identities() {
+        if identity.name == "EDGE" {
+            continue;
+        }
+        for subject in &identity.publish_allow {
+            for forbidden in ["$JS.API.>", "evt.>", "cmd.>", "$JS.ACK.>"] {
+                assert_ne!(subject, forbidden, "{} holds {forbidden}", identity.name);
+            }
+            for api in [
+                "CONSUMER.CREATE",
+                "CONSUMER.DURABLE.CREATE",
+                "STREAM.CREATE",
+                "STREAM.UPDATE",
+                "STREAM.MSG.GET",
+                "DIRECT.GET.ratatoskr_",
+            ] {
+                assert!(
+                    !(subject.contains(api) && subject.contains("ratatoskr_")),
+                    "{} may call {api} on a ratatoskr stream through {subject}",
+                    identity.name
+                );
+            }
+            let wildcard = subject.contains('>') || subject.contains('*');
+            let allowed_shape = (subject.starts_with("$JS.ACK.ratatoskr_")
+                && subject.ends_with(".>")
+                && subject.matches('>').count() == 1)
+                || (subject.starts_with("$JS.API.DIRECT.GET.KV_") && subject.ends_with(".>"))
+                || (subject.starts_with("$KV.") && subject.ends_with(".>"));
+            assert!(
+                !wildcard || allowed_shape,
+                "{} has a wildcard outside the three allowed shapes: {subject}",
+                identity.name
+            );
+        }
+    }
+}
+
+/// The extractor's old stanza held `evt.>` and a `$JS.API.>` fragment, so it could read every
+/// tenant's events and create consumers. That is deleted, not narrowed in place.
+#[test]
+fn the_extractor_identity_has_no_broad_grants() {
+    let identities = deployed_identities();
+    let extractor = identities
+        .iter()
+        .find(|identity| identity.name == "EXTRACTOR")
+        .expect("the extractor identity exists");
+    assert_eq!(
+        extractor.publish_allow.len(),
+        7,
+        "{:?}",
+        extractor.publish_allow
+    );
+    for subject in &extractor.publish_allow {
+        assert!(
+            !subject.contains("evt.>")
+                && !subject.contains("$JS.API.>")
+                && !subject.contains("cmd.>"),
+            "the extractor holds the broad grant {subject}"
+        );
+    }
+}
+
+/// S03 invariant 4: every fixed durable appears in exactly the stanza of its owner, and every
+/// durable of the tables in `stream.rs` is owned by some identity.
+#[test]
+fn every_fixed_consumer_has_exactly_one_owner_identity() {
+    // (owner, stream, durable) for every durable that is not EDGE's own.
+    let owners: Vec<(&str, &str, &str)> = vec![
+        ("TELEGRAM", EVT, "ratatoskr_telegram_notifications"),
+        ("X", CMD, "ratatoskr_x_browser_capture"),
+        ("X", EVT, "ratatoskr_x_extractor_reports"),
+        ("INSTAGRAM", CMD, "ratatoskr_instagram_browser_capture"),
+        ("THREADS", CMD, "threads_browser_capture"),
+        ("EXTRACTOR", CMD, "ratatoskr_extractor_capture"),
+        ("EXTRACTOR", EVT, "ratatoskr_extractor_render_awaits"),
+        ("EXTRACTOR_BROWSER_WORKER", CMD, "ratatoskr_browser_worker"),
+        ("KNOWLEDGE", CMD, "ratatoskr_knowledge_channel_recap"),
+        ("KNOWLEDGE", EVT, "ratatoskr_knowledge_documents"),
+        ("KNOWLEDGE", EVT, "ratatoskr_knowledge_social_sources"),
+        ("KNOWLEDGE", EVT, "ratatoskr_knowledge_ai_archive"),
+        ("KNOWLEDGE", EVT, "ratatoskr_knowledge_repository_requests"),
+        ("GITHUB", EVT, "ratatoskr_github_analysis_completed"),
+        ("GITHUB", EVT, "ratatoskr_github_analysis_failed"),
+        ("GITHUB", EVT, "ratatoskr_github_policy_acknowledged"),
+        ("VAULT", CMD, "ratatoskr_vault_backup_policy"),
+        (
+            "CHANNEL_DIGESTS",
+            CMD,
+            "ratatoskr_channel_digest_subscriptions",
+        ),
+        ("CHANNEL_DIGESTS", CMD, "ratatoskr_channel_digest_runs"),
+        (
+            "CHANNEL_DIGESTS",
+            CMD,
+            "ratatoskr_channel_digest_schedule_occurrences",
+        ),
+        (
+            "CHANNEL_DIGESTS",
+            EVT,
+            "ratatoskr_channel_digest_recap_completed",
+        ),
+        (
+            "CHANNEL_DIGESTS",
+            EVT,
+            "ratatoskr_channel_digest_recap_failed",
+        ),
+    ];
+    let identities = deployed_identities();
+    for (owner, stream, durable) in &owners {
+        let info = format!("$JS.API.CONSUMER.INFO.{stream}.{durable}");
+        let holders: Vec<&str> = identities
+            .iter()
+            .filter(|identity| identity.publish_allow.contains(&info))
+            .map(|identity| identity.name.as_str())
+            .collect();
+        assert_eq!(holders, [*owner], "{durable} is held by {holders:?}");
+    }
+
+    // The tables in stream.rs: each durable is either EDGE's own (the projections it consumes) or
+    // owned above, so a durable added to the code without a stanza fails here.
+    let edge_owned = [
+        "platform_ai_archive_chatgpt_projection",
+        "platform_ai_archive_claude_projection",
+    ];
+    for spec in platform_eventing::SOCIAL_CAPTURE_CONSUMERS
+        .iter()
+        .chain(platform_eventing::AI_ARCHIVE_REPORT_CONSUMERS.iter())
+        .chain(platform_eventing::DOMAIN_CONSUMERS.iter())
+    {
+        let known = edge_owned.contains(&spec.durable_name)
+            || owners
+                .iter()
+                .any(|(_, _, durable)| *durable == spec.durable_name);
+        assert!(
+            known,
+            "{} has no owner identity in the ACL",
+            spec.durable_name
+        );
+    }
+    assert_eq!(
+        platform_eventing::DOMAIN_CONSUMERS.len(),
+        18,
+        "S04 has seven command durables and eleven event durables"
+    );
+}
+
+/// The operator guide lists every identity with its seed file and every fixed durable, and states
+/// the order in which a change is rolled out.
+#[test]
+fn the_operator_guide_documents_every_identity_and_the_rollout_order() {
+    let readme = deploy("nats/README.md");
+    for seed in [
+        "edge.nkey",
+        "telegram.nkey",
+        "chatgpt.nkey",
+        "claude.nkey",
+        "x.nkey",
+        "instagram.nkey",
+        "threads.nkey",
+        "extractor.nkey",
+        "extractor-browser-worker.nkey",
+        "knowledge.nkey",
+        "github.nkey",
+        "vault.nkey",
+        "channel-digests.nkey",
+    ] {
+        assert!(readme.contains(seed), "the NATS guide does not name {seed}");
+    }
+    for value in [
+        "BROWSER_NKEY_SEED_PATH",
+        "browser_worker_completions",
+        "Publish Violation",
+        "reload NATS",
+        "restart Edge",
+    ] {
+        assert!(
+            readme.contains(value),
+            "the NATS guide does not say `{value}`"
+        );
+    }
+}
+
+/// CI starts the smoke broker from the rendered deployed configuration, so a permission the
+/// binaries need and the ACL withholds fails in CI and not on the host.
+#[test]
+fn ci_smoke_uses_the_rendered_deployed_nats_config() {
+    let workflow = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.github/workflows/ci.yml"),
+    )
+    .expect("the CI workflow is readable");
+    let start = workflow
+        .find("name: The artifact serves and stops cleanly")
+        .expect("the smoke step exists");
+    let step = workflow.get(start..).expect("the step text");
+    let step = step.split("\n      - name:").next().unwrap_or(step);
+
+    assert!(
+        step.contains(
+            "--bin render-nats-config -- deploy/nats/ratatoskr.conf \"$RUNNER_TEMP/nats\""
+        ),
+        "the smoke step does not render the deployed ACL"
+    );
+    let broker = step
+        .split("docker run -d --name smoke-bus")
+        .nth(1)
+        .and_then(|rest| rest.split("for _ in").next())
+        .expect("the smoke broker is started");
+    assert!(
+        broker.contains("--user root"),
+        "the broker needs the store path"
+    );
+    assert!(
+        broker.contains("-v \"$RUNNER_TEMP/nats:/etc/nats-test:ro\"")
+            && broker.contains("-c /etc/nats-test/ratatoskr.conf"),
+        "the smoke broker is not started on the rendered configuration:\n{broker}"
+    );
+    let edge = step
+        .split("docker run -d --name smoke --network host")
+        .nth(1)
+        .expect("edge is started");
+    assert!(
+        edge.contains("RATATOSKR__BUS__NKEY_SEED_PATH=/etc/nats-test/edge.nkey")
+            && edge.contains("/etc/nats-test"),
+        "edge is not given the EDGE seed"
+    );
 }

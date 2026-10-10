@@ -13,19 +13,16 @@ use nkeys::KeyPair;
 use platform_eventing::{
     EVENT_STREAM, TELEGRAM_NOTIFICATION_CONSUMER, TELEGRAM_NOTIFICATION_SUBJECT,
 };
-use std::path::PathBuf;
-use std::process::Command;
 use std::time::Duration;
-use tokio::time::{sleep, timeout};
-use uuid::Uuid;
+use tokio::time::timeout;
 
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
+mod support;
+
+use support::{Container, REQUEST_TIMEOUT, connect};
 
 #[derive(Debug)]
 struct NatsFixture {
-    container: String,
-    directory: PathBuf,
-    url: String,
+    container: Container,
     admin_seed: String,
     telegram_seed: String,
     chatgpt_seed: String,
@@ -34,13 +31,6 @@ struct NatsFixture {
 
 impl NatsFixture {
     fn start(include_telegram_identity: bool) -> Self {
-        let suffix = Uuid::now_v7().simple().to_string();
-        let container = format!("ratatoskr-platform-nats-permissions-{suffix}");
-        let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/nats-permission-fixtures")
-            .join(&container);
-        std::fs::create_dir_all(&directory).expect("the disposable NATS directory");
-
         let admin = KeyPair::new_user();
         let telegram = KeyPair::new_user();
         let chatgpt = KeyPair::new_user();
@@ -52,62 +42,8 @@ impl NatsFixture {
             &chatgpt.public_key(),
             &claude.public_key(),
         );
-        let config_path = directory.join("nats.conf");
-        std::fs::write(&config_path, config).expect("the disposable NATS configuration");
-
-        let mount = format!("{}:/etc/nats-fixture:ro", directory.display());
-        let started = Command::new("docker")
-            .args([
-                "run",
-                "--detach",
-                "--name",
-                &container,
-                "--publish",
-                "127.0.0.1::4222",
-                "--volume",
-                &mount,
-                "nats:2-alpine",
-                "-c",
-                "/etc/nats-fixture/nats.conf",
-            ])
-            .output()
-            .expect("docker must start the disposable NATS server");
-        assert!(
-            started.status.success(),
-            "disposable NATS failed to start: {}",
-            String::from_utf8_lossy(&started.stderr)
-        );
-
-        let port = Command::new("docker")
-            .args(["port", &container, "4222/tcp"])
-            .output()
-            .expect("docker must report the disposable NATS port");
-        if !port.status.success() {
-            let logs = Command::new("docker")
-                .args(["logs", &container])
-                .output()
-                .expect("docker must report why disposable NATS exited");
-            let _ = Command::new("docker")
-                .args(["rm", "--force", &container])
-                .output();
-            let _ = std::fs::remove_dir_all(&directory);
-            panic!(
-                "docker did not report the NATS port: {}{}",
-                String::from_utf8_lossy(&port.stderr),
-                String::from_utf8_lossy(&logs.stderr)
-            );
-        }
-        let binding = String::from_utf8(port.stdout).expect("the port binding is UTF-8");
-        let port = binding
-            .trim()
-            .rsplit_once(':')
-            .map(|(_, port)| port)
-            .expect("the port binding has a port");
-
         Self {
-            container,
-            directory,
-            url: format!("nats://127.0.0.1:{port}"),
+            container: Container::start("nats-permissions", &config, &[]),
             admin_seed: admin.seed().expect("the disposable admin seed"),
             telegram_seed: telegram.seed().expect("the disposable Telegram seed"),
             chatgpt_seed: chatgpt.seed().expect("the disposable ChatGPT seed"),
@@ -116,21 +52,7 @@ impl NatsFixture {
     }
 
     async fn connect(&self, seed: &str) -> async_nats::Client {
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-        loop {
-            match async_nats::ConnectOptions::with_nkey(seed.to_owned())
-                .request_timeout(Some(REQUEST_TIMEOUT))
-                .connect(&self.url)
-                .await
-            {
-                Ok(client) => return client,
-                Err(error) if tokio::time::Instant::now() < deadline => {
-                    let _ = error;
-                    sleep(Duration::from_millis(100)).await;
-                }
-                Err(error) => panic!("the disposable NATS identity did not connect: {error}"),
-            }
-        }
+        connect(&self.container.url, seed).await
     }
 }
 
@@ -248,18 +170,9 @@ async fn ai_archive_provider_nkeys_cannot_impersonate_or_subscribe() {
     }
 
     assert!(
-        async_nats::connect(&fixture.url).await.is_err(),
+        async_nats::connect(&fixture.container.url).await.is_err(),
         "anonymous access must be refused"
     );
-}
-
-impl Drop for NatsFixture {
-    fn drop(&mut self) {
-        let _ = Command::new("docker")
-            .args(["rm", "--force", &self.container])
-            .output();
-        let _ = std::fs::remove_dir_all(&self.directory);
-    }
 }
 
 #[tokio::test]

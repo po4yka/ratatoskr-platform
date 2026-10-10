@@ -20,9 +20,11 @@ services:
     restart: unless-stopped
     command: ["-c", "/etc/nats/ratatoskr.conf"]
 
-    # `host: 0.0.0.0` inside the container's namespace, reachable only through the published
-    # loopback port. The same arrangement as the operator listeners: the bind address is not the
-    # boundary, the publication is.
+    # `ratatoskr.conf` binds `host: 0.0.0.0` and `http: 0.0.0.0:8222` INSIDE the container's
+    # namespace, because a server bound to the container's own 127.0.0.1 refuses the connections
+    # Docker forwards from a published port. The result is reachable only through these two
+    # loopback publications. The same arrangement as the operator listeners: the bind address is
+    # not the boundary, the publication is, so never change either entry below to another address.
     ports:
       - "127.0.0.1:4222:4222"
       - "127.0.0.1:8222:8222"

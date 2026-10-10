@@ -22,6 +22,7 @@ use platform_persistence::PersistenceError;
 
 pub mod command;
 pub mod consumer;
+pub mod content_capture;
 pub mod inbox;
 pub mod observe;
 pub mod outbox;
@@ -31,16 +32,19 @@ pub mod stream;
 
 pub use crate::command::Command;
 pub use crate::consumer::{ConsumerReport, Handler, Incoming, deliver};
+pub use crate::content_capture::{
+    CaptureSource, ContentCaptureCommand, ContentCaptureError, PLATFORM_PRODUCER, is_capture_url,
+};
 pub use crate::inbox::{Inbox, Reception};
 pub use crate::outbox::{ClaimedMessage, Outbox, OutboxStats};
 pub use crate::publisher::{NatsPublisher, PublishError, Publisher};
 pub use crate::pump::{PumpReport, run_once};
 pub use crate::stream::{
-    AI_ARCHIVE_REPORT_CONSUMERS, COMMAND_STREAM, COMMAND_SUBJECTS, EDGE_PROJECTION_CONSUMER,
-    EVENT_STREAM, EVENT_SUBJECTS, FixedConsumerSpec, SOCIAL_CAPTURE_CONSUMERS, StreamSpec,
-    StreamState, TELEGRAM_NOTIFICATION_CONSUMER, TELEGRAM_NOTIFICATION_SUBJECT, WhenFull,
-    ensure_ai_archive_report_consumers, ensure_social_capture_consumers,
-    ensure_telegram_notification_consumer,
+    AI_ARCHIVE_REPORT_CONSUMERS, AckMode, BROWSER_WORKER_COMPLETIONS_BUCKET, COMMAND_STREAM,
+    COMMAND_SUBJECTS, DOMAIN_CONSUMERS, EDGE_PROJECTION_CONSUMER, EVENT_STREAM, EVENT_SUBJECTS,
+    FixedConsumerSpec, SOCIAL_CAPTURE_CONSUMERS, StartAt, StreamSpec, StreamState,
+    TELEGRAM_NOTIFICATION_CONSUMER, TELEGRAM_NOTIFICATION_CONSUMERS, TELEGRAM_NOTIFICATION_SUBJECT,
+    WhenFull, ensure_domain_topology, ensure_fixed_consumers, ensure_fixed_topology,
 };
 
 /// A failure in the outbox, the inbox, or the subject grammar.

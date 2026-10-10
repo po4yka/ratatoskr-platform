@@ -101,16 +101,116 @@ pub const EVENT_SUBJECTS: &str = "evt.>";
 /// stream or skipping what arrived while the process was down.
 pub const EDGE_PROJECTION_CONSUMER: &str = "platform_edge_projection";
 
+/// Whether a fixed durable takes acknowledgements.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AckMode {
+    /// Every message is acknowledged individually. Every durable but the render-await durable.
+    Explicit,
+    /// No acknowledgements. The render-await durable is read by its single owner, which has no use
+    /// for redelivery of a fact it only waits on.
+    None,
+}
+
+/// Where a fixed durable starts reading a stream.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StartAt {
+    /// From the first retained message, so nothing published before the consumer first runs is lost.
+    All,
+    /// From the moment the durable is created.
+    New,
+}
+
+/// One durable consumer that Edge creates before the service that owns it can become ready.
+///
+/// Every field is stated. A durable created from `pull::Config::default()` would inherit a 30 s ack
+/// wait and unlimited redelivery from the server, which are decisions, and a decision that lives in
+/// the server's default is one a server upgrade can change.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FixedConsumerSpec {
+    /// The stream the durable lives on.
+    pub stream: &'static str,
+    /// The stable durable cursor name, also used by its NATS permission stanza.
+    pub durable_name: &'static str,
+    /// The sole subject filter this durable may receive.
+    pub filter_subject: &'static str,
+    /// Whether messages are acknowledged.
+    pub ack: AckMode,
+    /// Where the durable starts.
+    pub start: StartAt,
+    /// How long the server waits for an acknowledgement before redelivering.
+    pub ack_wait_seconds: u64,
+    /// The delivery attempts allowed, or -1 for unlimited.
+    pub max_deliver: i64,
+}
+
+impl FixedConsumerSpec {
+    /// The shape every durable had before XR-021: explicit acknowledgements, deliver all, a 30
+    /// second ack wait and unlimited redelivery.
+    #[must_use]
+    pub const fn standard(
+        stream: &'static str,
+        durable_name: &'static str,
+        filter_subject: &'static str,
+    ) -> Self {
+        Self {
+            stream,
+            durable_name,
+            filter_subject,
+            ack: AckMode::Explicit,
+            start: StartAt::All,
+            ack_wait_seconds: 30,
+            max_deliver: -1,
+        }
+    }
+
+    /// The same durable with another ack wait.
+    #[must_use]
+    pub const fn with_ack_wait_seconds(mut self, seconds: u64) -> Self {
+        self.ack_wait_seconds = seconds;
+        self
+    }
+
+    /// The same durable with a bound on delivery attempts.
+    #[must_use]
+    pub const fn with_max_deliver(mut self, attempts: i64) -> Self {
+        self.max_deliver = attempts;
+        self
+    }
+
+    /// The `JetStream` configuration this spec describes: a pull consumer, replay instant.
+    #[must_use]
+    pub fn config(&self) -> jetstream::consumer::pull::Config {
+        jetstream::consumer::pull::Config {
+            durable_name: Some(self.durable_name.to_owned()),
+            filter_subject: self.filter_subject.to_owned(),
+            ack_policy: match self.ack {
+                AckMode::Explicit => jetstream::consumer::AckPolicy::Explicit,
+                AckMode::None => jetstream::consumer::AckPolicy::None,
+            },
+            deliver_policy: match self.start {
+                StartAt::All => jetstream::consumer::DeliverPolicy::All,
+                StartAt::New => jetstream::consumer::DeliverPolicy::New,
+            },
+            ack_wait: Duration::from_secs(self.ack_wait_seconds),
+            max_deliver: self.max_deliver,
+            replay_policy: jetstream::consumer::ReplayPolicy::Instant,
+            ..jetstream::consumer::pull::Config::default()
+        }
+    }
+}
+
 /// Provider-scoped archive report consumers owned by Edge.
 pub const AI_ARCHIVE_REPORT_CONSUMERS: [FixedConsumerSpec; 2] = [
-    FixedConsumerSpec {
-        durable_name: "platform_ai_archive_chatgpt_projection",
-        filter_subject: "evt.ai-archive.chatgpt.operation.reported.v1",
-    },
-    FixedConsumerSpec {
-        durable_name: "platform_ai_archive_claude_projection",
-        filter_subject: "evt.ai-archive.claude.operation.reported.v1",
-    },
+    FixedConsumerSpec::standard(
+        EVENT_STREAM,
+        "platform_ai_archive_chatgpt_projection",
+        "evt.ai-archive.chatgpt.operation.reported.v1",
+    ),
+    FixedConsumerSpec::standard(
+        EVENT_STREAM,
+        "platform_ai_archive_claude_projection",
+        "evt.ai-archive.claude.operation.reported.v1",
+    ),
 ];
 
 /// The durable Telegram reads raised notification events through.
@@ -119,39 +219,150 @@ pub const TELEGRAM_NOTIFICATION_CONSUMER: &str = "ratatoskr_telegram_notificatio
 /// The sole event subject delivered to [`TELEGRAM_NOTIFICATION_CONSUMER`].
 pub const TELEGRAM_NOTIFICATION_SUBJECT: &str = "evt.platform.notification.raised.v1";
 
-/// One provider-owned durable consumer that Edge creates before that provider can become ready.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct FixedConsumerSpec {
-    /// The stable durable cursor name, also used by its NATS permission stanza.
-    pub durable_name: &'static str,
-    /// The sole command subject this durable consumer may receive.
-    pub filter_subject: &'static str,
-}
-
 /// Provider-specific browser-capture consumers pre-provisioned by Platform.
 ///
 /// Social identities can inspect and pull only their own durable. Giving them consumer-create
 /// authority would let a compromised identity choose a different filter and observe another
 /// provider's commands.
 pub const SOCIAL_CAPTURE_CONSUMERS: [FixedConsumerSpec; 3] = [
+    FixedConsumerSpec::standard(
+        COMMAND_STREAM,
+        "ratatoskr_x_browser_capture",
+        "cmd.x.capture.requested.v1",
+    ),
+    FixedConsumerSpec::standard(
+        COMMAND_STREAM,
+        "ratatoskr_instagram_browser_capture",
+        "cmd.instagram.capture.requested.v1",
+    ),
+    FixedConsumerSpec::standard(
+        COMMAND_STREAM,
+        "threads_browser_capture",
+        "cmd.threads.capture.requested.v1",
+    ),
+];
+
+/// The Telegram notification durable.
+pub const TELEGRAM_NOTIFICATION_CONSUMERS: [FixedConsumerSpec; 1] = [FixedConsumerSpec::standard(
+    EVENT_STREAM,
+    TELEGRAM_NOTIFICATION_CONSUMER,
+    TELEGRAM_NOTIFICATION_SUBJECT,
+)];
+
+/// The durables of every other service (XR-021 CONTRACTS.md section S04), in the order of the
+/// contract: the command stream first, then the event stream.
+///
+/// Each service hard-codes the same name and filter and verifies them at startup; none creates one.
+/// Ingest durables wait 120 seconds because an LLM call sits between delivery and acknowledgement.
+pub const DOMAIN_CONSUMERS: [FixedConsumerSpec; 18] = [
+    FixedConsumerSpec::standard(
+        COMMAND_STREAM,
+        "ratatoskr_extractor_capture",
+        "cmd.content.capture.requested.v1",
+    )
+    .with_max_deliver(12),
+    FixedConsumerSpec::standard(
+        COMMAND_STREAM,
+        "ratatoskr_browser_worker",
+        "cmd.content.render.requested.v1",
+    )
+    .with_ack_wait_seconds(300)
+    .with_max_deliver(12),
+    FixedConsumerSpec::standard(
+        COMMAND_STREAM,
+        "ratatoskr_knowledge_channel_recap",
+        "cmd.knowledge.channel_digest_recap.requested.v1",
+    ),
+    FixedConsumerSpec::standard(
+        COMMAND_STREAM,
+        "ratatoskr_channel_digest_subscriptions",
+        "cmd.channel_digest.subscription.set_requested.v1",
+    ),
+    FixedConsumerSpec::standard(
+        COMMAND_STREAM,
+        "ratatoskr_channel_digest_runs",
+        "cmd.channel_digest.run.requested.v1",
+    ),
+    FixedConsumerSpec::standard(
+        COMMAND_STREAM,
+        "ratatoskr_channel_digest_schedule_occurrences",
+        "cmd.channel_digest.schedule.occurrence_requested.v1",
+    ),
+    FixedConsumerSpec::standard(
+        COMMAND_STREAM,
+        "ratatoskr_vault_backup_policy",
+        "cmd.vault.backup_policy.apply_requested.v1",
+    ),
+    FixedConsumerSpec::standard(
+        EVENT_STREAM,
+        "ratatoskr_knowledge_documents",
+        "evt.content.document.extracted.v1",
+    )
+    .with_ack_wait_seconds(120),
+    FixedConsumerSpec::standard(
+        EVENT_STREAM,
+        "ratatoskr_knowledge_social_sources",
+        "evt.social.source.>",
+    )
+    .with_ack_wait_seconds(120),
+    FixedConsumerSpec::standard(
+        EVENT_STREAM,
+        "ratatoskr_knowledge_ai_archive",
+        "evt.ai_archive.>",
+    )
+    .with_ack_wait_seconds(120),
+    FixedConsumerSpec::standard(
+        EVENT_STREAM,
+        "ratatoskr_knowledge_repository_requests",
+        "evt.knowledge.repository_analysis.requested.v1",
+    )
+    .with_ack_wait_seconds(120),
+    FixedConsumerSpec::standard(
+        EVENT_STREAM,
+        "ratatoskr_github_analysis_completed",
+        "evt.knowledge.repository_analysis.completed.v1",
+    ),
+    FixedConsumerSpec::standard(
+        EVENT_STREAM,
+        "ratatoskr_github_analysis_failed",
+        "evt.knowledge.repository_analysis.failed.v1",
+    ),
+    FixedConsumerSpec::standard(
+        EVENT_STREAM,
+        "ratatoskr_github_policy_acknowledged",
+        "evt.vault.backup_policy.acknowledged.v1",
+    ),
+    FixedConsumerSpec::standard(
+        EVENT_STREAM,
+        "ratatoskr_x_extractor_reports",
+        "evt.platform.operation.reported.v1",
+    ),
+    FixedConsumerSpec::standard(
+        EVENT_STREAM,
+        "ratatoskr_channel_digest_recap_completed",
+        "evt.knowledge.channel_digest_recap.completed.v1",
+    ),
+    FixedConsumerSpec::standard(
+        EVENT_STREAM,
+        "ratatoskr_channel_digest_recap_failed",
+        "evt.knowledge.channel_digest_recap.failed.v1",
+    ),
     FixedConsumerSpec {
-        durable_name: "ratatoskr_x_browser_capture",
-        filter_subject: "cmd.x.capture.requested.v1",
-    },
-    FixedConsumerSpec {
-        durable_name: "ratatoskr_instagram_browser_capture",
-        filter_subject: "cmd.instagram.capture.requested.v1",
-    },
-    FixedConsumerSpec {
-        durable_name: "threads_browser_capture",
-        filter_subject: "cmd.threads.capture.requested.v1",
+        stream: EVENT_STREAM,
+        durable_name: "ratatoskr_extractor_render_awaits",
+        filter_subject: "evt.content.render.>",
+        ack: AckMode::None,
+        start: StartAt::New,
+        ack_wait_seconds: 30,
+        max_deliver: -1,
     },
 ];
 
-const TELEGRAM_NOTIFICATION_CONSUMERS: [FixedConsumerSpec; 1] = [FixedConsumerSpec {
-    durable_name: TELEGRAM_NOTIFICATION_CONSUMER,
-    filter_subject: TELEGRAM_NOTIFICATION_SUBJECT,
-}];
+/// The KV bucket the browser worker records render completions in, created by Edge.
+pub const BROWSER_WORKER_COMPLETIONS_BUCKET: &str = "browser_worker_completions";
+
+/// How long a completion marker lives.
+const BROWSER_WORKER_COMPLETIONS_MAX_AGE: Duration = Duration::from_hours(24);
 
 /// The default retention: seven days.
 ///
@@ -300,81 +511,90 @@ pub async fn ensure(
     Ok(StreamState::Existing { mismatches })
 }
 
-/// Ensures the fixed social browser-capture durables exist on a Platform-owned command stream.
+/// Ensures every durable in `specs` exists on its stream with exactly the configuration it states.
 ///
-/// The implementation follows the failing broker test added with this consumer inventory.
+/// A durable that exists is read, never modified: a cursor is state, and changing its filter or
+/// delivery policy under a running service would change which messages it receives without anyone
+/// having decided it. A durable that differs from its spec is therefore a startup error for the
+/// operator to resolve, and the existing one is left in place.
 ///
 /// # Errors
 ///
-/// Returns [`EventingError::Bus`] when the stream or consumer configuration cannot be read or
-/// created, or when an existing durable does not match the required configuration.
-pub async fn ensure_social_capture_consumers(
+/// Returns [`EventingError::Bus`] when a stream or consumer cannot be read or created, or when an
+/// existing durable does not match its spec.
+pub async fn ensure_fixed_consumers(
     context: &jetstream::Context,
-    stream_name: &str,
-) -> Result<(), EventingError> {
-    ensure_fixed_consumers(context, stream_name, &SOCIAL_CAPTURE_CONSUMERS).await
-}
-
-async fn ensure_fixed_consumers(
-    context: &jetstream::Context,
-    stream_name: &str,
     specs: &[FixedConsumerSpec],
 ) -> Result<(), EventingError> {
-    let stream = context
-        .get_stream(stream_name)
-        .await
-        .map_err(|error| EventingError::Bus(error.to_string()))?;
     for spec in specs {
-        let consumer = stream
-            .get_or_create_consumer(
-                spec.durable_name,
-                jetstream::consumer::pull::Config {
-                    durable_name: Some(spec.durable_name.to_owned()),
-                    filter_subject: spec.filter_subject.to_owned(),
-                    ack_policy: jetstream::consumer::AckPolicy::Explicit,
-                    ..jetstream::consumer::pull::Config::default()
-                },
-            )
+        let stream = context
+            .get_stream(spec.stream)
             .await
             .map_err(|error| EventingError::Bus(error.to_string()))?;
-        let config = &consumer.cached_info().config;
-        if config.durable_name.as_deref() != Some(spec.durable_name)
-            || config.filter_subject != spec.filter_subject
-            || config.ack_policy != jetstream::consumer::AckPolicy::Explicit
-            || config.deliver_subject.is_some()
-            || config.deliver_policy != jetstream::consumer::DeliverPolicy::All
-            || config.replay_policy != jetstream::consumer::ReplayPolicy::Instant
+        let consumer = stream
+            .get_or_create_consumer(spec.durable_name, spec.config())
+            .await
+            .map_err(|error| EventingError::Bus(error.to_string()))?;
+        let found = &consumer.cached_info().config;
+        let wanted = spec.config();
+        if found.durable_name != wanted.durable_name
+            || found.filter_subject != wanted.filter_subject
+            || found.ack_policy != wanted.ack_policy
+            || found.deliver_policy != wanted.deliver_policy
+            || found.ack_wait != wanted.ack_wait
+            || found.max_deliver != wanted.max_deliver
+            || found.replay_policy != wanted.replay_policy
+            || found.deliver_subject.is_some()
         {
             return Err(EventingError::Bus(format!(
-                "the pre-provisioned consumer {} does not match its fixed filter and delivery policy",
-                spec.durable_name
+                "the pre-provisioned consumer {} on {} does not match its fixed filter and \
+                 delivery policy",
+                spec.durable_name, spec.stream
             )));
         }
     }
     Ok(())
 }
 
-/// Ensures the fixed Telegram notification durable exists on the Platform-owned event stream.
+/// Ensures the KV bucket the browser worker records completions in exists.
 ///
-/// # Errors
-///
-/// Returns [`EventingError::Bus`] when the stream or consumer configuration cannot be read or
-/// created, or when an existing durable does not match its fixed event filter.
-pub async fn ensure_telegram_notification_consumer(
-    context: &jetstream::Context,
-    stream_name: &str,
-) -> Result<(), EventingError> {
-    ensure_fixed_consumers(context, stream_name, &TELEGRAM_NOTIFICATION_CONSUMERS).await
+/// `create_key_value` is idempotent for an identical configuration and an error for a different
+/// one, which is the behaviour wanted: a bucket with other limits is left for an operator.
+async fn ensure_completion_bucket(context: &jetstream::Context) -> Result<(), EventingError> {
+    context
+        .create_key_value(jetstream::kv::Config {
+            bucket: BROWSER_WORKER_COMPLETIONS_BUCKET.to_owned(),
+            description: "Render completions recorded by the extractor browser worker".to_owned(),
+            max_age: BROWSER_WORKER_COMPLETIONS_MAX_AGE,
+            ..jetstream::kv::Config::default()
+        })
+        .await
+        .map_err(|error| EventingError::Bus(error.to_string()))?;
+    Ok(())
 }
 
-/// Ensures the two fixed provider-scoped archive report durables exist.
+/// Ensures the durables of the other services and the browser worker's completion bucket exist
+/// (CONTRACTS.md section S04).
 ///
 /// # Errors
 ///
-/// Returns [`EventingError::Bus`] if the stream or either immutable durable cannot be declared.
-pub async fn ensure_ai_archive_report_consumers(
-    context: &jetstream::Context,
-    stream_name: &str,
-) -> Result<(), EventingError> {
-    ensure_fixed_consumers(context, stream_name, &AI_ARCHIVE_REPORT_CONSUMERS).await
+/// Returns [`EventingError::Bus`] when a durable or the bucket cannot be read or created, or when an
+/// existing durable does not match its spec.
+pub async fn ensure_domain_topology(context: &jetstream::Context) -> Result<(), EventingError> {
+    ensure_fixed_consumers(context, &DOMAIN_CONSUMERS).await?;
+    ensure_completion_bucket(context).await
+}
+
+/// Ensures every fixed durable of every table, and the KV bucket, exist. Edge calls this once at
+/// startup, after the two stream declarations, and it is the only place a durable is created.
+///
+/// # Errors
+///
+/// Returns [`EventingError::Bus`] when any durable or the bucket cannot be read or created, or when
+/// an existing durable does not match its spec.
+pub async fn ensure_fixed_topology(context: &jetstream::Context) -> Result<(), EventingError> {
+    ensure_fixed_consumers(context, &SOCIAL_CAPTURE_CONSUMERS).await?;
+    ensure_fixed_consumers(context, &TELEGRAM_NOTIFICATION_CONSUMERS).await?;
+    ensure_fixed_consumers(context, &AI_ARCHIVE_REPORT_CONSUMERS).await?;
+    ensure_domain_topology(context).await
 }
