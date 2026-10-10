@@ -438,9 +438,11 @@ fn the_extractor_identity_has_no_broad_grants() {
         .iter()
         .find(|identity| identity.name == "EXTRACTOR")
         .expect("the extractor identity exists");
+    // The three subjects it publishes, the three of its capture durable and the two of its
+    // await durable, and nothing else.
     assert_eq!(
         extractor.publish_allow.len(),
-        7,
+        8,
         "{:?}",
         extractor.publish_allow
     );
