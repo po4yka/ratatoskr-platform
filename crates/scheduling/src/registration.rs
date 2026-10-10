@@ -10,6 +10,8 @@ use platform_eventing::inbox::Outcome;
 use platform_eventing::{Handler, Incoming, MessageClass, Subject};
 use platform_identity::{AuditEvent, AuditOutcome};
 use platform_persistence::PersistenceError;
+use ratatoskr_event_envelope::CommandEnvelope;
+use ratatoskr_operation_contracts::PlatformScheduleRegistrationRequested;
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -145,6 +147,7 @@ impl Handler for RegistrationHandler {
     }
 }
 
+/// One registration, read from the contract command.
 #[derive(Debug)]
 struct Registration {
     service_name: String,
@@ -158,20 +161,28 @@ struct Registration {
 }
 
 impl Registration {
+    /// The registration a delivered message carries, or `None` for anything that is not exactly the
+    /// contract command: the subject, the whole `CommandEnvelope` and its typed payload are all
+    /// checked, and the envelope's producer must be the process the bus says sent it.
     fn read(message: &Incoming) -> Option<Self> {
         if message.subject.as_str() != format!("cmd.{REGISTRATION_COMMAND_TYPE}") {
             return None;
         }
-        let body = message.payload.get("payload")?;
+        let bytes = serde_json::to_vec(&message.payload).ok()?;
+        let envelope = CommandEnvelope::from_json(&bytes).ok()?;
+        if envelope.producer.as_str() != message.producer {
+            return None;
+        }
+        let body: PlatformScheduleRegistrationRequested = envelope.payload_as().ok()?;
         Some(Self {
-            service_name: body.get("service_name")?.as_str()?.to_owned(),
-            name: body.get("name")?.as_str()?.to_owned(),
-            owner_user_id: body.get("owner_user_id")?.as_str()?.parse().ok()?,
-            cron_expression: body.get("cron_expression")?.as_str()?.to_owned(),
-            command_type: body.get("command_type")?.as_str()?.to_owned(),
-            operation_kind: body.get("operation_kind")?.as_str()?.to_owned(),
-            payload: body.get("payload")?.clone(),
-            enabled: body.get("enabled")?.as_bool()?,
+            service_name: body.service_name.to_string(),
+            name: body.name.to_string(),
+            owner_user_id: body.owner_user_id.0,
+            cron_expression: body.cron_expression.to_string(),
+            command_type: body.command_type.to_wire(),
+            operation_kind: body.operation_kind.to_string(),
+            payload: serde_json::Value::Object(body.payload),
+            enabled: body.enabled,
         })
     }
 }
@@ -213,6 +224,30 @@ pub(crate) fn next_after(expression: &str, after: Timestamp) -> Option<Timestamp
     let after = DateTime::from_timestamp(after.as_second(), 0)?;
     let next = schedule.after(&after).next()?;
     Timestamp::from_second(next.timestamp()).ok()
+}
+
+/// The cron grid point strictly before `due`, at most `max_back` earlier.
+///
+/// A digest covers the span between two grid points, and the digest contract bounds that span at
+/// seven days, so a sparse schedule (monthly, yearly) has its "previous" point pulled forward to the
+/// bound instead of producing a command the consumer must refuse. `None` for an expression this
+/// scheduler cannot evaluate.
+pub(crate) fn previous_before(
+    expression: &str,
+    due: Timestamp,
+    max_back: jiff::SignedDuration,
+) -> Option<Timestamp> {
+    if expression.split_whitespace().count() != 5 {
+        return None;
+    }
+    let schedule = Schedule::from_str(&format!("0 {expression} *")).ok()?;
+    let due_at = DateTime::from_timestamp(due.as_second(), 0)?;
+    let floor = due.checked_sub(max_back).ok()?;
+    let previous = schedule
+        .after(&due_at)
+        .next_back()
+        .and_then(|previous| Timestamp::from_second(previous.timestamp()).ok());
+    Some(previous.map_or(floor, |previous| previous.max(floor)))
 }
 
 /// Deterministic identifier of the occurrence of `schedule_id` due at `due_at`.
@@ -261,4 +296,39 @@ async fn audit(
 fn to_offset(value: Timestamp) -> time::OffsetDateTime {
     time::OffsetDateTime::from_unix_timestamp_nanos(value.as_nanosecond())
         .unwrap_or(time::OffsetDateTime::UNIX_EPOCH)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const WEEK: jiff::SignedDuration = jiff::SignedDuration::from_hours(7 * 24);
+
+    fn at(raw: &str) -> Timestamp {
+        raw.parse().expect("a timestamp")
+    }
+
+    #[test]
+    fn the_previous_grid_point_of_a_daily_cron_is_the_day_before() {
+        assert_eq!(
+            previous_before("0 6 * * *", at("2026-10-10T06:00:00Z"), WEEK),
+            Some(at("2026-10-09T06:00:00Z"))
+        );
+    }
+
+    #[test]
+    fn the_previous_grid_point_is_clamped_to_the_bound() {
+        assert_eq!(
+            previous_before("0 0 1 1 *", at("2027-01-01T00:00:00Z"), WEEK),
+            Some(at("2026-12-25T00:00:00Z"))
+        );
+    }
+
+    #[test]
+    fn an_expression_the_scheduler_cannot_evaluate_has_no_previous_point() {
+        assert_eq!(
+            previous_before("not a cron", at("2026-10-10T06:00:00Z"), WEEK),
+            None
+        );
+    }
 }

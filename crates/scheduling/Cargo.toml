@@ -17,6 +17,10 @@ ratatoskr-platform-operations.workspace  = true
 ratatoskr-platform-eventing.workspace    = true
 ratatoskr-platform-identity.workspace    = true
 ratatoskr-platform-telemetry.workspace   = true
+ratatoskr-event-envelope.workspace       = true
+ratatoskr-identifiers.workspace          = true
+ratatoskr-operation-contracts.workspace  = true
+ratatoskr-channel-digest-contracts.workspace = true
 metrics.workspace    = true
 sqlx.workspace       = true
 uuid.workspace       = true
@@ -30,7 +34,6 @@ tracing.workspace    = true
 
 [dev-dependencies]
 ratatoskr-platform-persistence = { workspace = true, features = ["test-support"] }
-ratatoskr-operation-contracts.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 
 [lints]

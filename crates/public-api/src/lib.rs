@@ -19,6 +19,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::Router;
+use axum::extract::DefaultBodyLimit;
 use axum::routing::{MethodRouter, any, delete, get, post, put};
 use platform_api_doc::{ApiSurface, RouteDoc};
 use platform_http::RuntimeState;
@@ -33,9 +34,11 @@ pub mod archives;
 pub mod auth;
 pub mod capabilities;
 pub mod captures;
+pub mod channel_digests;
 pub mod credentials;
 pub mod devices;
 pub mod gateway;
+mod intake;
 pub mod library;
 pub mod oauth;
 pub mod operations;
@@ -86,6 +89,10 @@ pub struct ApiState {
     pub gateway: gateway::Gateway,
     /// Private durable root for operation-owned archive staging.
     pub archive_staging_root: Arc<PathBuf>,
+    /// The largest archive a device may prepare, in bytes (`archive_staging.max_archive_bytes`).
+    pub archive_max_bytes: u64,
+    /// The typed client for the channel-digests read API, absent when the deployment has none.
+    pub channel_digests: Option<Arc<channel_digests::ChannelDigestsClient>>,
 }
 
 impl ApiState {
@@ -116,6 +123,8 @@ impl ApiState {
             archive_staging_root: Arc::new(PathBuf::from(
                 "/tmp/ratatoskr-platform-ai-archive-staging",
             )),
+            archive_max_bytes: platform_core::config::DEFAULT_MAX_ARCHIVE_BYTES,
+            channel_digests: None,
         }
     }
 
@@ -175,6 +184,10 @@ fn table() -> Vec<Endpoint> {
             handler: post(captures::submit),
         },
         Endpoint {
+            doc: captures::BLOB_DOC,
+            handler: post(captures::submit_blob),
+        },
+        Endpoint {
             doc: archives::PREPARE_DOC,
             handler: post(archives::prepare),
         },
@@ -184,7 +197,14 @@ fn table() -> Vec<Endpoint> {
         },
         Endpoint {
             doc: archives::CHUNK_DOC,
-            handler: put(archives::put_chunk),
+            // axum's `Bytes` extractor stops at 2 MiB unless told otherwise, and the contract
+            // allows chunks up to `CHUNK_SIZE_MAX_BYTES`. This route alone is raised to that
+            // figure; every other route keeps the default, and the exact-length check in
+            // `put_chunk` still refuses a body that is not the chunk the session declared.
+            handler: put(archives::put_chunk).layer(DefaultBodyLimit::max(
+                usize::try_from(ratatoskr_blob_transfer_contracts::CHUNK_SIZE_MAX_BYTES)
+                    .unwrap_or(usize::MAX),
+            )),
         },
         Endpoint {
             doc: archives::STATUS_DOC,
@@ -201,6 +221,26 @@ fn table() -> Vec<Endpoint> {
         Endpoint {
             doc: operations::LIST_DOC,
             handler: get(operations::list),
+        },
+        Endpoint {
+            doc: channel_digests::SUBSCRIPTION_DOC,
+            handler: put(channel_digests::set_subscription),
+        },
+        Endpoint {
+            doc: channel_digests::RUN_DOC,
+            handler: post(channel_digests::request_run),
+        },
+        Endpoint {
+            doc: channel_digests::SUBSCRIPTIONS_DOC,
+            handler: get(channel_digests::list_subscriptions),
+        },
+        Endpoint {
+            doc: channel_digests::RESULTS_DOC,
+            handler: get(channel_digests::list_results),
+        },
+        Endpoint {
+            doc: channel_digests::RESULT_DOC,
+            handler: get(channel_digests::get_result),
         },
         Endpoint {
             doc: library::SEARCH_DOC,
@@ -334,6 +374,7 @@ pub fn surface() -> ApiSurface {
 fn register_schemas(generator: &mut schemars::SchemaGenerator) {
     generator.subschema_for::<captures::SubmitCapture>();
     generator.subschema_for::<captures::CaptureAccepted>();
+    generator.subschema_for::<captures::SubmitBlobCapture>();
     generator.subschema_for::<archives::PrepareArchive>();
     generator.subschema_for::<archives::ArchivePrepared>();
     generator.subschema_for::<ratatoskr_blob_transfer_contracts::UploadSessionRequest>();
@@ -360,6 +401,12 @@ fn register_schemas(generator: &mut schemars::SchemaGenerator) {
     generator.subschema_for::<ratatoskr_operation_contracts::OperationSnapshot>();
     generator.subschema_for::<ratatoskr_error_contracts::ErrorEnvelope>();
     generator.subschema_for::<operations::OperationList>();
+    generator.subschema_for::<channel_digests::SetSubscription>();
+    generator.subschema_for::<channel_digests::RequestRun>();
+    generator.subschema_for::<channel_digests::ChannelDigestAccepted>();
+    generator.subschema_for::<ratatoskr_channel_digest_contracts::ChannelDigestSubscriptionPage>();
+    generator.subschema_for::<ratatoskr_channel_digest_contracts::ChannelDigestResultPage>();
+    generator.subschema_for::<ratatoskr_channel_digest_contracts::ChannelDigestResultView>();
     generator.subschema_for::<library::LibraryPage>();
     generator.subschema_for::<library::LibraryItem>();
     generator.subschema_for::<library::ReplaceReadState>();

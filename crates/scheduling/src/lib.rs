@@ -19,10 +19,19 @@
 //! still records the occurrence durably, and a broker outage becomes a backlog with an operator
 //! signal instead of a lost occurrence. This crate therefore has no NATS dependency at all.
 
-use crate::registration::next_after;
+use crate::registration::{next_after, previous_before};
 use jiff::Timestamp;
 use platform_eventing::{Command, MessageClass, Outbox, Subject};
 use platform_persistence::PersistenceError;
+use ratatoskr_channel_digest_contracts::{
+    ChannelDigestScheduleOccurrenceRequested, DigestOccurrenceRef, DigestScheduleRef,
+};
+use ratatoskr_event_envelope::{
+    CommandEnvelope, CommandPayload, EnvelopeSchemaVersion, ProducerName,
+};
+use ratatoskr_identifiers::{
+    CommandId, EntityRef, Extensions, OperationId, TenantRef, UserId, WireTimestamp,
+};
 use sqlx::{PgPool, Postgres, Row as _, Transaction};
 use uuid::Uuid;
 
@@ -352,15 +361,20 @@ async fn publish(
     .await
     .map_err(PersistenceError::Query)?;
 
-    let envelope = Command {
-        command_type: &schedule.command_type,
-        operation_id: operation.operation_id,
-        principal: schedule.owner_user_id,
-        correlation_id: &correlation,
-        idempotency_key: &idempotency_key,
-        requested_at: now,
-    }
-    .envelope(schedule.payload.clone());
+    let envelope =
+        if schedule.command_type == ChannelDigestScheduleOccurrenceRequested::COMMAND_TYPE {
+            digest_occurrence(schedule, occurrence_id, operation.operation_id, now)?
+        } else {
+            Command {
+                command_type: &schedule.command_type,
+                operation_id: operation.operation_id,
+                principal: schedule.owner_user_id,
+                correlation_id: &correlation,
+                idempotency_key: &idempotency_key,
+                requested_at: now,
+            }
+            .envelope(schedule.payload.clone())
+        };
 
     Outbox::enqueue(
         &mut **transaction,
@@ -373,6 +387,64 @@ async fn publish(
     .await?;
 
     Ok(())
+}
+
+/// The longest span a digest may cover, which is also how far back a digest occurrence's previous
+/// grid point may be.
+const DIGEST_MAX_SPAN: jiff::SignedDuration = jiff::SignedDuration::from_hours(7 * 24);
+
+/// The typed `CommandEnvelope` of a channel-digest occurrence (CONTRACTS.md S08).
+///
+/// The occurrence identifier is the command id, so the broker's own de-duplication, the outbox row
+/// and the consumer's inbox all collapse a redelivery. The interval is the schedule's grid, not the
+/// clock: `due_at` is the grid point this occurrence is for and `previous_due_at` the one before it,
+/// so a scheduler that ran late still asks for the window the schedule meant.
+fn digest_occurrence(
+    schedule: &Schedule,
+    occurrence_id: Uuid,
+    operation_id: Uuid,
+    now: Timestamp,
+) -> Result<serde_json::Value, SchedulingError> {
+    let unusable = |column: &'static str| SchedulingError::UnusableRow {
+        schedule_id: schedule.id,
+        column,
+    };
+    let due_at = schedule.next_due_at;
+    let previous_due_at = previous_before(&schedule.cron_expression, due_at, DIGEST_MAX_SPAN)
+        .ok_or_else(|| unusable("cron_expression"))?;
+    let occurrence_ref = format!("schedule-occurrence:{occurrence_id}");
+    let payload = ChannelDigestScheduleOccurrenceRequested {
+        schedule_ref: DigestScheduleRef::parse(&format!("schedule:{}", schedule.id))
+            .map_err(|_| unusable("schedule_id"))?,
+        occurrence_ref: DigestOccurrenceRef::parse(&occurrence_ref)
+            .map_err(|_| unusable("schedule_id"))?,
+        previous_due_at: WireTimestamp::from_jiff(previous_due_at),
+        due_at: WireTimestamp::from_jiff(due_at),
+        extensions: Extensions::new(),
+    };
+    payload
+        .validate_for_publish()
+        .map_err(|_| unusable("cron_expression"))?;
+    let serde_json::Value::Object(body) =
+        serde_json::to_value(&payload).map_err(|_| unusable("payload"))?
+    else {
+        return Err(unusable("payload"));
+    };
+    let envelope = CommandEnvelope {
+        command_id: CommandId(occurrence_id),
+        command_type: ChannelDigestScheduleOccurrenceRequested::command_type(),
+        issued_at: WireTimestamp::from_jiff(now),
+        producer: ProducerName::parse(platform_eventing::PLATFORM_PRODUCER)
+            .map_err(|_| unusable("producer"))?,
+        aggregate_id: EntityRef::parse(&occurrence_ref).map_err(|_| unusable("schedule_id"))?,
+        correlation_id: OperationId(operation_id).as_entity_ref(),
+        causation_id: None,
+        tenant_id: Some(TenantRef::of_user(UserId(schedule.owner_user_id))),
+        schema_version: EnvelopeSchemaVersion::CURRENT,
+        payload: body,
+        extensions: Extensions::new(),
+    };
+    serde_json::to_value(envelope).map_err(|_| unusable("envelope"))
 }
 
 /// Move the schedule to its next due time.

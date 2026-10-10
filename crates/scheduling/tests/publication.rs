@@ -416,3 +416,191 @@ async fn retention_removes_occurrences_outside_the_window() {
 
     database.cleanup().await.expect("cleanup");
 }
+
+/// A registered channel-digest schedule: the one command type Platform publishes as a contract
+/// envelope instead of the legacy document.
+async fn insert_digest_schedule(
+    pool: &PgPool,
+    schedule_id: Uuid,
+    owner_user_id: Uuid,
+    cron: &str,
+    next_due_at: Timestamp,
+) {
+    let created = to_offset(next_due_at - SignedDuration::from_hours(1));
+    sqlx::query(
+        "insert into operations.schedules
+             (schedule_id, service_name, name, owner_user_id, command_type, operation_kind, payload,
+              cron_expression, next_due_at, enabled, created_at, updated_at)
+         values ($1, 'ratatoskr-channel-digests', 'daily-digest', $2,
+                 'channel_digest.schedule.occurrence_requested.v1',
+                 'channel_digest.schedule.occurrence', '{}'::jsonb, $3, $4, true, $5, $5)",
+    )
+    .bind(schedule_id)
+    .bind(owner_user_id)
+    .bind(cron)
+    .bind(to_offset(next_due_at))
+    .bind(created)
+    .execute(pool)
+    .await
+    .expect("the digest schedule must insert");
+}
+
+async fn digest_command(
+    pool: &PgPool,
+    schedule_id: Uuid,
+    due: Timestamp,
+) -> (Uuid, serde_json::Value) {
+    let expected = occurrence_id(schedule_id, due);
+    let row = sqlx::query(
+        "select b.message_id, b.subject, b.payload, o.operation_id
+           from operations.schedule_occurrences o
+           join operations.outbox b on b.operation_id = o.operation_id
+          where o.occurrence_id = $1",
+    )
+    .bind(expected)
+    .fetch_one(pool)
+    .await
+    .expect("the occurrence and its command must exist");
+    assert_eq!(
+        row.get::<String, _>("subject"),
+        "cmd.channel_digest.schedule.occurrence_requested.v1"
+    );
+    (row.get("operation_id"), row.get("payload"))
+}
+
+/// S08. The digest occurrence is a typed `CommandEnvelope`: its command id is the occurrence id, its
+/// aggregate is the occurrence reference, and the interval is the grid, not the clock.
+#[tokio::test]
+async fn digest_occurrence_is_published_as_a_contract_envelope() {
+    use ratatoskr_channel_digest_contracts::ChannelDigestScheduleOccurrenceRequested;
+    use ratatoskr_event_envelope::CommandEnvelope;
+
+    let database = TestDatabase::create().await.expect("a test database");
+    let pool = database.pool();
+    let due: Timestamp = "2026-10-10T06:00:00Z".parse().expect("a timestamp");
+    let schedule_id = Uuid::now_v7();
+    let owner = Uuid::now_v7();
+    insert_digest_schedule(pool, schedule_id, owner, "0 6 * * *", due).await;
+
+    let report = run_once(pool, 32, due + SignedDuration::from_secs(7))
+        .await
+        .expect("the pass must run");
+    assert_eq!((report.due, report.published), (1, 1));
+
+    let occurrence = occurrence_id(schedule_id, due);
+    let (operation_id, stored) = digest_command(pool, schedule_id, due).await;
+    let envelope = CommandEnvelope::from_json(stored.to_string().as_bytes())
+        .expect("the stored row is a contract CommandEnvelope");
+    let payload: ChannelDigestScheduleOccurrenceRequested = envelope
+        .payload_as()
+        .expect("the payload is an occurrence request");
+    payload
+        .validate_for_publish()
+        .expect("a publishable command");
+
+    assert_eq!(stored["command_id"], occurrence.to_string());
+    assert_eq!(stored["producer"], "ratatoskr-platform");
+    assert_eq!(
+        stored["aggregate_id"],
+        format!("schedule-occurrence:{occurrence}")
+    );
+    assert_eq!(
+        stored["payload"]["occurrence_ref"],
+        format!("schedule-occurrence:{occurrence}"),
+        "the aggregate equals the occurrence reference"
+    );
+    assert_eq!(
+        stored["correlation_id"],
+        format!("operation:{operation_id}")
+    );
+    assert_eq!(stored["tenant_id"], format!("user:{owner}"));
+    assert_eq!(
+        stored["payload"]["schedule_ref"],
+        format!("schedule:{schedule_id}")
+    );
+    assert_eq!(
+        payload.due_at.as_jiff(),
+        due,
+        "the grid point, not the clock"
+    );
+    assert_eq!(
+        payload.previous_due_at.as_jiff(),
+        due - SignedDuration::from_hours(24),
+        "the previous grid point of a daily schedule"
+    );
+    database.cleanup().await.expect("cleanup");
+}
+
+/// S08. The window a digest can cover is seven days, so a sparse schedule's "previous" grid point is
+/// clamped rather than producing a command the consumer must refuse.
+#[tokio::test]
+async fn previous_due_at_is_clamped_to_seven_days_for_a_sparse_cron() {
+    use ratatoskr_channel_digest_contracts::ChannelDigestScheduleOccurrenceRequested;
+    use ratatoskr_event_envelope::CommandEnvelope;
+
+    let database = TestDatabase::create().await.expect("a test database");
+    let pool = database.pool();
+    let due: Timestamp = "2027-01-01T00:00:00Z".parse().expect("a timestamp");
+    let schedule_id = Uuid::now_v7();
+    insert_digest_schedule(pool, schedule_id, Uuid::now_v7(), "0 0 1 1 *", due).await;
+
+    run_once(pool, 32, due + SignedDuration::from_secs(1))
+        .await
+        .expect("the pass must run");
+
+    let (_, stored) = digest_command(pool, schedule_id, due).await;
+    let payload: ChannelDigestScheduleOccurrenceRequested =
+        CommandEnvelope::from_json(stored.to_string().as_bytes())
+            .expect("an envelope")
+            .payload_as()
+            .expect("an occurrence request");
+    payload
+        .validate_for_publish()
+        .expect("a publishable command");
+    assert_eq!(
+        payload.previous_due_at.as_jiff(),
+        due - SignedDuration::from_hours(7 * 24)
+    );
+    database.cleanup().await.expect("cleanup");
+}
+
+/// S08. Every other command type keeps the legacy document, member for member.
+#[tokio::test]
+async fn a_github_schedule_keeps_the_legacy_command_document() {
+    let database = TestDatabase::create().await.expect("a test database");
+    let pool = database.pool();
+    let due = at(1_700_000_000);
+    let fixture = Fixture::new(due);
+    fixture.insert(pool).await;
+
+    run_once(pool, 32, due + SignedDuration::from_secs(3))
+        .await
+        .expect("the pass must run");
+    let stored: serde_json::Value =
+        sqlx::query_scalar("select payload from operations.outbox where message_id = $1")
+            .bind(occurrence_id(fixture.schedule_id, due))
+            .fetch_one(pool)
+            .await
+            .expect("the command");
+    let mut members: Vec<&str> = stored
+        .as_object()
+        .expect("an object")
+        .keys()
+        .map(String::as_str)
+        .collect();
+    members.sort_unstable();
+    assert_eq!(
+        members,
+        [
+            "command_id",
+            "command_type",
+            "correlation_id",
+            "idempotency_key",
+            "operation_id",
+            "payload",
+            "requested_at",
+            "tenant_id",
+        ]
+    );
+    database.cleanup().await.expect("cleanup");
+}

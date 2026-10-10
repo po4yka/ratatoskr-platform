@@ -12,11 +12,14 @@ use platform_eventing::{Incoming, MessageClass, Subject, consumer::deliver, inbo
 use platform_identity::user::create_user;
 use platform_persistence::test_support::TestDatabase;
 use platform_scheduling::{RegistrationHandler, ScheduleRegistration, occurrence_id, run_once};
+use ratatoskr_event_envelope::EnvelopeSchemaVersion;
 use ratatoskr_operation_contracts::OperationStatus;
 use sqlx::Row as _;
 use uuid::Uuid;
 
-fn registration(cron: &str, producer: &str) -> Incoming {
+/// A registration command as the bus delivers it: a complete contract `CommandEnvelope` whose
+/// payload is `body`.
+fn envelope(producer: &str, body: &serde_json::Value) -> Incoming {
     Incoming {
         message_id: Uuid::now_v7(),
         subject: Subject::new(
@@ -26,19 +29,33 @@ fn registration(cron: &str, producer: &str) -> Incoming {
         .expect("the registration subject is valid"),
         producer: producer.to_owned(),
         payload: serde_json::json!({
+            "command_id": Uuid::now_v7(),
+            "command_type": "platform.schedule.registration_requested.v1",
+            "issued_at": "2026-10-10T06:00:00Z",
+            "producer": producer,
+            "aggregate_id": "schedule-registration:daily",
             "correlation_id": "correlation:01a0153f-63e5-7010-a4c9-1fe6c43bcc39",
-            "payload": {
-                "service_name": "ratatoskr-github",
-                "name": "nightly-stars",
-                "owner_user_id": Uuid::now_v7(),
-                "cron_expression": cron,
-                "command_type": "github.sync.requested.v1",
-                "operation_kind": "github.sync",
-                "payload": { "account": "po4yka" },
-                "enabled": true
-            }
+            "schema_version": serde_json::to_value(EnvelopeSchemaVersion::CURRENT)
+                .expect("the envelope version serializes"),
+            "payload": body,
         }),
     }
+}
+
+fn registration(cron: &str, producer: &str) -> Incoming {
+    envelope(
+        producer,
+        &serde_json::json!({
+            "service_name": "ratatoskr-github",
+            "name": "nightly-stars",
+            "owner_user_id": Uuid::now_v7(),
+            "cron_expression": cron,
+            "command_type": "github.sync.requested.v1",
+            "operation_kind": "github.sync",
+            "payload": { "account": "po4yka" },
+            "enabled": true
+        }),
+    )
 }
 
 #[tokio::test]
@@ -321,5 +338,98 @@ async fn schedule_status_reports_owner_next_due_and_last_outcome() {
     assert_eq!(row.get::<Uuid, _>("owner_user_id"), owner.user_id);
     assert!(row.get::<time::OffsetDateTime, _>("next_due_at") > due);
     assert_eq!(row.get::<String, _>("last_outcome"), "succeeded");
+    database.cleanup().await.expect("cleanup");
+}
+
+fn digest_registration(producer: &str, service_name: &str, owner: Uuid) -> Incoming {
+    envelope(
+        producer,
+        &serde_json::json!({
+            "service_name": service_name,
+            "name": "daily-digest",
+            "owner_user_id": owner,
+            "cron_expression": "0 6 * * *",
+            "command_type": "channel_digest.schedule.occurrence_requested.v1",
+            "operation_kind": "channel_digest.schedule.occurrence",
+            "payload": {},
+            "enabled": true
+        }),
+    )
+}
+
+/// S08. The registration is the contract command: channel-digests may register its own schedule,
+/// a producer that is not allowlisted or that names another service may not, and a document that is
+/// not a contract envelope at all is refused instead of being read member by member.
+#[tokio::test]
+async fn typed_registration_from_contracts_is_accepted_for_channel_digests_and_rejected_for_other_producers()
+ {
+    let database = TestDatabase::create().await.expect("a test database");
+    let now = Timestamp::from_second(1_700_000_000).expect("a timestamp");
+    let owner = create_user(database.pool(), now)
+        .await
+        .expect("an owner")
+        .user_id;
+    let handler = RegistrationHandler::new(vec![
+        "ratatoskr-github".to_owned(),
+        "ratatoskr-channel-digests".to_owned(),
+    ]);
+    let schedules = || async {
+        sqlx::query_scalar::<_, i64>("select count(*) from operations.schedules")
+            .fetch_one(database.pool())
+            .await
+            .expect("the count must run")
+    };
+
+    for (producer, service_name) in [
+        ("ratatoskr-extractor", "ratatoskr-extractor"),
+        ("ratatoskr-channel-digests", "ratatoskr-github"),
+    ] {
+        let outcome = handler
+            .register(
+                database.pool(),
+                &digest_registration(producer, service_name, owner),
+                now,
+            )
+            .await
+            .expect("a refusal is recorded");
+        assert_eq!(
+            outcome,
+            ScheduleRegistration::Rejected,
+            "{producer} as {service_name}"
+        );
+    }
+    let mut untyped = digest_registration(
+        "ratatoskr-channel-digests",
+        "ratatoskr-channel-digests",
+        owner,
+    );
+    untyped.payload = serde_json::json!({
+        "correlation_id": "correlation:01a0153f-63e5-7010-a4c9-1fe6c43bcc39",
+        "payload": untyped.payload["payload"].clone(),
+    });
+    assert_eq!(
+        handler
+            .register(database.pool(), &untyped, now)
+            .await
+            .expect("a refusal is recorded"),
+        ScheduleRegistration::Rejected,
+        "a document without the envelope members is not a registration"
+    );
+    assert_eq!(schedules().await, 0, "nothing was stored by the refusals");
+
+    let accepted = handler
+        .register(
+            database.pool(),
+            &digest_registration(
+                "ratatoskr-channel-digests",
+                "ratatoskr-channel-digests",
+                owner,
+            ),
+            now,
+        )
+        .await
+        .expect("the registration is applied");
+    assert_eq!(accepted, ScheduleRegistration::Applied);
+    assert_eq!(schedules().await, 1);
     database.cleanup().await.expect("cleanup");
 }

@@ -36,7 +36,8 @@ disallowed-methods = [
 # and not `allow`: `expect` reports `unfulfilled_lint_expectations` once the item drops back under
 # the limit, so the exemption deletes itself instead of outliving its reason.
 
-# Longest function: 98 lines, `accept` in `crates/public-api/src/captures.rs`. Blank and comment-only
+# Longest function: 98 lines, `accept` in `crates/public-api/src/intake.rs` (moved out of
+# `captures.rs` when the channel-digest routes began to share it). Blank and comment-only
 # lines do not count, so that is 98 lines of code and two of headroom. The function was left alone on
 # purpose. Its length is forced rather than sprawling — six sequential fallible steps in one
 # transaction, each with an explicit early-return arm because this workspace denies `unwrap`,
