@@ -57,6 +57,11 @@ pub const PREPARE_DOC: RouteDoc = RouteDoc {
             description: "The idempotency key is in use for different metadata.",
             payload: Some(Payload::Json("ErrorEnvelope")),
         },
+        ResponseDoc {
+            status: 413,
+            description: "The declared archive is larger than this deployment accepts. Permanent for this archive: retrying cannot help.",
+            payload: Some(Payload::Json("ErrorEnvelope")),
+        },
     ],
 };
 
@@ -66,7 +71,7 @@ pub const OPEN_DOC: RouteDoc = RouteDoc {
     path: OPEN_ROUTE,
     operation_id: "openAiArchiveTransfer",
     summary: "Open an AI archive transfer",
-    description: "Opens bounded resumable staging under the prepared provider and operation.",
+    description: "Opens bounded resumable staging under the prepared provider and operation. The declared media type must be `application/zip`; any other type is refused before a byte moves.",
     tag: "ai-archives",
     security: Security::Session,
     parameters: &[

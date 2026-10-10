@@ -17,6 +17,7 @@ use platform_core::FailureKind;
 use platform_core::config::{
     GatewayConfig, GatewayRouteBudget, GatewayRouteBudgets, GatewayRouteConfig,
 };
+use ratatoskr_ai_archive_contracts::platform_receipt;
 use ratatoskr_error_contracts::ErrorEnvelope;
 
 use crate::{ApiState, Principal};
@@ -42,14 +43,18 @@ pub struct ServiceCapabilities {
 
 /// One operation-bound archive delivery after Edge has authenticated the device and read its
 /// immutable receipt binding.
+///
+/// It carries the archive as a body and its declared size, and nothing about HTTP: the method, the
+/// media type and the claim headers of the receipt binding are decided in one place,
+/// [`Gateway::forward_archive_receipt`], so no caller can get one of them wrong.
 pub(crate) struct ArchiveReceipt<'a> {
     pub(crate) provider: &'a str,
     pub(crate) principal: Principal,
     pub(crate) correlation_id: &'a str,
     pub(crate) operation_id: uuid::Uuid,
     pub(crate) sha256: &'a str,
-    pub(crate) byte_size: i64,
-    pub(crate) request: Request,
+    pub(crate) byte_size: u64,
+    pub(crate) body: Body,
 }
 
 /// The reusable HTTP client and immutable route table for one Edge process.
@@ -129,8 +134,12 @@ impl Gateway {
     }
 
     /// Execute one fixed-path typed control request under the configured response-header budget.
-    pub(crate) async fn request_control(
+    ///
+    /// `dependency` names the service in the log line; it is a fixed label and never a value taken
+    /// from a request.
+    async fn request_control(
         &self,
+        dependency: &'static str,
         request: hyper::Request<Body>,
     ) -> Result<hyper::Response<hyper::body::Incoming>, FailureKind> {
         match tokio::time::timeout(
@@ -142,7 +151,7 @@ impl Gateway {
             Ok(Ok(response)) => Ok(response),
             Ok(Err(_)) => {
                 tracing::warn!(
-                    dependency = "knowledge",
+                    dependency,
                     class = "unavailable",
                     "typed dependency request failed"
                 );
@@ -150,13 +159,78 @@ impl Gateway {
             }
             Err(_) => {
                 tracing::warn!(
-                    dependency = "knowledge",
+                    dependency,
                     class = "timeout",
                     "typed dependency response headers timed out"
                 );
                 Err(FailureKind::UpstreamTimeout)
             }
         }
+    }
+
+    /// Send one typed control request and read its JSON answer, bounded in time and size.
+    ///
+    /// The one place a typed client (Knowledge, channel-digests) turns an HTTP answer into a value:
+    /// a `404` is the caller's `NotFound` when `scoped_not_found` says the route is scoped to the
+    /// caller, any other non-2xx answer, an answer above `max_response_bytes` and a body that is not
+    /// the expected type are all `UpstreamInvalidResponse`, a transport failure is
+    /// `UpstreamUnavailable`, and the control budget's deadline is `UpstreamTimeout`. Redirects are
+    /// not followed.
+    pub(crate) async fn fetch_json<T: serde::de::DeserializeOwned>(
+        &self,
+        dependency: &'static str,
+        request: hyper::Request<Body>,
+        scoped_not_found: bool,
+        max_response_bytes: usize,
+    ) -> Result<T, FailureKind> {
+        let budget = self.control_budget();
+        let max_body = usize::try_from(budget.max_body_bytes)
+            .unwrap_or(usize::MAX)
+            .min(max_response_bytes);
+        tokio::time::timeout(
+            Duration::from_secs(budget.response_timeout_seconds),
+            async {
+                let response = self.request_control(dependency, request).await?;
+                if scoped_not_found && response.status() == http::StatusCode::NOT_FOUND {
+                    return Err(FailureKind::NotFound);
+                }
+                if !response.status().is_success() {
+                    tracing::warn!(
+                        dependency,
+                        class = "invalid_status",
+                        "typed dependency returned an unusable status"
+                    );
+                    return Err(FailureKind::UpstreamInvalidResponse);
+                }
+                let body = axum::body::to_bytes(Body::new(response.into_body()), max_body)
+                    .await
+                    .map_err(|_| {
+                        tracing::warn!(
+                            dependency,
+                            class = "oversized_body",
+                            "typed dependency response exceeded its bound"
+                        );
+                        FailureKind::UpstreamInvalidResponse
+                    })?;
+                serde_json::from_slice(&body).map_err(|_| {
+                    tracing::warn!(
+                        dependency,
+                        class = "invalid_json",
+                        "typed dependency returned an invalid success body"
+                    );
+                    FailureKind::UpstreamInvalidResponse
+                })
+            },
+        )
+        .await
+        .map_err(|_| {
+            tracing::warn!(
+                dependency,
+                class = "total_timeout",
+                "typed dependency total deadline elapsed"
+            );
+            FailureKind::UpstreamTimeout
+        })?
     }
 
     /// Whether a configured transfer-class receiver can accept an archive for this provider.
@@ -187,13 +261,25 @@ impl Gateway {
             .collect()
     }
 
-    /// Whether the most recent bounded capability probe for a configured service succeeded.
-    pub async fn service_available(&self, service: &str) -> bool {
+    /// Whether the receiver for `provider` can take an archive.
+    ///
+    /// True only when the last probe was fresh AND the document it returned says this listener
+    /// serves the archive receipt for this route (`platform_receipt::is_receipt_capability_document`).
+    /// A fresh probe alone proves that something answered on the port; the document proves it is the
+    /// receiver. Anything else on that port, an empty document, or the other provider's document
+    /// leaves archive acceptance closed rather than accepting uploads Edge cannot deliver.
+    pub async fn archive_receiver_available(&self, provider: &str) -> bool {
         self.capabilities
             .read()
             .await
-            .get(service)
-            .is_some_and(|snapshot| !snapshot.stale)
+            .get(provider)
+            .is_some_and(|snapshot| {
+                !snapshot.stale
+                    && platform_receipt::is_receipt_capability_document(
+                        &snapshot.document,
+                        provider,
+                    )
+            })
     }
 
     /// Whether the last background Knowledge observation succeeded.
@@ -277,9 +363,11 @@ impl Gateway {
 
     /// Stream a prepared archive to the receiving service's fixed receipt endpoint.
     ///
-    /// The caller cannot choose its destination or its operation identity. Edge looks up both from
-    /// durable preparation metadata and injects them only after removing client-supplied reserved
-    /// headers.
+    /// The binding is `POST` with `Content-Type: application/zip` and a `Content-Length` equal to
+    /// the declared size, plus the claims Edge mints (CONTRACTS.md S06 D1). The caller cannot choose
+    /// its destination, its method or its operation identity: Edge looks the destination and the
+    /// identity up from durable preparation metadata and injects them on a header map that starts
+    /// empty, so nothing a client sent can ride along.
     pub(crate) async fn forward_archive_receipt(&self, receipt: ArchiveReceipt<'_>) -> Response {
         let ArchiveReceipt {
             provider,
@@ -288,7 +376,7 @@ impl Gateway {
             operation_id,
             sha256,
             byte_size,
-            request,
+            body,
         } = receipt;
         let Some(route) = self.routes.get(provider) else {
             return platform_http::reject(FailureKind::UpstreamUnavailable);
@@ -301,16 +389,21 @@ impl Gateway {
                 Ok(uri) => uri,
                 Err(_) => return platform_http::reject(FailureKind::UpstreamUnavailable),
             };
-        let (parts, body) = request.into_parts();
         let Ok(mut upstream) = hyper::Request::builder()
-            .method(parts.method)
+            .method(http::Method::POST)
             .uri(uri)
             .body(body)
         else {
             return platform_http::reject(FailureKind::UpstreamUnavailable);
         };
-        let headers = forwarded_headers(&parts.headers, principal, correlation_id);
-        *upstream.headers_mut() = archive_headers(headers, operation_id, sha256, byte_size);
+        let headers = forwarded_headers(&HeaderMap::new(), principal, correlation_id);
+        let mut headers = archive_headers(headers, operation_id, sha256, byte_size);
+        headers.insert(
+            http::header::CONTENT_TYPE,
+            HeaderValue::from_static(platform_receipt::ARCHIVE_MEDIA_TYPE),
+        );
+        headers.insert(http::header::CONTENT_LENGTH, HeaderValue::from(byte_size));
+        *upstream.headers_mut() = headers;
         match tokio::time::timeout(
             Duration::from_secs(budget.response_timeout_seconds),
             self.client.request(upstream),
@@ -448,12 +541,20 @@ fn forwarded_headers(headers: &HeaderMap, principal: Principal, correlation_id: 
         forwarded.append(name.clone(), value.clone());
     }
     let user_id = principal.user_id.to_string();
-    insert(&mut forwarded, "x-ratatoskr-user-id", &user_id);
+    insert(&mut forwarded, platform_receipt::HEADER_USER_ID, &user_id);
     if let Some(device_id) = principal.device_id {
         let device_id = device_id.to_string();
-        insert(&mut forwarded, "x-ratatoskr-device-id", &device_id);
+        insert(
+            &mut forwarded,
+            platform_receipt::HEADER_DEVICE_ID,
+            &device_id,
+        );
     }
-    insert(&mut forwarded, "x-correlation-id", correlation_id);
+    insert(
+        &mut forwarded,
+        platform_receipt::HEADER_CORRELATION_ID,
+        correlation_id,
+    );
     forwarded
 }
 
@@ -461,17 +562,21 @@ fn archive_headers(
     mut headers: HeaderMap,
     operation_id: uuid::Uuid,
     sha256: &str,
-    byte_size: i64,
+    byte_size: u64,
 ) -> HeaderMap {
     insert(
         &mut headers,
-        "x-ratatoskr-operation-id",
+        platform_receipt::HEADER_OPERATION_ID,
         &operation_id.to_string(),
     );
-    insert(&mut headers, "x-ratatoskr-archive-sha256", sha256);
     insert(
         &mut headers,
-        "x-ratatoskr-archive-byte-size",
+        platform_receipt::HEADER_ARCHIVE_SHA256,
+        sha256,
+    );
+    insert(
+        &mut headers,
+        platform_receipt::HEADER_ARCHIVE_BYTE_SIZE,
         &byte_size.to_string(),
     );
     headers

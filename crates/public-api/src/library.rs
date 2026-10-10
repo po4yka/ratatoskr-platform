@@ -1,7 +1,6 @@
 //! Session-authenticated library search and read-state resources.
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use axum::Json;
 use axum::body::Body;
@@ -9,7 +8,7 @@ use axum::extract::rejection::{JsonRejection, QueryRejection};
 use axum::extract::{Path, Query, State};
 use axum::response::{IntoResponse as _, Response};
 use http::header::{CACHE_CONTROL, CONTENT_TYPE};
-use http::{HeaderValue, Method, StatusCode};
+use http::{HeaderValue, Method};
 use platform_api_doc::{
     In, Method as DocMethod, Parameter, Payload, ResponseDoc, RouteDoc, Security,
 };
@@ -297,54 +296,15 @@ impl<'a> KnowledgeClient<'a> {
         request: hyper::Request<Body>,
         scoped_not_found: bool,
     ) -> Result<T, FailureKind> {
-        let budget = self.state.gateway.control_budget();
-        let max_body = usize::try_from(budget.max_body_bytes)
-            .unwrap_or(usize::MAX)
-            .min(KNOWLEDGE_RESPONSE_BYTES);
-        tokio::time::timeout(
-            Duration::from_secs(budget.response_timeout_seconds),
-            async {
-                let response = self.state.gateway.request_control(request).await?;
-                if scoped_not_found && response.status() == StatusCode::NOT_FOUND {
-                    return Err(FailureKind::NotFound);
-                }
-                if !response.status().is_success() {
-                    tracing::warn!(
-                        dependency = "knowledge",
-                        class = "invalid_status",
-                        "typed dependency returned an unusable status"
-                    );
-                    return Err(FailureKind::UpstreamInvalidResponse);
-                }
-                let body = axum::body::to_bytes(Body::new(response.into_body()), max_body)
-                    .await
-                    .map_err(|_| {
-                        tracing::warn!(
-                            dependency = "knowledge",
-                            class = "oversized_body",
-                            "typed dependency response exceeded its bound"
-                        );
-                        FailureKind::UpstreamInvalidResponse
-                    })?;
-                serde_json::from_slice(&body).map_err(|_| {
-                    tracing::warn!(
-                        dependency = "knowledge",
-                        class = "invalid_json",
-                        "typed dependency returned an invalid success body"
-                    );
-                    FailureKind::UpstreamInvalidResponse
-                })
-            },
-        )
-        .await
-        .map_err(|_| {
-            tracing::warn!(
-                dependency = "knowledge",
-                class = "total_timeout",
-                "typed dependency total deadline elapsed"
-            );
-            FailureKind::UpstreamTimeout
-        })?
+        self.state
+            .gateway
+            .fetch_json(
+                "knowledge",
+                request,
+                scoped_not_found,
+                KNOWLEDGE_RESPONSE_BYTES,
+            )
+            .await
     }
 }
 

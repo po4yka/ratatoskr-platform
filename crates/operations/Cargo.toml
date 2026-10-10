@@ -36,6 +36,7 @@ tracing.workspace   = true
 ratatoskr-platform-persistence = { workspace = true, features = ["test-support"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "sync"] }
 async-nats.workspace = true
+ratatoskr-ai-archive-contracts.workspace = true
 
 [lints]
 workspace = true

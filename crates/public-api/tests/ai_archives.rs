@@ -8,125 +8,19 @@
     reason = "assertions in a test binary"
 )]
 
-use std::collections::BTreeMap;
-use std::sync::Arc;
-
-use axum::Router;
 use axum::body::Body;
-use axum::routing::put;
-use futures_util::StreamExt as _;
 use http::{Request, StatusCode};
-use http_body_util::BodyExt as _;
-use platform_core::RuntimeRole;
-use platform_core::config::{GatewayConfig, GatewayRouteClass, GatewayRouteConfig, PublicConfig};
-use platform_http::{HttpState, RuntimeState};
-use platform_identity::SecretDigest;
 use platform_persistence::test_support::TestDatabase;
-use platform_public_api::ApiState;
-use tokio::net::TcpListener;
 use tokio::sync::mpsc;
-use tower::ServiceExt as _;
 use uuid::Uuid;
 
-const AUDIENCE: &str = "edge";
-const DEVICE_SECRET: &str = "archive-device-secret";
+mod support;
 
-/// The handlers read the wall clock themselves — the API state carries no clock — so a session
-/// or grant seeded here has to be minted on that same clock to be live when the handler checks it.
-fn now() -> jiff::Timestamp {
-    jiff::Timestamp::now() // wall-clock: the handlers under test read the clock themselves
-}
-
-fn state(harness: &TestDatabase, listener: std::net::SocketAddr) -> ApiState {
-    let health = Arc::new(RuntimeState::new(RuntimeRole::Edge));
-    health.set_database_reachable(true);
-    health.set_archive_staging_ready(true);
-    health.set_archive_receipt_ready("chatgpt", true);
-    health.set_archive_report_ready("chatgpt", true);
-    let mut state = ApiState::new(harness.database.clone(), AUDIENCE, health, true);
-    state.gateway = platform_public_api::gateway::Gateway::from_config(&GatewayConfig {
-        routes: BTreeMap::from([(
-            "chatgpt".to_owned(),
-            GatewayRouteConfig {
-                prefix: "/v1/chatgpt".to_owned(),
-                listener,
-                class: Some(GatewayRouteClass::Transfer),
-                capabilities_path: "/v1/capabilities".to_owned(),
-                archive_receipt_path: "/v1/ai-archives/receipt".to_owned(),
-            },
-        )]),
-        ..GatewayConfig::default()
-    });
-    state
-}
-
-async fn receipt_stub(
-    sender: mpsc::Sender<(http::HeaderMap, Vec<u8>)>,
-) -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
-    let listener = TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("a loopback listener");
-    let address = listener.local_addr().expect("a listener address");
-    let router = Router::new().route(
-        "/v1/ai-archives/receipt",
-        put(move |headers: http::HeaderMap, body: Body| {
-            let sender = sender.clone();
-            async move {
-                let body = body
-                    .into_data_stream()
-                    .fold(Vec::new(), |mut bytes, item| async move {
-                        bytes.extend_from_slice(&item.expect("a streamed chunk"));
-                        bytes
-                    })
-                    .await;
-                sender
-                    .send((headers, body))
-                    .await
-                    .expect("a receipt observation");
-                StatusCode::ACCEPTED
-            }
-        }),
-    );
-    let task = tokio::spawn(async move {
-        axum::serve(listener, router)
-            .await
-            .expect("the receipt stub serves");
-    });
-    (address, task)
-}
-
-fn app(state: ApiState) -> Router {
-    let config = PublicConfig {
-        bind: "127.0.0.1:0".parse().expect("a socket address"),
-        request_timeout_seconds: 15,
-        max_body_bytes: 4 * 1_048_576,
-        max_concurrent_requests: 64,
-        actor_requests_per_minute: 120,
-    };
-    platform_http::observe::public_router(
-        Arc::new(HttpState::new(RuntimeRole::Edge)),
-        &config,
-        platform_public_api::routes(Arc::new(state)),
-    )
-}
-
-async fn seed_device(pool: &sqlx::PgPool) -> Uuid {
-    let user = platform_identity::user::create_user(pool, now())
-        .await
-        .expect("a user")
-        .user_id;
-    platform_identity::device::register_device(
-        pool,
-        user,
-        platform_identity::DeviceKind::ExportAgent,
-        None,
-        SecretDigest::of(DEVICE_SECRET),
-        now(),
-    )
-    .await
-    .expect("a device")
-    .device_id
-}
+use support::{
+    DEVICE_SECRET, app, app_with_limit, device_credential, finalize_request, now, open_session,
+    prepare_and_open, put_chunk, receipt_stub, seed_device, send, sha256_hex, state,
+    state_with_budget,
+};
 
 async fn seed_device_for_user(pool: &sqlx::PgPool, user_id: Uuid) -> Uuid {
     platform_identity::device::register_device(
@@ -134,53 +28,12 @@ async fn seed_device_for_user(pool: &sqlx::PgPool, user_id: Uuid) -> Uuid {
         user_id,
         platform_identity::DeviceKind::ExportAgent,
         None,
-        SecretDigest::of(DEVICE_SECRET),
+        platform_identity::SecretDigest::of(DEVICE_SECRET),
         now(),
     )
     .await
     .expect("a device")
     .device_id
-}
-
-async fn send(app: &Router, request: Request<Body>) -> (StatusCode, serde_json::Value) {
-    let response = app.clone().oneshot(request).await.expect("a response");
-    let status = response.status();
-    let bytes = response
-        .into_body()
-        .collect()
-        .await
-        .expect("a body")
-        .to_bytes();
-    let json = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
-    (status, json)
-}
-
-async fn device_credential(app: &Router, device_id: Uuid) -> String {
-    let request = Request::builder()
-        .method("POST")
-        .uri("/v1/sessions/device")
-        .header("content-type", "application/json")
-        .body(Body::from(format!(
-            r#"{{"device_id":"{device_id}","device_secret":"{DEVICE_SECRET}"}}"#
-        )))
-        .expect("a request");
-    let (status, body) = send(app, request).await;
-    assert_eq!(status, StatusCode::CREATED);
-    body["credential"]
-        .as_str()
-        .expect("a device credential")
-        .to_owned()
-}
-
-fn sha256_hex(bytes: &[u8]) -> String {
-    ring::digest::digest(&ring::digest::SHA256, bytes)
-        .as_ref()
-        .iter()
-        .fold(String::with_capacity(64), |mut output, byte| {
-            use core::fmt::Write as _;
-            write!(output, "{byte:02x}").expect("writing to a String cannot fail");
-            output
-        })
 }
 
 fn assert_stored_completion(completed: &serde_json::Value, digest: &str) {
@@ -191,7 +44,7 @@ fn assert_stored_completion(completed: &serde_json::Value, digest: &str) {
 }
 
 async fn send_stored_completion(
-    api: &Router,
+    api: &axum::Router,
     request: Request<Body>,
     digest: &str,
 ) -> serde_json::Value {
@@ -201,63 +54,18 @@ async fn send_stored_completion(
     completed
 }
 
-async fn prepare_and_open(
-    api: &Router,
-    credential: &str,
-    key: &str,
-    digest: &str,
-    byte_size: usize,
-) -> (String, String, String) {
-    let prepare = Request::builder()
-        .method("POST")
-        .uri("/v1/ai-archives/chatgpt")
-        .header("authorization", format!("Bearer {credential}"))
-        .header("idempotency-key", key)
-        .header("content-type", "application/json")
-        .body(Body::from(format!(
-            r#"{{"sha256":"{digest}","byte_size":{byte_size}}}"#
-        )))
-        .expect("a prepare request");
-    let (status, prepared) = send(api, prepare).await;
-    assert_eq!(status, StatusCode::ACCEPTED);
-    let operation_id = prepared["operation_id"]
-        .as_str()
-        .expect("an operation id")
-        .to_owned();
-    let uploads_path = format!("/v1/ai-archives/chatgpt/{operation_id}/uploads");
-    let open = Request::builder()
-        .method("POST")
-        .uri(&uploads_path)
-        .header("authorization", format!("Bearer {credential}"))
-        .header("content-type", "application/json")
-        .body(Body::from(format!(
-            r#"{{"declared_size_bytes":{byte_size},"media_type":"application/zip","digest":{{"algorithm":"sha256","hex":"{digest}"}},"chunk_size_bytes":65536}}"#
-        )))
-        .expect("an open request");
-    let (status, opened) = send(api, open).await;
-    assert_eq!(status, StatusCode::CREATED);
-    let token = opened["resumption_token"]
-        .as_str()
-        .expect("a token")
-        .to_owned();
-    (operation_id, uploads_path, token)
-}
-
 async fn put_transfer_chunk(
-    api: &Router,
+    api: &axum::Router,
     credential: &str,
     uploads_path: &str,
     token: &str,
     index: u32,
     bytes: Vec<u8>,
 ) {
-    let request = Request::builder()
-        .method("PUT")
-        .uri(format!("{uploads_path}/{token}/chunks/{index}"))
-        .header("authorization", format!("Bearer {credential}"))
-        .body(Body::from(bytes))
-        .expect("a chunk request");
-    assert_eq!(send(api, request).await.0, StatusCode::OK);
+    assert_eq!(
+        put_chunk(api, credential, uploads_path, token, index, bytes).await,
+        StatusCode::OK
+    );
 }
 
 #[tokio::test]
@@ -605,6 +413,7 @@ async fn archive_finalization_verifies_before_bound_provider_delivery() {
         "archive-finalize-mismatch",
         "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         archive.len(),
+        65_536,
     )
     .await;
     put_transfer_chunk(
@@ -625,16 +434,11 @@ async fn archive_finalization_verifies_before_bound_provider_delivery() {
         vec![b'z'],
     )
     .await;
-    let mismatch_finalize = Request::builder()
-        .method("POST")
-        .uri(format!("{mismatch_path}/{mismatch_token}/finalize"))
-        .header("authorization", format!("Bearer {credential}"))
-        .header("content-type", "application/json")
-        .body(Body::from(format!(
-            r#"{{"resumption_token":"{mismatch_token}"}}"#
-        )))
-        .expect("a finalize request");
-    let (status, mismatch) = send(&api, mismatch_finalize).await;
+    let (status, mismatch) = send(
+        &api,
+        finalize_request(&mismatch_path, &mismatch_token, &credential),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(mismatch["outcome"], "digest_mismatch");
     assert!(
@@ -649,6 +453,7 @@ async fn archive_finalization_verifies_before_bound_provider_delivery() {
         "archive-finalize-delivery",
         &digest,
         archive.len(),
+        65_536,
     )
     .await;
     put_transfer_chunk(&api, &credential, &uploads_path, &token, 1, vec![b'z']).await;
@@ -670,7 +475,7 @@ async fn archive_finalization_verifies_before_bound_provider_delivery() {
         .body(Body::from(format!(r#"{{"resumption_token":"{token}"}}"#)))
         .expect("a finalize request");
     let completed = send_stored_completion(&api, finalize, &digest).await;
-    let (headers, forwarded) = received.recv().await.expect("one provider delivery");
+    let (_, headers, forwarded) = received.recv().await.expect("one provider delivery");
     assert_eq!(forwarded, archive);
     assert_eq!(headers["x-ratatoskr-operation-id"], operation_id);
     assert_eq!(headers["x-ratatoskr-archive-sha256"], digest);
@@ -691,5 +496,212 @@ async fn archive_finalization_verifies_before_bound_provider_delivery() {
         "a finalized transfer retry must not redeliver bytes"
     );
     task.abort();
+    harness.cleanup().await.expect("cleanup");
+}
+
+const MIB: usize = 1_048_576;
+
+/// D4. The chunk route accepts the contract's chunk sizes, up to its 16 MiB maximum. axum's own
+/// `Bytes` limit is 2 MiB, so without a limit on that one route a client that follows the contract
+/// is answered 413 for a request the contract allows.
+#[tokio::test]
+async fn put_chunk_accepts_chunks_up_to_the_contract_maximum() {
+    let harness = TestDatabase::create().await.expect("a test database");
+    let device_id = seed_device(harness.pool()).await;
+    let api = app_with_limit(
+        state_with_budget(
+            &harness,
+            "127.0.0.1:9".parse().expect("a loopback address"),
+            32 * MIB as u64,
+        ),
+        32 * MIB as u64,
+    );
+    let credential = device_credential(&api, device_id).await;
+
+    for (index, chunk_size) in [3 * MIB, 16 * MIB].into_iter().enumerate() {
+        let archive = vec![b'q'; chunk_size];
+        let (_, uploads_path, token) = prepare_and_open(
+            &api,
+            &credential,
+            &format!("archive-chunk-maximum-{index}"),
+            &sha256_hex(&archive),
+            archive.len(),
+            u32::try_from(chunk_size).expect("a chunk size"),
+        )
+        .await;
+        let status = put_chunk(&api, &credential, &uploads_path, &token, 0, archive).await;
+        assert_eq!(status, StatusCode::OK, "a {chunk_size}-byte chunk");
+    }
+    harness.cleanup().await.expect("cleanup");
+}
+
+/// D6. A session that declares anything but a zip is refused at open, so the receiver is never
+/// handed bytes it would have to reject after the whole upload.
+#[tokio::test]
+async fn opening_a_transfer_with_a_non_zip_media_type_is_refused() {
+    let harness = TestDatabase::create().await.expect("a test database");
+    let device_id = seed_device(harness.pool()).await;
+    let api = app(state(
+        &harness,
+        "127.0.0.1:9".parse().expect("a loopback address"),
+    ));
+    let credential = device_credential(&api, device_id).await;
+    let digest = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let prepare = Request::builder()
+        .method("POST")
+        .uri("/v1/ai-archives/chatgpt")
+        .header("authorization", format!("Bearer {credential}"))
+        .header("idempotency-key", "archive-open-media-type")
+        .header("content-type", "application/json")
+        .body(Body::from(format!(
+            r#"{{"sha256":"{digest}","byte_size":65536}}"#
+        )))
+        .expect("a prepare request");
+    let (status, prepared) = send(&api, prepare).await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let uploads_path = format!(
+        "/v1/ai-archives/chatgpt/{}/uploads",
+        prepared["operation_id"].as_str().expect("an operation id")
+    );
+
+    let (status, refused) = open_session(
+        &api,
+        &credential,
+        &uploads_path,
+        digest,
+        65_536,
+        65_536,
+        "application/x-tar",
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert_eq!(refused["code"], "platform.request.invalid");
+    let sessions: i64 = sqlx::query_scalar("select count(*) from operations.ai_archive_transfers")
+        .fetch_one(harness.pool())
+        .await
+        .expect("the transfer count");
+    assert_eq!(sessions, 0, "a refused open leaves no session behind");
+
+    let (status, opened) = open_session(
+        &api,
+        &credential,
+        &uploads_path,
+        digest,
+        65_536,
+        65_536,
+        "application/zip",
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{opened}");
+    harness.cleanup().await.expect("cleanup");
+}
+
+async fn prepare_status(
+    api: &axum::Router,
+    credential: &str,
+    key: &str,
+    body: String,
+) -> (StatusCode, serde_json::Value) {
+    let request = Request::builder()
+        .method("POST")
+        .uri("/v1/ai-archives/chatgpt")
+        .header("authorization", format!("Bearer {credential}"))
+        .header("idempotency-key", key)
+        .header("content-type", "application/json")
+        .body(Body::from(body))
+        .expect("a prepare request");
+    send(api, request).await
+}
+
+/// D5. An archive above the configured ceiling is a 413 with the payload-too-large envelope, and the
+/// other invalid declarations stay 400.
+#[tokio::test]
+async fn prepare_above_the_archive_ceiling_is_413_payload_too_large() {
+    let harness = TestDatabase::create().await.expect("a test database");
+    let device_id = seed_device(harness.pool()).await;
+    let mut api_state = state_with_budget(
+        &harness,
+        "127.0.0.1:9".parse().expect("a loopback address"),
+        4 * MIB as u64,
+    );
+    api_state.archive_max_bytes = 8 * MIB as u64;
+    let api = app(api_state);
+    let credential = device_credential(&api, device_id).await;
+    let digest = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+    let over = 8 * MIB + 1;
+    let (status, body) = prepare_status(
+        &api,
+        &credential,
+        "archive-over-ceiling",
+        format!(r#"{{"sha256":"{digest}","byte_size":{over}}}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE, "{body}");
+    assert_eq!(body["code"], "platform.request.payload_too_large");
+    assert_eq!(body["retryable"], false);
+
+    for (key, declared) in [
+        (
+            "archive-zero",
+            format!(r#"{{"sha256":"{digest}","byte_size":0}}"#),
+        ),
+        (
+            "archive-negative",
+            format!(r#"{{"sha256":"{digest}","byte_size":-1}}"#),
+        ),
+        (
+            "archive-bad-digest",
+            r#"{"sha256":"NOT-A-DIGEST","byte_size":1024}"#.to_owned(),
+        ),
+    ] {
+        let (status, body) = prepare_status(&api, &credential, key, declared).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{key}: {body}");
+        assert_eq!(body["code"], "platform.request.invalid");
+    }
+    let accepted: i64 =
+        sqlx::query_scalar("select count(*) from operations.ai_archive_acceptances")
+            .fetch_one(harness.pool())
+            .await
+            .expect("the acceptance count");
+    assert_eq!(accepted, 0, "no refused preparation creates an operation");
+
+    let (status, body) = prepare_status(
+        &api,
+        &credential,
+        "archive-at-ceiling",
+        format!(r#"{{"sha256":"{digest}","byte_size":{}}}"#, 8 * MIB),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    harness.cleanup().await.expect("cleanup");
+}
+
+/// D5. The ceiling is the archive's, not the request body's: an archive arrives as many chunk
+/// requests, so a transfer budget of 4 MiB does not stop a 6 MiB archive.
+#[tokio::test]
+async fn prepare_accepts_an_archive_larger_than_the_transfer_body_budget() {
+    let harness = TestDatabase::create().await.expect("a test database");
+    let device_id = seed_device(harness.pool()).await;
+    let mut api_state = state_with_budget(
+        &harness,
+        "127.0.0.1:9".parse().expect("a loopback address"),
+        4 * MIB as u64,
+    );
+    api_state.archive_max_bytes = 8 * MIB as u64;
+    let api = app(api_state);
+    let credential = device_credential(&api, device_id).await;
+
+    let (status, body) = prepare_status(
+        &api,
+        &credential,
+        "archive-above-budget",
+        format!(
+            r#"{{"sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","byte_size":{}}}"#,
+            6 * MIB
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
     harness.cleanup().await.expect("cleanup");
 }

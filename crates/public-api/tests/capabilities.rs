@@ -609,3 +609,63 @@ async fn library_capabilities_require_both_declared_knowledge_surfaces() {
     task.abort();
     harness.cleanup().await.expect("cleanup");
 }
+
+fn archive_gateway(listener: std::net::SocketAddr) -> GatewayConfig {
+    GatewayConfig {
+        routes: BTreeMap::from([(
+            "chatgpt".to_owned(),
+            GatewayRouteConfig {
+                prefix: "/v1/chatgpt".to_owned(),
+                listener,
+                class: Some(GatewayRouteClass::Transfer),
+                capabilities_path: "/v1/capabilities".to_owned(),
+                archive_receipt_path: "/v1/ai-archives/receipt".to_owned(),
+            },
+        )]),
+        ..GatewayConfig::default()
+    }
+}
+
+/// D2. A fresh probe is not enough: the receiver is ready only when its capability document says it
+/// serves the archive receipt for THIS route. A different service on the port, an empty document,
+/// the other provider's document and a missing document are all "not available", and each is a
+/// distinct way the old check (the probe merely succeeded) answered true or could.
+#[tokio::test]
+async fn archive_receiver_is_available_only_for_its_own_receipt_document() {
+    use ratatoskr_ai_archive_contracts::platform_receipt::receipt_capability_document;
+
+    async fn available_after_probe(router: Router) -> bool {
+        let (address, task) = stub(router).await;
+        let gateway = platform_public_api::gateway::Gateway::from_config(&archive_gateway(address));
+        gateway.refresh_capabilities().await;
+        let answer = gateway.archive_receiver_available("chatgpt").await;
+        task.abort();
+        answer
+    }
+    let serving = |document: serde_json::Value| {
+        Router::new().route(
+            "/v1/capabilities",
+            get(move || {
+                let document = document.clone();
+                async move { axum::Json(document) }
+            }),
+        )
+    };
+
+    assert!(
+        available_after_probe(serving(receipt_capability_document("chatgpt"))).await,
+        "the receiver's own receipt document makes it available"
+    );
+    assert!(
+        !available_after_probe(serving(serde_json::json!({}))).await,
+        "an empty document is not a receiver"
+    );
+    assert!(
+        !available_after_probe(serving(receipt_capability_document("claude"))).await,
+        "the claude document under the chatgpt route is the wrong receiver"
+    );
+    assert!(
+        !available_after_probe(Router::new()).await,
+        "a 404 on the capability path is not a receiver"
+    );
+}

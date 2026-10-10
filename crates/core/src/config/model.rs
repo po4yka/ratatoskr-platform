@@ -36,6 +36,11 @@ pub struct PlatformConfig {
     #[serde(default)]
     pub archive_staging: ArchiveStagingConfig,
 
+    /// The loopback channel-digests API behind the digest read routes. Absent means those routes
+    /// answer `UpstreamUnavailable` while the command routes keep working (rule V22).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel_digests: Option<ChannelDigestsConfig>,
+
     /// The `PostgreSQL` connection. Optional until the first route that reads persisted data, which
     /// is milestone 5; a binary configured without it starts, serves its probes, and reports no
     /// database check. That is deliberately not "degraded": at milestone 2 and 3 no request path
@@ -78,18 +83,51 @@ pub struct PlatformConfig {
     pub telemetry: TelemetryConfig,
 }
 
+/// Where Edge reaches the `ratatoskr-channel-digests` API, and the bearer it presents.
+///
+/// Both members or neither (rule V22): a listener with no secret would send unauthenticated
+/// requests the service refuses, and a secret with no listener has nowhere to go.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ChannelDigestsConfig {
+    /// `RATATOSKR__CHANNEL_DIGESTS__LISTENER`. A loopback address on port 8098.
+    pub listener: SocketAddr,
+
+    /// `RATATOSKR__CHANNEL_DIGESTS__SERVICE_SECRET`. Equals the service's
+    /// `RATATOSKR__AUTH__SERVICE_SECRET`. Not Debug-printable and never serialized, so neither a
+    /// log line nor `check-config` can carry it.
+    #[serde(default, skip_serializing)]
+    pub service_secret: SecretString,
+}
+
 /// The private filesystem root used only for incomplete AI archive transfers.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ArchiveStagingConfig {
     /// Absolute directory that survives Edge restart.
     pub root: PathBuf,
+    /// The largest archive Edge accepts for preparation, in bytes (rule V21).
+    ///
+    /// Its own limit, not the transfer budget's: the budget bounds one request body, and an archive
+    /// arrives as many chunk requests, so the two have nothing to do with each other. Staging needs
+    /// about twice this much free space per in-flight archive, because Edge keeps the chunks and
+    /// the assembled copy until the receiver has the bytes.
+    #[serde(default = "default_max_archive_bytes")]
+    pub max_archive_bytes: u64,
+}
+
+/// The default archive ceiling: 2 GiB, equal to the Export Agent's own default.
+pub const DEFAULT_MAX_ARCHIVE_BYTES: u64 = 2_147_483_648;
+
+const fn default_max_archive_bytes() -> u64 {
+    DEFAULT_MAX_ARCHIVE_BYTES
 }
 
 impl Default for ArchiveStagingConfig {
     fn default() -> Self {
         Self {
             root: PathBuf::from("/tmp/ratatoskr-platform-ai-archive-staging"),
+            max_archive_bytes: DEFAULT_MAX_ARCHIVE_BYTES,
         }
     }
 }

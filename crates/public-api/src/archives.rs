@@ -4,23 +4,23 @@
 //! once they cross its loopback receipt boundary, as well as parsing and completeness.
 
 mod docs;
+mod finalize;
 
 use std::sync::Arc;
 
 use axum::Json;
 use axum::body::Bytes;
-use axum::extract::{Path, Request, State};
+use axum::extract::{Path, State};
 use axum::response::{IntoResponse as _, Response};
 use http::HeaderMap;
 use platform_core::FailureKind;
 use platform_idempotency::{Digest, Outcome};
 use platform_identity::{DeviceKind, SessionKind};
+use ratatoskr_ai_archive_contracts::platform_receipt::ARCHIVE_MEDIA_TYPE;
 use ratatoskr_blob_transfer_contracts::{
-    DigestHex, UploadChunkReceipt, UploadCompletionOutcome, UploadFinalizeRequest, UploadPlan,
-    UploadResumptionToken, UploadSessionOpened, UploadSessionRequest, UploadSessionState,
-    UploadStatusResponse,
+    UploadChunkReceipt, UploadPlan, UploadResumptionToken, UploadSessionOpened,
+    UploadSessionRequest, UploadSessionState, UploadStatusResponse,
 };
-use sha2::{Digest as _, Sha256};
 use sqlx::Row as _;
 use tokio::io::AsyncWriteExt as _;
 use uuid::Uuid;
@@ -30,6 +30,7 @@ use platform_identity::audit::{self, AuditEvent, AuditOutcome};
 use crate::{ApiState, Principal};
 
 pub use docs::{CHUNK_DOC, FINALIZE_DOC, OPEN_DOC, PREPARE_DOC, STATUS_DOC};
+pub use finalize::finalize_transfer;
 
 const PREPARE_ROUTE: &str = "/v1/ai-archives/{provider}";
 const OPEN_ROUTE: &str = "/v1/ai-archives/{provider}/{operation_id}/uploads";
@@ -56,7 +57,8 @@ pub struct ArchivePrepared {
     pub operation_id: Uuid,
     /// Edge has durably accepted metadata only; it has not received the archive bytes yet.
     pub status: &'static str,
-    /// Relative operation-bound endpoint to which the archive bytes may be streamed with `PUT`.
+    /// Relative operation-bound path at which the upload session is opened with `POST`; the chunks
+    /// are then sent with `PUT` to the paths that session returns.
     pub upload_path: String,
 }
 
@@ -85,11 +87,7 @@ pub async fn prepare(
     {
         return platform_http::reject(FailureKind::NotFound);
     }
-    let (key, archive) = match parse(
-        &headers,
-        &body,
-        state.gateway.transfer_budget().max_body_bytes,
-    ) {
+    let (key, archive) = match parse(&headers, &body, state.archive_max_bytes) {
         Ok(value) => value,
         Err(kind) => return platform_http::reject(kind),
     };
@@ -219,14 +217,14 @@ async fn accept(
 }
 
 #[derive(Debug)]
-struct TransferBinding {
-    token: UploadResumptionToken,
-    declared_size_bytes: u64,
-    chunk_size_bytes: u32,
-    expected_chunks: u32,
-    digest_sha256: String,
-    media_type: String,
-    finalized: bool,
+pub(super) struct TransferBinding {
+    pub(super) token: UploadResumptionToken,
+    pub(super) declared_size_bytes: u64,
+    pub(super) chunk_size_bytes: u32,
+    pub(super) expected_chunks: u32,
+    pub(super) digest_sha256: String,
+    pub(super) media_type: String,
+    pub(super) finalized: bool,
 }
 
 /// `POST /v1/ai-archives/{provider}/{operation_id}/uploads`.
@@ -247,6 +245,11 @@ pub async fn open_transfer(
         Ok(request) => request,
         Err(_) => return platform_http::reject(FailureKind::InvalidRequest),
     };
+    // The receiver accepts only a zip and answers anything else after the whole upload; refusing a
+    // session that declares another type up front is the same decision, made before the bytes move.
+    if request.media_type.as_str() != ARCHIVE_MEDIA_TYPE {
+        return platform_http::reject(FailureKind::InvalidRequest);
+    }
     let acceptance =
         match platform_operations::find_ai_archive_acceptance(state.database.pool(), operation_id)
             .await
@@ -527,175 +530,7 @@ pub async fn transfer_status(
     .into_response()
 }
 
-/// `POST /v1/ai-archives/{provider}/{operation_id}/uploads/{token}/finalize`.
-#[expect(
-    clippy::too_many_lines,
-    reason = "ordered verification and fixed-route delivery form one security boundary"
-)]
-pub async fn finalize_transfer(
-    State(state): State<Arc<ApiState>>,
-    Path((provider, operation_id, token_value)): Path<(String, Uuid, String)>,
-    principal: Principal,
-    context: Option<axum::Extension<platform_http::RequestContext>>,
-    body: Bytes,
-) -> Response {
-    let finalize = match serde_json::from_slice::<UploadFinalizeRequest>(&body) {
-        Ok(request) if request.resumption_token.as_str() == token_value => request,
-        _ => return platform_http::reject(FailureKind::InvalidRequest),
-    };
-    let Some(binding) =
-        transfer_binding(&state, principal, &provider, operation_id, &token_value).await
-    else {
-        return platform_http::reject(FailureKind::NotFound);
-    };
-    if binding.finalized {
-        return stored_completion(&binding, &provider);
-    }
-    let rows = match sqlx::query(
-        "select chunk_index, sha256, byte_size
-           from operations.ai_archive_transfer_chunks
-          where resumption_token = $1 order by chunk_index",
-    )
-    .bind(binding.token.as_str())
-    .fetch_all(state.database.pool())
-    .await
-    {
-        Ok(rows)
-            if rows.len() == usize::try_from(binding.expected_chunks).unwrap_or(usize::MAX) =>
-        {
-            rows
-        }
-        Ok(_) => return platform_http::reject(FailureKind::InvalidRequest),
-        Err(_) => return platform_http::reject(FailureKind::RequestTimeout),
-    };
-    let directory = state.archive_staging_root.join(binding.token.as_str());
-    let assembling = directory.join("archive.assembling");
-    let assembled = directory.join("archive.verified");
-    let Ok(mut output) = tokio::fs::File::create(&assembling).await else {
-        return platform_http::reject(FailureKind::RequestTimeout);
-    };
-    let mut hasher = Sha256::new();
-    let mut assembled_size = 0_u64;
-    for (expected_index, row) in rows.iter().enumerate() {
-        let index = match row.try_get::<i32, _>("chunk_index") {
-            Ok(index) if usize::try_from(index).ok() == Some(expected_index) => index,
-            _ => return platform_http::reject(FailureKind::RequestTimeout),
-        };
-        let Ok(chunk) = tokio::fs::read(directory.join(format!("{index}.chunk"))).await else {
-            return platform_http::reject(FailureKind::RequestTimeout);
-        };
-        let recorded_digest = row.try_get::<String, _>("sha256").ok();
-        let recorded_size = row.try_get::<i32, _>("byte_size").ok();
-        if recorded_digest.as_deref()
-            != Some(ratatoskr_blob_transfer_contracts::chunk_digest_hex(&chunk).as_str())
-            || recorded_size != i32::try_from(chunk.len()).ok()
-        {
-            return platform_http::reject(FailureKind::RequestTimeout);
-        }
-        hasher.update(&chunk);
-        assembled_size =
-            assembled_size.saturating_add(u64::try_from(chunk.len()).unwrap_or(u64::MAX));
-        if output.write_all(&chunk).await.is_err() {
-            return platform_http::reject(FailureKind::RequestTimeout);
-        }
-    }
-    if output.sync_all().await.is_err() {
-        return platform_http::reject(FailureKind::RequestTimeout);
-    }
-    drop(output);
-    let computed = hex_encode(&hasher.finalize());
-    if computed != binding.digest_sha256 || assembled_size != binding.declared_size_bytes {
-        let _ = tokio::fs::remove_file(&assembling).await;
-        let _ = sqlx::query(
-            "update operations.ai_archive_transfers set session_state = 'failed'
-              where resumption_token = $1 and session_state = 'open'",
-        )
-        .bind(binding.token.as_str())
-        .execute(state.database.pool())
-        .await;
-        let Ok(declared) = DigestHex::parse(&binding.digest_sha256) else {
-            return platform_http::reject(FailureKind::RequestTimeout);
-        };
-        let Ok(computed) = DigestHex::parse(&computed) else {
-            return platform_http::reject(FailureKind::RequestTimeout);
-        };
-        return Json(UploadCompletionOutcome::DigestMismatch {
-            declared_sha256_hex: declared,
-            computed_sha256_hex: computed,
-            extensions: ratatoskr_identifiers::Extensions::new(),
-        })
-        .into_response();
-    }
-    if tokio::fs::rename(&assembling, &assembled).await.is_err() {
-        return platform_http::reject(FailureKind::RequestTimeout);
-    }
-    let Ok(verified) = tokio::fs::read(&assembled).await else {
-        return platform_http::reject(FailureKind::RequestTimeout);
-    };
-    let Ok(request) = Request::builder()
-        .method("PUT")
-        .body(axum::body::Body::from(verified))
-    else {
-        return platform_http::reject(FailureKind::RequestTimeout);
-    };
-    let correlation = crate::correlation_of(context);
-    let response = state
-        .gateway
-        .forward_archive_receipt(crate::gateway::ArchiveReceipt {
-            provider: &provider,
-            principal,
-            correlation_id: &correlation,
-            operation_id,
-            sha256: &binding.digest_sha256,
-            byte_size: i64::try_from(binding.declared_size_bytes).unwrap_or(i64::MAX),
-            request,
-        })
-        .await;
-    if response.status().is_success() {
-        let updated = sqlx::query(
-            "update operations.ai_archive_transfers set session_state = 'finalized'
-              where resumption_token = $1 and session_state = 'open'",
-        )
-        .bind(finalize.resumption_token.as_str())
-        .execute(state.database.pool())
-        .await;
-        if updated.is_err() {
-            return platform_http::reject(FailureKind::RequestTimeout);
-        }
-        return stored_completion(&binding, &provider);
-    }
-    response
-}
-
-fn stored_completion(binding: &TransferBinding, provider: &str) -> Response {
-    let owner = match provider {
-        "chatgpt" => "ratatoskr-chatgpt",
-        "claude" => "ratatoskr-claude-archive",
-        _ => return platform_http::reject(FailureKind::NotFound),
-    };
-    let (Ok(owner_service), Ok(hex), Ok(media_type)) = (
-        ratatoskr_identifiers::BlobOwner::parse(owner),
-        DigestHex::parse(&binding.digest_sha256),
-        ratatoskr_identifiers::MediaType::parse(&binding.media_type),
-    ) else {
-        return platform_http::reject(FailureKind::RequestTimeout);
-    };
-    Json(UploadCompletionOutcome::Stored {
-        blob_ref: ratatoskr_identifiers::BlobRef {
-            owner_service,
-            digest: ratatoskr_identifiers::ContentDigest {
-                algorithm: ratatoskr_identifiers::DigestAlgorithm::Sha256,
-                hex,
-            },
-            media_type,
-            length_bytes: binding.declared_size_bytes,
-        },
-        extensions: ratatoskr_identifiers::Extensions::new(),
-    })
-    .into_response()
-}
-
-async fn transfer_binding(
+pub(super) async fn transfer_binding(
     state: &ApiState,
     principal: Principal,
     provider: &str,
@@ -746,7 +581,7 @@ fn from_offset(value: time::OffsetDateTime) -> jiff::Timestamp {
         .unwrap_or(jiff::Timestamp::UNIX_EPOCH)
 }
 
-fn hex_encode(bytes: &[u8]) -> String {
+pub(super) fn hex_encode(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
         use core::fmt::Write as _;
@@ -772,10 +607,15 @@ fn is_supported_provider(provider: &str) -> bool {
     matches!(provider, "chatgpt" | "claude")
 }
 
+/// Read the idempotency key and the declaration, or say which client error this is.
+///
+/// A malformed declaration (no digest, a size of zero or less) is `400`. A well-formed one that
+/// declares more than the archive ceiling is `413`: the request is valid and its subject is too
+/// large, and a client needs to tell the two apart because only the second is permanent.
 fn parse(
     headers: &HeaderMap,
     body: &[u8],
-    maximum_byte_size: u64,
+    archive_ceiling: u64,
 ) -> Result<(String, PrepareArchive), FailureKind> {
     let key = headers
         .get(IDEMPOTENCY_KEY)
@@ -786,8 +626,10 @@ fn parse(
         .to_owned();
     let archive: PrepareArchive =
         serde_json::from_slice(body).map_err(|_| FailureKind::InvalidRequest)?;
-    if archive.byte_size <= 0
-        || u64::try_from(archive.byte_size).map_or(true, |size| size > maximum_byte_size)
+    let Ok(declared) = u64::try_from(archive.byte_size) else {
+        return Err(FailureKind::InvalidRequest);
+    };
+    if declared == 0
         || archive.sha256.len() != 64
         || !archive
             .sha256
@@ -795,6 +637,9 @@ fn parse(
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
     {
         return Err(FailureKind::InvalidRequest);
+    }
+    if declared > archive_ceiling {
+        return Err(FailureKind::PayloadTooLarge);
     }
     Ok((key, archive))
 }

@@ -1,4 +1,4 @@
-//! The startup validation rules V1–V19 and the operator-facing failure report.
+//! The startup validation rules V1–V22 and the operator-facing failure report.
 //!
 //! Order at startup is strictly: extract, validate, initialise telemetry, bind listeners. Telemetry
 //! is initialised *after* validation so that an invalid `log_filter` fails as a configuration
@@ -142,7 +142,70 @@ pub(crate) fn validate(role: RuntimeRole, config: &PlatformConfig) -> Vec<Violat
             rule: "must be an absolute private directory so staging never depends on process cwd",
         });
     }
+    found.extend(archive_ceiling_violations(config));
+    found.extend(channel_digests_violations(role, config));
 
+    found
+}
+
+/// The smallest archive ceiling worth configuring: one mebibyte.
+const ARCHIVE_CEILING_MIN: u64 = 1_048_576;
+
+/// The largest: ten gibibytes. Staging needs about twice the ceiling in free space per in-flight
+/// archive, so a ceiling beyond this is a decision about the disk and not a typo.
+const ARCHIVE_CEILING_MAX: u64 = 10_737_418_240;
+
+/// V21 — the archive ceiling is its own setting, bounded on both sides.
+fn archive_ceiling_violations(config: &PlatformConfig) -> Vec<Violation> {
+    if (ARCHIVE_CEILING_MIN..=ARCHIVE_CEILING_MAX)
+        .contains(&config.archive_staging.max_archive_bytes)
+    {
+        return Vec::new();
+    }
+    vec![Violation {
+        key: "archive_staging.max_archive_bytes",
+        env_var: "RATATOSKR__ARCHIVE_STAGING__MAX_ARCHIVE_BYTES",
+        rule: "must be 1048576..=10737418240 bytes (V21); staging needs about twice this much \
+               free space per in-flight archive",
+    }]
+}
+
+/// The port the channel-digests API listens on (`docs/DEPLOYMENT_TARGET.md`).
+const CHANNEL_DIGESTS_PORT: u16 = 8098;
+
+/// The longest bearer secret accepted.
+const CHANNEL_DIGESTS_SECRET_MAX_BYTES: usize = 4096;
+
+/// V22 — the channel-digests API is a loopback listener on its allocated port plus a bearer secret,
+/// and only Edge talks to it. Both members come together: figment already refuses a secret with no
+/// listener, and an empty secret is how a listener with none arrives here.
+fn channel_digests_violations(role: RuntimeRole, config: &PlatformConfig) -> Vec<Violation> {
+    let Some(digests) = &config.channel_digests else {
+        return Vec::new();
+    };
+    let mut found = Vec::new();
+    if role != RuntimeRole::Edge {
+        found.push(Violation {
+            key: "channel_digests",
+            env_var: "RATATOSKR__CHANNEL_DIGESTS__LISTENER",
+            rule: "may be configured only for ratatoskr-edge; no other role reads digests (V22)",
+        });
+    }
+    if !digests.listener.ip().is_loopback() || digests.listener.port() != CHANNEL_DIGESTS_PORT {
+        found.push(Violation {
+            key: "channel_digests.listener",
+            env_var: "RATATOSKR__CHANNEL_DIGESTS__LISTENER",
+            rule: "must be a loopback address on port 8098, the channel-digests API (V22)",
+        });
+    }
+    let secret_length = digests.service_secret.expose_secret().len();
+    if secret_length == 0 || secret_length > CHANNEL_DIGESTS_SECRET_MAX_BYTES {
+        found.push(Violation {
+            key: "channel_digests.service_secret",
+            env_var: "RATATOSKR__CHANNEL_DIGESTS__SERVICE_SECRET",
+            rule: "must be 1..=4096 bytes and set together with the listener (V22)",
+        });
+    }
     found
 }
 

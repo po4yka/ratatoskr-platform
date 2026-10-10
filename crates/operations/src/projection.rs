@@ -139,6 +139,19 @@ impl ProgressReport {
     fn read(payload: &serde_json::Value) -> Option<Self> {
         let body = payload.get("payload").unwrap_or(payload);
         let report = serde_json::from_value::<OperationReported>(body.clone()).ok()?;
+        // A report that contradicts itself (a failure with no error, a success with one, a partial
+        // success with nothing to tell) would store a status the public snapshot cannot represent,
+        // after which every read of the operation fails. It takes the same path as any report this
+        // build cannot read: rejected, recorded in the inbox, status unchanged. Only the operation
+        // and the class of the fault are logged, never the report.
+        if let Err(error) = report.validate() {
+            tracing::warn!(
+                operation_id = %report.operation_id.0,
+                class = %error,
+                "an operation report contradicts itself and was rejected",
+            );
+            return None;
+        }
 
         Some(Self {
             operation_id: report.operation_id.0,

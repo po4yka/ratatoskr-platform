@@ -29,7 +29,7 @@ use platform_core::config::{self, ConfigError, LogFormat, PlatformConfig};
 /// configuration variable, and milestones 5 to 8 added the database, the bus and the identity keys
 /// without touching it — so the claim had been false for four milestones, and this list is what
 /// makes it checkable again.
-const DOCUMENTED: [(&str, &str); 26] = [
+const DOCUMENTED: [(&str, &str); 30] = [
     ("RATATOSKR__ADMIN__BIND", "127.0.0.1:19464"),
     ("RATATOSKR__PUBLIC__BIND", "127.0.0.1:18080"),
     ("RATATOSKR__PUBLIC__REQUEST_TIMEOUT_SECONDS", "17"),
@@ -63,8 +63,18 @@ const DOCUMENTED: [(&str, &str); 26] = [
     ("RATATOSKR__RETENTION__SCHEDULE_OCCURRENCE_DAYS", "34"),
     ("RATATOSKR__OPERATIONS__STALE_AFTER_SECONDS", "86400"),
     (
+        "RATATOSKR__ARCHIVE_STAGING__ROOT",
+        "/tmp/ratatoskr-probe-archive-staging",
+    ),
+    ("RATATOSKR__ARCHIVE_STAGING__MAX_ARCHIVE_BYTES", "3145728"),
+    ("RATATOSKR__CHANNEL_DIGESTS__LISTENER", "127.0.0.1:8098"),
+    (
+        "RATATOSKR__CHANNEL_DIGESTS__SERVICE_SECRET",
+        "probe-digest-secret",
+    ),
+    (
         "RATATOSKR__SCHEDULING__ALLOWED_REGISTRARS",
-        "[\"ratatoskr-github\"]",
+        "[\"ratatoskr-github\",\"ratatoskr-channel-digests\"]",
     ),
     ("RATATOSKR__SHUTDOWN__DRAIN_SECONDS", "7"),
     ("RATATOSKR__SHUTDOWN__GRACE_SECONDS", "11"),
@@ -293,7 +303,19 @@ fn every_variable_in_env_example_overrides_its_field() {
         assert_eq!(config.retention.outbox_days, 32);
         assert_eq!(config.retention.audit_days, 33);
         assert_eq!(config.retention.schedule_occurrence_days, 34);
-        assert_eq!(config.scheduling.allowed_registrars, ["ratatoskr-github"]);
+        assert_eq!(
+            config.scheduling.allowed_registrars,
+            ["ratatoskr-github", "ratatoskr-channel-digests"]
+        );
+        assert_eq!(config.archive_staging.max_archive_bytes, 3_145_728);
+        assert_eq!(
+            config.archive_staging.root,
+            std::path::Path::new("/tmp/ratatoskr-probe-archive-staging")
+        );
+        assert_eq!(
+            config.channel_digests.map(|digests| digests.listener),
+            Some("127.0.0.1:8098".parse().expect("a listener"))
+        );
         assert_eq!(config.shutdown.drain_seconds, 7);
         assert_eq!(config.shutdown.grace_seconds, 11);
         assert_eq!(config.telemetry.log_format, LogFormat::Pretty);

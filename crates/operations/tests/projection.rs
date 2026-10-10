@@ -625,3 +625,97 @@ async fn an_event_published_to_jetstream_reaches_the_projection() {
         .await;
     harness.cleanup().await.expect("cleanup");
 }
+
+/// D3. `partially_succeeded` says "done, with something to tell you", so a report without a warning
+/// or an error contradicts itself. Applying it stores a status the public snapshot cannot represent,
+/// after which every read of the operation fails. The report is rejected instead, recorded in the
+/// inbox, and the operation stays readable at the status it had.
+#[tokio::test]
+async fn a_partially_succeeded_report_without_a_diagnostic_is_rejected_and_leaves_the_operation_readable()
+ {
+    let harness = TestDatabase::create().await.expect("a test database");
+    let pool = harness.pool();
+    let operation = platform_operations::accept(
+        pool,
+        Uuid::now_v7(),
+        "ai_archive.import",
+        CORRELATION,
+        None,
+        now(),
+    )
+    .await
+    .expect("accepting");
+    assert_eq!(
+        deliver(
+            pool,
+            &ProgressProjection,
+            &event(operation.operation_id, OperationStatus::Running),
+            now()
+        )
+        .await
+        .expect("delivering"),
+        Some(Outcome::Applied)
+    );
+
+    let contradictory = event(operation.operation_id, OperationStatus::PartiallySucceeded);
+    assert_eq!(
+        deliver(pool, &ProgressProjection, &contradictory, now())
+            .await
+            .expect("delivering"),
+        Some(Outcome::Rejected),
+        "a partial success with no warning and no error is not applied"
+    );
+    let stored = platform_operations::find(pool, operation.operation_id)
+        .await
+        .expect("the operation is still readable")
+        .expect("the operation");
+    assert_eq!(
+        stored.status,
+        OperationStatus::Running,
+        "the status did not move"
+    );
+    harness.cleanup().await.expect("cleanup");
+}
+
+/// D3, the other half: the same status with the one warning an incomplete import carries is a valid
+/// report and is applied.
+#[tokio::test]
+async fn a_partially_succeeded_report_with_a_warning_is_applied() {
+    let harness = TestDatabase::create().await.expect("a test database");
+    let pool = harness.pool();
+    let operation = platform_operations::accept(
+        pool,
+        Uuid::now_v7(),
+        "ai_archive.import",
+        CORRELATION,
+        None,
+        now(),
+    )
+    .await
+    .expect("accepting");
+    let mut partial = report(operation.operation_id, OperationStatus::PartiallySucceeded);
+    partial.warnings =
+        vec![ratatoskr_ai_archive_contracts::platform_receipt::incomplete_import_warning()];
+    let mut message = event(operation.operation_id, OperationStatus::PartiallySucceeded);
+    message.payload = serde_json::json!({
+        "event_id": Uuid::now_v7(),
+        "producer": "ratatoskr-extractor",
+        "payload": serde_json::to_value(partial).expect("the published payload serializes"),
+    });
+
+    assert_eq!(
+        deliver(pool, &ProgressProjection, &message, now())
+            .await
+            .expect("delivering"),
+        Some(Outcome::Applied)
+    );
+    assert_eq!(
+        platform_operations::find(pool, operation.operation_id)
+            .await
+            .expect("reading")
+            .expect("the operation")
+            .status,
+        OperationStatus::PartiallySucceeded
+    );
+    harness.cleanup().await.expect("cleanup");
+}
