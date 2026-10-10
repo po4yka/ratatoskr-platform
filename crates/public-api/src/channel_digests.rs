@@ -45,6 +45,11 @@ use crate::{ApiState, Principal};
 
 const SUBSCRIPTION_ROUTE: &str = "/v1/channel-digests/subscriptions/{channel_username}";
 const SUBSCRIPTIONS_ROUTE: &str = "/v1/channel-digests/subscriptions";
+/// The route string the idempotency ledger stores for the subscription `PUT`. The ledger keeps a
+/// versioned path of plain segments (a CHECK refuses braces), so the template cannot be stored;
+/// the channel in the path is part of the request fingerprint instead, which is what makes the same
+/// key on another channel a conflict and not a replay.
+const SUBSCRIPTION_LEDGER_ROUTE: &str = SUBSCRIPTIONS_ROUTE;
 const RUNS_ROUTE: &str = "/v1/channel-digests/runs";
 const RESULTS_ROUTE: &str = "/v1/channel-digests/results";
 const RESULT_ROUTE: &str = "/v1/channel-digests/results/{result_id}";
@@ -140,7 +145,7 @@ pub async fn set_subscription(
     fingerprint.extend_from_slice(&body);
     let correlation = crate::correlation_of(context);
     let intake = Intake {
-        route: SUBSCRIPTION_ROUTE,
+        route: SUBSCRIPTION_LEDGER_ROUTE,
         kind: SUBSCRIPTION_KIND,
         audit_action: SUBSCRIPTION_AUDIT,
         key: &key,
