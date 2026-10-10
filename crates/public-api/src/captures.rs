@@ -12,14 +12,13 @@ use axum::response::{IntoResponse as _, Response};
 use http::HeaderMap;
 use platform_api_doc::{In, Method, Parameter, Payload, ResponseDoc, RouteDoc, Security};
 use platform_core::FailureKind;
-use platform_eventing::{MessageClass, Outbox, Subject};
-use platform_idempotency::{Digest, Outcome};
+use platform_eventing::{CaptureSource, ContentCaptureCommand, MessageClass, Subject};
 use ratatoskr_event_envelope::{
     CommandEnvelope, CommandPayload, EnvelopeSchemaVersion, ProducerName,
 };
 use ratatoskr_identifiers::{
-    CommandId, ContentDigest, DigestAlgorithm, DigestHex, Extensions, OperationId, TenantRef,
-    UserId,
+    BlobRef, CommandId, ContentDigest, DigestAlgorithm, DigestHex, Extensions, OperationId,
+    TenantRef, UserId,
 };
 use ratatoskr_social_contracts::{
     AcquisitionMethod, PostPermalink, SavedAuthority, SocialCaptureProvider, SocialCaptureRequested,
@@ -27,12 +26,23 @@ use ratatoskr_social_contracts::{
 use sha2::{Digest as _, Sha256};
 use uuid::Uuid;
 
-use platform_identity::audit::{self, AuditEvent, AuditOutcome};
+use platform_identity::SessionKind;
 
+use crate::intake::{Intake, Prepared, accept};
 use crate::{ApiState, Principal};
 
 /// The route, as stored in the idempotency ledger.
 const ROUTE: &str = "/v1/captures";
+
+/// The blob route, as stored in the idempotency ledger. A different route string from [`ROUTE`], so
+/// the same key on the two routes can never be taken for one request.
+const BLOB_ROUTE: &str = "/v1/captures/blobs";
+
+/// The only service whose stored bytes a client may name (CONTRACTS.md S11).
+const TELEGRAM_BLOB_OWNER: &str = "ratatoskr-telegram";
+
+/// The largest blob a capture may name: the extractor's own ceiling for a PDF.
+const MAX_BLOB_CAPTURE_BYTES: u64 = 52_428_800;
 
 /// What the submitted work is. Present tense: a kind names an activity, not a completed fact.
 const OPERATION_KIND: &str = "content.capture.submit";
@@ -78,6 +88,17 @@ pub struct CaptureAccepted {
     pub status: &'static str,
 }
 
+/// The members of `SubmitCapture`'s sibling for stored bytes: the blob a client names by reference.
+///
+/// Top-level members this struct does not name (the Telegram bot sends an `origin` that has no
+/// meaning here) are tolerated and ignored, so the bot can add routing hints without a Platform
+/// release. The blob itself is strict: a member the contract does not define is refused.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct SubmitBlobCapture {
+    /// The stored bytes to extract. Owned by the Telegram service, between 1 byte and 50 MiB.
+    pub blob: BlobRef,
+}
+
 /// `POST /v1/captures`.
 ///
 /// Refuses rather than guesses: no `Idempotency-Key` is a client error, because a replayable
@@ -95,154 +116,89 @@ pub async fn submit(
     };
 
     let correlation = crate::correlation_of(context);
-
-    accept(&state, principal, &key, &submit, &body, &correlation).await
+    let intake = Intake {
+        route: ROUTE,
+        kind: OPERATION_KIND,
+        audit_action: OPERATION_KIND,
+        key: &key,
+        fingerprint: &body,
+        correlation: &correlation,
+    };
+    accept(&state, principal, &intake, accepted, |operation, now| {
+        prepare_url(operation, &principal, &intake, now, &submit)
+    })
+    .await
 }
 
-/// Reserve, create, enqueue, complete — in one transaction, so a crash at any point leaves all four
-/// or none.
+/// `POST /v1/captures/blobs`.
 ///
-/// Split from [`submit`] along the boundary that means something: everything before it decides
-/// whether this request is one we accept, and this does the work.
-async fn accept(
-    state: &ApiState,
+/// The Telegram bot stores a PDF in its own blob root and asks for it to be captured by reference.
+/// The store is content-addressed and deduplicated across users, so two things stand between a
+/// caller and someone else's bytes: only a Telegram Mini App session may call this at all, and the
+/// blob must be one the Telegram service owns. The digest is a 256-bit hash nobody can guess, which
+/// is the third.
+pub async fn submit_blob(
+    State(state): State<Arc<ApiState>>,
     principal: Principal,
-    key: &str,
-    submit: &SubmitCapture,
-    body: &[u8],
-    correlation: &str,
+    headers: HeaderMap,
+    context: Option<axum::Extension<platform_http::RequestContext>>,
+    body: axum::body::Bytes,
 ) -> Response {
-    let now = jiff::Timestamp::now();
-    let command_type = submit
-        .social
-        .as_ref()
-        .map_or(COMMAND_TYPE, |social| social.provider.command_subject());
-    let Ok(subject) = Subject::new(MessageClass::Command, command_type) else {
-        tracing::error!(
-            command = command_type,
-            "the command subject is not constructible"
-        );
-        return platform_http::reject(FailureKind::RequestTimeout);
-    };
-
-    let pool = state.database.pool();
-    let Ok(mut transaction) = pool.begin().await else {
-        tracing::error!("a transaction could not be started");
-        return platform_http::reject(FailureKind::RequestTimeout);
-    };
-
-    let reservation = match platform_idempotency::reserve(
-        &mut transaction,
-        principal.user_id,
-        ROUTE,
-        OPERATION_KIND,
-        Digest::of_key(key),
-        Digest::of_body(body),
-        now,
-        state.idempotency_ttl,
-    )
-    .await
-    {
-        Ok(reservation) => reservation,
-        Err(error) => {
-            tracing::error!(%error, "the idempotency key could not be reserved");
-            return platform_http::reject(FailureKind::RequestTimeout);
-        }
-    };
-
-    let record_id = match reservation.outcome() {
-        Outcome::Proceed(record_id) => record_id,
-        // S8.1: "Retrying the same payload returns the original operation."
-        Outcome::Replay(operation_id) => return accepted(operation_id),
-        Outcome::Refuse => return platform_http::reject(FailureKind::IdempotencyConflict),
-    };
-
-    let operation = match platform_operations::accept(
-        &mut *transaction,
-        principal.user_id,
-        OPERATION_KIND,
-        correlation,
-        Some(key),
-        now,
-    )
-    .await
-    {
-        Ok(operation) => operation,
-        Err(error) => {
-            tracing::error!(%error, "the operation could not be accepted");
-            return platform_http::reject(FailureKind::RequestTimeout);
-        }
-    };
-
-    let payload = match command_payload(&operation, &principal, key, now, submit, correlation) {
-        Ok(payload) => payload,
+    // Before anything about the request is read: a session of another kind learns nothing from the
+    // body it sent.
+    if principal.kind != SessionKind::TelegramMiniApp {
+        return platform_http::reject(FailureKind::Forbidden);
+    }
+    let key = match idempotency_key(&headers) {
+        Ok(key) => key,
         Err(kind) => return platform_http::reject(kind),
     };
+    let Ok(submit) = serde_json::from_slice::<SubmitBlobCapture>(&body) else {
+        return platform_http::reject(FailureKind::InvalidRequest);
+    };
+    if !(1..=MAX_BLOB_CAPTURE_BYTES).contains(&submit.blob.length_bytes) {
+        return platform_http::reject(FailureKind::InvalidRequest);
+    }
+    if submit.blob.owner_service.as_str() != TELEGRAM_BLOB_OWNER {
+        return platform_http::reject(FailureKind::Forbidden);
+    }
 
-    if let Err(error) = Outbox::enqueue(
-        &mut *transaction,
-        Uuid::now_v7(),
-        &subject,
-        &payload,
-        Some(operation.operation_id),
-        now,
-    )
+    let correlation = crate::correlation_of(context);
+    let intake = Intake {
+        route: BLOB_ROUTE,
+        kind: OPERATION_KIND,
+        audit_action: OPERATION_KIND,
+        key: &key,
+        fingerprint: &body,
+        correlation: &correlation,
+    };
+    accept(&state, principal, &intake, accepted, |operation, now| {
+        let command_id = Uuid::now_v7();
+        Ok(Prepared {
+            subject: command_subject(COMMAND_TYPE)?,
+            command_id,
+            payload: content_command(
+                command_id,
+                operation,
+                &principal,
+                &intake,
+                now,
+                CaptureSource::Blob(&submit.blob),
+            )?,
+        })
+    })
     .await
-    {
-        tracing::error!(%error, "the command could not be enqueued");
-        return platform_http::reject(FailureKind::RequestTimeout);
-    }
-
-    if let Err(error) = platform_idempotency::complete(
-        &mut *transaction,
-        record_id,
-        Some(operation.operation_id),
-        202,
-        now,
-    )
-    .await
-    {
-        tracing::error!(%error, "the idempotency record could not be completed");
-        return platform_http::reject(FailureKind::RequestTimeout);
-    }
-
-    // Inside the transaction, so the record and the thing it records commit together. An audited
-    // action with no record, or a record for an action that rolled back, are both worse than
-    // neither.
-    let event = submission(&principal, operation.operation_id, correlation);
-    if let Err(error) = audit::record(&mut *transaction, &event, now).await {
-        tracing::error!(%error, "the capture could not be audited");
-        return platform_http::reject(FailureKind::RequestTimeout);
-    }
-
-    if let Err(error) = transaction.commit().await {
-        // Nothing happened: no reservation, no operation, no command. The client may retry with the
-        // same key and get a clean first attempt.
-        tracing::error!(%error, "the capture transaction could not be committed");
-        return platform_http::reject(FailureKind::RequestTimeout);
-    }
-
-    accepted(operation.operation_id)
 }
 
-/// The audit record of one accepted capture.
-///
-/// Only the ALLOWED case exists, and that is a decision rather than an omission. A capture has no
-/// authorization step beyond authentication, so there is no denial to record; a request that fails
-/// authentication never reaches [`accept`], and an anonymous 401 has no actor to attribute — it is
-/// counted by `http_server_request_duration_seconds{status}` and deliberately not written to a
-/// table an unauthenticated caller could grow one row at a time.
-fn submission(principal: &Principal, operation_id: Uuid, correlation: &str) -> AuditEvent {
-    AuditEvent {
-        audit_event_id: Uuid::now_v7(),
-        actor_user_id: Some(principal.user_id),
-        actor_session_id: Some(principal.session_id),
-        action: "content.capture.submit",
-        target_kind: "operation",
-        target_id: Some(operation_id),
-        outcome: AuditOutcome::Allowed,
-        correlation_id: correlation.to_owned(),
-    }
+/// The caller's idempotency key, or the client error for its absence.
+fn idempotency_key(headers: &HeaderMap) -> Result<String, FailureKind> {
+    headers
+        .get(IDEMPOTENCY_KEY)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && value.len() <= 255)
+        .map(str::to_owned)
+        .ok_or(FailureKind::MissingIdempotencyKey)
 }
 
 /// Read the idempotency key and the body, or say which client error this is.
@@ -254,17 +210,14 @@ fn parse(
     headers: &HeaderMap,
     body: &axum::body::Bytes,
 ) -> Result<(String, SubmitCapture), FailureKind> {
-    let key = headers
-        .get(IDEMPOTENCY_KEY)
-        .and_then(|value| value.to_str().ok())
-        .map(str::trim)
-        .filter(|value| !value.is_empty() && value.len() <= 255)
-        .ok_or(FailureKind::MissingIdempotencyKey)?
-        .to_owned();
+    let key = idempotency_key(headers)?;
 
     let submit: SubmitCapture =
         serde_json::from_slice(body).map_err(|_| FailureKind::InvalidRequest)?;
-    if !platform_core::address::is_capturable(&submit.url) {
+    // Both grammars: the route's own address check, and the contract's, which the command carries.
+    if !platform_core::address::is_capturable(&submit.url)
+        || !platform_eventing::is_capture_url(&submit.url)
+    {
         return Err(FailureKind::InvalidRequest);
     }
     if let Some(social) = &submit.social
@@ -309,38 +262,83 @@ fn is_provider_permalink(url: &str, provider: SocialCaptureProvider) -> bool {
     }
 }
 
+/// The subject of a command type, or the internal failure of a type that is not one.
+fn command_subject(command_type: &str) -> Result<Subject, FailureKind> {
+    Subject::new(MessageClass::Command, command_type).map_err(|_| {
+        tracing::error!(
+            command = command_type,
+            "the command subject is not constructible"
+        );
+        FailureKind::RequestTimeout
+    })
+}
+
 /// Selects the only command representation that belongs to the accepted capture.
-fn command_payload(
+fn prepare_url(
     operation: &platform_operations::Operation,
     principal: &Principal,
-    idempotency_key: &str,
+    intake: &Intake<'_>,
     now: jiff::Timestamp,
     submit: &SubmitCapture,
-    correlation: &str,
-) -> Result<serde_json::Value, FailureKind> {
+) -> Result<Prepared, FailureKind> {
+    let command_id = Uuid::now_v7();
     match &submit.social {
-        Some(social) => social_command(
-            operation,
-            principal,
-            idempotency_key,
-            now,
-            &submit.url,
-            social,
-        ),
-        None => Ok(platform_eventing::Command {
-            command_type: COMMAND_TYPE,
-            operation_id: operation.operation_id,
-            principal: principal.user_id,
-            correlation_id: correlation,
-            idempotency_key,
-            requested_at: now,
-        }
-        .envelope(serde_json::json!({ "url": submit.url }))),
+        Some(social) => Ok(Prepared {
+            subject: command_subject(social.provider.command_subject())?,
+            command_id,
+            payload: social_command(
+                command_id,
+                operation,
+                principal,
+                intake.key,
+                now,
+                &submit.url,
+                social,
+            )?,
+        }),
+        None => Ok(Prepared {
+            subject: command_subject(COMMAND_TYPE)?,
+            command_id,
+            payload: content_command(
+                command_id,
+                operation,
+                principal,
+                intake,
+                now,
+                CaptureSource::Url(&submit.url),
+            )?,
+        }),
     }
+}
+
+/// The typed `content.capture.requested.v1` envelope, shared with the webhook adapter.
+fn content_command(
+    command_id: Uuid,
+    operation: &platform_operations::Operation,
+    principal: &Principal,
+    intake: &Intake<'_>,
+    now: jiff::Timestamp,
+    source: CaptureSource<'_>,
+) -> Result<serde_json::Value, FailureKind> {
+    ContentCaptureCommand {
+        command_id,
+        operation_id: operation.operation_id,
+        principal: principal.user_id,
+        correlation_id: intake.correlation,
+        idempotency_key: intake.key,
+        issued_at: now,
+        source,
+    }
+    .envelope()
+    .map_err(|error| {
+        tracing::error!(%error, "the capture command could not be built");
+        FailureKind::RequestTimeout
+    })
 }
 
 /// Builds the canonical contract envelope for the social service that owns an explicit capture.
 fn social_command(
+    command_id: Uuid,
     operation: &platform_operations::Operation,
     principal: &Principal,
     idempotency_key: &str,
@@ -371,7 +369,7 @@ fn social_command(
     };
     let operation_ref = OperationId(operation.operation_id).as_entity_ref();
     let envelope = CommandEnvelope {
-        command_id: CommandId(Uuid::now_v7()),
+        command_id: CommandId(command_id),
         command_type: SocialCaptureRequested::command_type(),
         issued_at: ratatoskr_identifiers::WireTimestamp::from_jiff(now),
         producer: ProducerName::parse("ratatoskr-platform")
@@ -453,6 +451,79 @@ bounding what it returns belong to the service that opens the connection, not to
             status: 409,
             description: "The key is in use for a different body, or an earlier attempt with it \
                           has not finished.",
+            payload: Some(Payload::Json("ErrorEnvelope")),
+        },
+        ResponseDoc {
+            status: 504,
+            description: "A dependency did not answer in time. Nothing was written; retrying with \
+                          the same key is safe and is the intended response.",
+            payload: Some(Payload::Json("ErrorEnvelope")),
+        },
+    ],
+};
+
+/// How the blob route is described in the generated `OpenAPI` document.
+pub const BLOB_DOC: RouteDoc = RouteDoc {
+    method: Method::Post,
+    path: BLOB_ROUTE,
+    operation_id: "submitBlobCapture",
+    summary: "Submit stored bytes for capture",
+    description: "\
+Accepts, durably, a request to extract a document from bytes another service already stored, named \
+by reference rather than carried. It returns the operation that tracks the work and no result: \
+`GET /v1/operations/{operation_id}` is where the outcome appears.\n\n\
+Only the Telegram bot's session may call this route, and only for bytes the Telegram service owns \
+(`owner_service` must be `ratatoskr-telegram`). The blob must declare between 1 byte and 50 MiB. \
+Platform does not judge whether the media type can be extracted; the extractor reports that on the \
+operation.\n\n\
+`Idempotency-Key` is required, exactly as on `POST /v1/captures`: the same key and body return the \
+ORIGINAL operation, and the same key with a different body is refused. Members of the body other \
+than `blob` are ignored.",
+    tag: "captures",
+    security: Security::Session,
+    parameters: &[Parameter {
+        name: "Idempotency-Key",
+        location: In::Header,
+        required: true,
+        format: None,
+        description: "A client-chosen key, 1 to 255 characters, unique per distinct request. It is \
+                      hashed before it is stored, so it may carry meaning the client considers \
+                      private.",
+    }],
+    request: Some(Payload::Json("SubmitBlobCapture")),
+    responses: &[
+        ResponseDoc {
+            status: 202,
+            description: "Accepted durably. The body carries the operation to poll.",
+            payload: Some(Payload::Json("CaptureAccepted")),
+        },
+        ResponseDoc {
+            status: 400,
+            description: "No `Idempotency-Key`, a body that is not readable, or a blob outside \
+                          the accepted size. The `code` in the envelope distinguishes them.",
+            payload: Some(Payload::Json("ErrorEnvelope")),
+        },
+        ResponseDoc {
+            status: 401,
+            description: "No credential, or one that does not authenticate here.",
+            payload: Some(Payload::Json("ErrorEnvelope")),
+        },
+        ResponseDoc {
+            status: 403,
+            description: "The session is not a Telegram Mini App session, or the blob is owned by \
+                          another service.",
+            payload: Some(Payload::Json("ErrorEnvelope")),
+        },
+        ResponseDoc {
+            status: 409,
+            description: "The key is in use for a different body, or an earlier attempt with it \
+                          has not finished.",
+            payload: Some(Payload::Json("ErrorEnvelope")),
+        },
+        ResponseDoc {
+            status: 429,
+            description: "This caller has spent its request allowance. Retryable: the allowance \
+                          refills continuously, so waiting is the fix.",
             payload: Some(Payload::Json("ErrorEnvelope")),
         },
         ResponseDoc {

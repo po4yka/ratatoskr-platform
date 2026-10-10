@@ -484,3 +484,96 @@ async fn unauthenticated_listing_is_refused() {
 
     harness.cleanup().await.expect("cleanup");
 }
+
+/// Contracts fixtures `platform.operation.reported.v1/valid/social-capture-{queued,deleted,
+/// preserved}.json` at the pinned revision, with the fixture operation id replaced by the one
+/// Platform minted. The three are what X, Instagram and Threads report for an explicit capture.
+fn social_report(operation_id: Uuid, name: &str) -> serde_json::Value {
+    let mut report = match name {
+        "queued" => serde_json::json!({
+            "status": "queued",
+            "stage": "capture_queued"
+        }),
+        "deleted" => serde_json::json!({
+            "status": "failed",
+            "stage": "capture_unavailable",
+            "error": {
+                "code": "social.source.deleted",
+                "message": "The post was deleted by the provider.",
+                "retryable": false
+            }
+        }),
+        "preserved" => serde_json::json!({
+            "status": "succeeded",
+            "stage": "capture_preserved",
+            "results": [{
+                "result_kind": "social.post",
+                "target": "social_source:018f0000-0000-7000-8000-000000000a31"
+            }]
+        }),
+        other => panic!("no social report fixture named {other}"),
+    };
+    report
+        .as_object_mut()
+        .expect("a report object")
+        .insert("operation_id".to_owned(), serde_json::json!(operation_id));
+    report
+}
+
+async fn deliver_social_report(pool: &sqlx::PgPool, operation_id: Uuid, name: &str) {
+    use platform_eventing::{Incoming, MessageClass, Subject, deliver};
+    let message = Incoming {
+        message_id: Uuid::now_v7(),
+        subject: Subject::new(MessageClass::Event, "platform.operation.reported.v1")
+            .expect("a subject"),
+        producer: "ratatoskr-x".to_owned(),
+        payload: social_report(operation_id, name),
+    };
+    deliver(
+        pool,
+        &platform_operations::ProgressProjection,
+        &message,
+        now(),
+    )
+    .await
+    .expect("the report is delivered");
+}
+
+/// The extension reads `errors[0].code` and `results[0]` to tell the user what happened to a
+/// capture. This pins that the projection and the serializer keep those members for the reports the
+/// social services send: a deleted post is `failed` with the stable code and `retryable: false`, a
+/// preserved post is `succeeded` with a `social.post` result naming its source.
+#[tokio::test]
+async fn social_capture_reports_are_visible_with_the_codes_the_extension_reads() {
+    let harness = TestDatabase::create().await.expect("a test database");
+    let pool = harness.pool();
+    let owner = seed(pool, CREDENTIAL, AUDIENCE).await;
+    let app = app(state(&harness));
+    let deleted = seed_operation(pool, owner, KIND, 1).await;
+    let preserved = seed_operation(pool, owner, KIND, 1).await;
+
+    deliver_social_report(pool, deleted, "queued").await;
+    let (status, queued) = send(&app, read_one(Some(CREDENTIAL), &deleted.to_string())).await;
+    assert_eq!(status, StatusCode::OK, "{queued}");
+    assert_eq!(queued["status"], "queued");
+    assert_eq!(queued["stage"], "capture_queued");
+
+    deliver_social_report(pool, deleted, "deleted").await;
+    let (status, failed) = send(&app, read_one(Some(CREDENTIAL), &deleted.to_string())).await;
+    assert_eq!(status, StatusCode::OK, "{failed}");
+    assert_eq!(failed["status"], "failed");
+    assert_eq!(failed["errors"][0]["code"], "social.source.deleted");
+    assert_eq!(failed["errors"][0]["retryable"], false);
+
+    deliver_social_report(pool, preserved, "queued").await;
+    deliver_social_report(pool, preserved, "preserved").await;
+    let (status, succeeded) = send(&app, read_one(Some(CREDENTIAL), &preserved.to_string())).await;
+    assert_eq!(status, StatusCode::OK, "{succeeded}");
+    assert_eq!(succeeded["status"], "succeeded");
+    assert_eq!(succeeded["results"][0]["result_kind"], "social.post");
+    assert_eq!(
+        succeeded["results"][0]["target"],
+        "social_source:018f0000-0000-7000-8000-000000000a31"
+    );
+    harness.cleanup().await.expect("cleanup");
+}

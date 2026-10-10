@@ -283,19 +283,29 @@ async fn accept(
         }
     };
 
-    let payload = platform_eventing::Command {
-        command_type: target.command_type(),
+    // The same typed envelope `POST /v1/captures` emits, built by the same function: a consumer
+    // cannot tell which door a request came through (CONTRACTS.md S11).
+    let command_id = Uuid::now_v7();
+    let capture = platform_eventing::ContentCaptureCommand {
+        command_id,
         operation_id: operation.operation_id,
         principal: source.owner_user_id,
         correlation_id: correlation,
         idempotency_key: key,
-        requested_at: now,
-    }
-    .envelope(serde_json::json!({ "url": signal.url }));
+        issued_at: now,
+        source: platform_eventing::CaptureSource::Url(&signal.url),
+    };
+    let payload = match capture.envelope() {
+        Ok(payload) => payload,
+        Err(error) => {
+            tracing::error!(%error, "the capture command could not be built");
+            return platform_http::reject(FailureKind::RequestTimeout);
+        }
+    };
 
     if let Err(error) = Outbox::enqueue(
         &mut *transaction,
-        Uuid::now_v7(),
+        command_id,
         &subject,
         &payload,
         Some(operation.operation_id),
@@ -378,7 +388,9 @@ fn parse(headers: &HeaderMap, body: &[u8]) -> Result<(String, WebhookSignal), Fa
 
     let signal: WebhookSignal =
         serde_json::from_slice(body).map_err(|_| FailureKind::InvalidRequest)?;
-    if !platform_core::address::is_capturable(&signal.url) {
+    if !platform_core::address::is_capturable(&signal.url)
+        || !platform_eventing::is_capture_url(&signal.url)
+    {
         return Err(FailureKind::InvalidRequest);
     }
     Ok((key, signal))

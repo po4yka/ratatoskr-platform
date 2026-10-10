@@ -36,6 +36,8 @@ thiserror.workspace  = true
 tracing.workspace    = true
 
 [dev-dependencies]
+ratatoskr-event-envelope.workspace = true
+ratatoskr-document-contracts.workspace = true
 ratatoskr-platform-persistence = { workspace = true, features = ["test-support"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 tower = { version = "0.5.3", features = ["util"] }

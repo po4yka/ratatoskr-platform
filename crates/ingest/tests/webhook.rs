@@ -158,7 +158,7 @@ async fn a_signal_becomes_one_operation_and_one_command() {
     assert_eq!(subject, "cmd.content.capture.requested.v1");
     let payload: serde_json::Value = rows[0].try_get("payload").expect("a payload");
     assert_eq!(payload["command_type"], "content.capture.requested.v1");
-    assert_eq!(payload["operation_id"], operation_id.to_string());
+    assert_eq!(payload["payload"]["operation_id"], operation_id.to_string());
     assert_eq!(payload["tenant_id"], format!("user:{owner}"));
     assert_eq!(payload["payload"]["url"], "https://example.test/feed/1");
 }
@@ -195,16 +195,17 @@ async fn the_command_is_the_same_shape_the_client_route_emits() {
     assert_eq!(
         members,
         [
+            "aggregate_id",
             "command_id",
             "command_type",
             "correlation_id",
-            "idempotency_key",
-            "operation_id",
+            "issued_at",
             "payload",
-            "requested_at",
+            "producer",
+            "schema_version",
             "tenant_id",
         ],
-        "ARCHITECTURE.md S5.3 fixes these members: {payload}"
+        "the contract CommandEnvelope members, as the client route emits them: {payload}"
     );
 }
 
@@ -600,4 +601,51 @@ async fn one_source_spending_its_allowance_does_not_silence_another() {
     );
 
     harness.cleanup().await.expect("cleanup");
+}
+
+/// S11. The command a webhook signal produces is the typed `content.capture.requested.v1` envelope
+/// the extractor decodes, produced by `ratatoskr-platform`, owned by the source's user and keyed by
+/// the delivery identifier.
+#[tokio::test]
+async fn a_webhook_signal_emits_content_capture_requested_as_a_typed_envelope() {
+    use ratatoskr_document_contracts::ContentCaptureRequested;
+    use ratatoskr_event_envelope::CommandEnvelope;
+
+    let harness = TestDatabase::create().await.expect("a test database");
+    let pool = harness.pool();
+    let (owner, source) = seed(pool, TOKEN).await;
+    let app = app(&harness);
+
+    let (status, body) = send(
+        &app,
+        push(source, Some(TOKEN), Some("typed-delivery"), SIGNAL),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    let operation_id: Uuid = body["operation_id"]
+        .as_str()
+        .expect("an operation id")
+        .parse()
+        .expect("a uuid");
+    let stored: serde_json::Value =
+        sqlx::query_scalar("select payload from operations.outbox where operation_id = $1")
+            .bind(operation_id)
+            .fetch_one(pool)
+            .await
+            .expect("the command row");
+
+    let envelope = CommandEnvelope::from_json(stored.to_string().as_bytes())
+        .expect("the stored row is a contract CommandEnvelope");
+    assert_eq!(stored["producer"], "ratatoskr-platform");
+    assert_eq!(stored["aggregate_id"], format!("operation:{operation_id}"));
+    assert_eq!(stored["tenant_id"], format!("user:{owner}"));
+    let payload: ContentCaptureRequested = envelope
+        .payload_as()
+        .expect("the payload is a ContentCaptureRequested");
+    assert_eq!(payload.operation_id.0, operation_id);
+    assert_eq!(
+        payload.url.as_ref().map(ToString::to_string).as_deref(),
+        Some("https://example.test/feed/1")
+    );
+    assert!(payload.blob.is_none());
 }
