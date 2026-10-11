@@ -83,9 +83,13 @@ async fn seed(pool: &sqlx::PgPool, credential: &str, audience: &str) -> Uuid {
 /// One owned operation in the given state, with its own acceptance instant.
 async fn seed_operation(pool: &sqlx::PgPool, owner: Uuid, kind: &str, minutes_ago: i64) -> Uuid {
     let accepted_at = now() - jiff::SignedDuration::from_secs(60 * minutes_ago);
-    let operation = platform_operations::accept(pool, owner, kind, CORRELATION, None, accepted_at)
-        .await
-        .expect("an operation");
+    // A capture is dispatched to a lane, and only that lane may report for it (XR-021 R3-02). The
+    // social report fixtures below come from X.
+    let reporter = (kind == KIND).then_some("ratatoskr-x");
+    let operation =
+        platform_operations::accept(pool, owner, kind, CORRELATION, None, reporter, accepted_at)
+            .await
+            .expect("an operation");
     operation.operation_id
 }
 

@@ -56,6 +56,9 @@ const RESULT_ROUTE: &str = "/v1/channel-digests/results/{result_id}";
 
 const SUBSCRIPTION_KIND: &str = "channel_digest.subscription.set";
 const RUN_KIND: &str = "channel_digest.run";
+/// The service both digest routes dispatch to, recorded as the only producer allowed to report for
+/// their operations (XR-021 R3-02).
+const CHANNEL_DIGESTS_PRODUCER: &str = "ratatoskr-channel-digests";
 const SUBSCRIPTION_AUDIT: &str = "channel_digest.subscription.set";
 const RUN_AUDIT: &str = "channel_digest.run.request";
 
@@ -151,6 +154,7 @@ pub async fn set_subscription(
         key: &key,
         fingerprint: &fingerprint,
         correlation: &correlation,
+        reporter: CHANNEL_DIGESTS_PRODUCER,
     };
     accept(&state, principal, &intake, accepted, |operation, now| {
         let operation_id = OperationId(operation.operation_id);
@@ -200,6 +204,7 @@ pub async fn request_run(
         key: &key,
         fingerprint: &body,
         correlation: &correlation,
+        reporter: CHANNEL_DIGESTS_PRODUCER,
     };
     accept(&state, principal, &intake, accepted, |operation, now| {
         let operation_id = OperationId(operation.operation_id);

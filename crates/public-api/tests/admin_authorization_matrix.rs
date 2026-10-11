@@ -134,6 +134,7 @@ async fn every_admin_route_rechecks_owner_and_fails_closed() {
         "content.capture.submit",
         "correlation:01a0153f-63e5-7010-a4c9-1fe6c43bcc39",
         None,
+        None,
         now(),
     )
     .await

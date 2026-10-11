@@ -124,6 +124,7 @@ async fn attach_failed_occurrence(pool: &sqlx::PgPool, schedule: &ScheduleFixtur
         "github.sync",
         "correlation:01a0153f-63e5-7010-a4c9-1fe6c43bcc39",
         None,
+        None,
         due_at - SignedDuration::from_secs(1),
     )
     .await

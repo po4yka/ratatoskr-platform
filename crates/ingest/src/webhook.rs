@@ -232,6 +232,36 @@ fn correlation_of(context: Option<&axum::Extension<platform_http::RequestContext
     )
 }
 
+/// The operation a signal creates, inside the caller's transaction and dispatched to the lane of the
+/// source's target, which is therefore the only producer that may report for it (XR-021 R3-02).
+/// `None` after logging when it cannot be created.
+async fn open_operation(
+    transaction: &mut sqlx::PgTransaction<'_>,
+    source: &WebhookSource,
+    qualified: &str,
+    correlation: &str,
+    now: jiff::Timestamp,
+) -> Option<platform_operations::Operation> {
+    let target = source.target;
+    match platform_operations::accept(
+        &mut **transaction,
+        source.owner_user_id,
+        target.operation_kind(),
+        correlation,
+        Some(qualified),
+        Some(target.reporter()),
+        now,
+    )
+    .await
+    {
+        Ok(operation) => Some(operation),
+        Err(error) => {
+            tracing::error!(%error, "the operation could not be accepted");
+            None
+        }
+    }
+}
+
 /// Reserve, create, enqueue, complete — in one transaction, so a crash at any point leaves all four
 /// or none.
 ///
@@ -266,21 +296,10 @@ async fn accept(
         Reserved::Answer(response) => return response,
     };
 
-    let operation = match platform_operations::accept(
-        &mut *transaction,
-        source.owner_user_id,
-        target.operation_kind(),
-        correlation,
-        Some(&qualified),
-        now,
-    )
-    .await
-    {
-        Ok(operation) => operation,
-        Err(error) => {
-            tracing::error!(%error, "the operation could not be accepted");
-            return platform_http::reject(FailureKind::RequestTimeout);
-        }
+    let Some(operation) =
+        open_operation(&mut transaction, source, &qualified, correlation, now).await
+    else {
+        return platform_http::reject(FailureKind::RequestTimeout);
     };
 
     // The same typed envelope `POST /v1/captures` emits, built by the same function: a consumer

@@ -5,8 +5,8 @@
 
 ## 2. The recorded lane (R3-02)
 
-- [ ] 2.1 Add the signature-only `reporter: Option<&str>` parameter to `accept`, pass `None` at every caller, add the tests of `report_authority.rs`, `capture.rs`, `capture_blobs.rs`, `channel_digests.rs`, `webhook.rs`, `publication.rs` and `ai_archives.rs`, extend `every_minted_operation_kind_has_an_authority_row`, and run them RED on the assertions
-- [ ] 2.2 Add `operations.operations.reporter` to `schema.sql`, write and validate it in `accept`, pass the lane from the four callers, apply it in `projection` and `authority::authorize`, rewrite the `authority.rs` comment and `docs/ARCHITECTURE.md` 11.2, and run 2.1 GREEN
+- [x] 2.1 Add the signature-only `reporter: Option<&str>` parameter to `accept`, pass `None` at every caller, add the tests of `report_authority.rs`, `capture.rs`, `capture_blobs.rs`, `channel_digests.rs`, `webhook.rs`, `publication.rs` and `ai_archives.rs`, extend `every_minted_operation_kind_has_an_authority_row`, and run them RED on the assertions
+- [x] 2.2 Add `operations.operations.reporter` to `schema.sql`, write and validate it in `accept`, pass the lane from the four callers, apply it in `projection` and `authority::authorize`, rewrite the `authority.rs` comment and `docs/ARCHITECTURE.md` 11.2, and run 2.1 GREEN
 
 ## 3. Upstream 401 and permanent refusal (R3-03)
 

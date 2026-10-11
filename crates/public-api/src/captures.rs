@@ -123,6 +123,7 @@ pub async fn submit(
         key: &key,
         fingerprint: &body,
         correlation: &correlation,
+        reporter: capture_reporter(&submit),
     };
     accept(&state, principal, &intake, accepted, |operation, now| {
         prepare_url(operation, &principal, &intake, now, &submit)
@@ -171,6 +172,7 @@ pub async fn submit_blob(
         key: &key,
         fingerprint: &body,
         correlation: &correlation,
+        reporter: EXTRACTOR_PRODUCER,
     };
     accept(&state, principal, &intake, accepted, |operation, now| {
         let command_id = Uuid::now_v7();
@@ -262,6 +264,23 @@ fn is_provider_permalink(url: &str, provider: SocialCaptureProvider) -> bool {
             )
         }
         _ => false,
+    }
+}
+
+/// The producer name of the document extractor, the service every URL and blob capture is
+/// dispatched to.
+const EXTRACTOR_PRODUCER: &str = "ratatoskr-extractor";
+
+/// The service a capture is dispatched to, and so the only producer that may report for it: the
+/// provider's own service for an explicit social capture, the extractor for everything else.
+fn capture_reporter(submit: &SubmitCapture) -> &'static str {
+    match submit.social.as_ref().map(|social| &social.provider) {
+        Some(SocialCaptureProvider::X) => "ratatoskr-x",
+        Some(SocialCaptureProvider::Instagram) => "ratatoskr-instagram",
+        Some(SocialCaptureProvider::Threads) => "ratatoskr-threads",
+        // A provider this build predates cannot pass `is_provider_permalink`, so the request was
+        // refused before this runs; the extractor is the only other lane a capture has.
+        Some(_) | None => EXTRACTOR_PRODUCER,
     }
 }
 

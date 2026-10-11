@@ -106,6 +106,15 @@ async fn configured_device_archive_preparation_creates_one_owned_operation() {
         .as_str()
         .expect("an operation id")
         .to_owned();
+    // R3-02: an AI-archive operation is bound by its acceptance record, so it records no lane.
+    let stored = platform_operations::find(
+        harness.pool(),
+        Uuid::parse_str(&first_operation_id).expect("an operation UUID"),
+    )
+    .await
+    .expect("reading")
+    .expect("the operation");
+    assert_eq!(stored.reporter, None);
     let replay = Request::builder()
         .method("POST")
         .uri("/v1/ai-archives/chatgpt")

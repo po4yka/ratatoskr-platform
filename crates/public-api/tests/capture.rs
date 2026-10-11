@@ -189,6 +189,84 @@ async fn threads_dot_com_permalinks_are_accepted_for_the_threads_provider() {
     harness.cleanup().await.expect("cleanup");
 }
 
+/// The lane Platform recorded for an accepted operation (XR-021 R3-02).
+async fn reporter_of(pool: &sqlx::PgPool, body: &serde_json::Value) -> Option<String> {
+    let operation_id: Uuid = body
+        .get("operation_id")
+        .and_then(serde_json::Value::as_str)
+        .and_then(|value| value.parse().ok())
+        .expect("an operation id");
+    platform_operations::find(pool, operation_id)
+        .await
+        .expect("reading")
+        .expect("the operation")
+        .reporter
+}
+
+/// R3-02. A social capture is dispatched to its provider's service, so that provider is the only
+/// producer allowed to report for it.
+#[tokio::test]
+async fn a_social_capture_records_its_provider_as_reporter() {
+    let harness = TestDatabase::create().await.expect("a test database");
+    let pool = harness.pool();
+    seed(pool, CREDENTIAL, AUDIENCE).await;
+    let app = app(state(&harness));
+
+    for (provider, url, expected) in [
+        (
+            "x",
+            "https://x.com/ratatoskr/status/1234567890123456789",
+            "ratatoskr-x",
+        ),
+        (
+            "instagram",
+            "https://www.instagram.com/p/Cx1AbcDefGh/",
+            "ratatoskr-instagram",
+        ),
+        (
+            "threads",
+            "https://www.threads.com/@ratatoskr/post/Cx1AbcDefGh",
+            "ratatoskr-threads",
+        ),
+    ] {
+        let capture = format!(
+            r#"{{"url":"{url}","social":{{"provider":"{provider}","captured_at":"2026-08-27T10:00:00Z","acquisition":"browser_extension","saved_authority":"explicit_user_capture"}}}}"#
+        );
+        let key = format!("reporter-{provider}");
+        let (status, body) = send(&app, submit(Some(CREDENTIAL), Some(&key), &capture)).await;
+        assert_eq!(status, StatusCode::ACCEPTED, "{provider}: {body}");
+        assert_eq!(
+            reporter_of(pool, &body).await.as_deref(),
+            Some(expected),
+            "{provider}"
+        );
+    }
+
+    harness.cleanup().await.expect("cleanup");
+}
+
+/// R3-02. A URL capture goes to the extractor.
+#[tokio::test]
+async fn a_url_capture_records_the_extractor() {
+    let harness = TestDatabase::create().await.expect("a test database");
+    let pool = harness.pool();
+    seed(pool, CREDENTIAL, AUDIENCE).await;
+    let app = app(state(&harness));
+
+    let (status, body) = send(
+        &app,
+        submit(Some(CREDENTIAL), Some("reporter-url"), CAPTURE),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    assert_eq!(
+        reporter_of(pool, &body).await.as_deref(),
+        Some("ratatoskr-extractor")
+    );
+
+    harness.cleanup().await.expect("cleanup");
+}
+
 /// C-2. A retry with the same key and body returns the ORIGINAL operation and creates nothing.
 #[tokio::test]
 async fn a_retry_returns_the_original_operation() {

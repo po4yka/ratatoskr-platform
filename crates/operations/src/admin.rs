@@ -57,7 +57,7 @@ where
     let rows = sqlx::query(
         "select operation.operation_id, operation.owner_user_id, operation.kind,
                 operation.status, operation.stage, operation.progress_percent,
-                operation.correlation_id, operation.retryable,
+                operation.correlation_id, operation.reporter, operation.retryable,
                 operation.cancellation_requested_at, operation.accepted_at,
                 operation.status_changed_at, operation.terminated_at,
                 failure.code as failure_code

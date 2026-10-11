@@ -1,20 +1,25 @@
-//! Who may report progress for which operation (XR-021 CONTRACTS.md section R2-02).
+//! Who may report progress for which operation (XR-021 CONTRACTS.md sections R2-02 and R3-02).
 //!
 //! `evt.platform.operation.reported.v1` is one shared subject, so the identities allowed to publish
 //! it are told apart only by the envelope `producer` field. Before a report is applied, the
-//! projection loads the operation and asks [`authorize`] two questions: is the envelope tenant the
-//! operation's owner, and is the producer in the list for the operation's kind. The table below is
-//! the only place the second answer lives. An AI-archive import is the exception on the first
-//! question: its reports carry no tenant, and Platform's acceptance record binds the owner instead.
+//! projection loads the operation and asks [`authorize`] three questions: is the envelope tenant the
+//! operation's owner, is the producer in the list for the operation's kind, and is it the one
+//! service the operation was dispatched to. The table below holds the second answer, as the closed
+//! list of producers a kind may name; `operations.operations.reporter` holds the third, written by
+//! [`crate::accept`] when the intake path that mints the operation knows the lane. An AI-archive
+//! import is the exception: its reports carry no tenant and no recorded reporter, and Platform's
+//! acceptance record binds the owner, the provider and the producer instead.
 //!
 //! A kind that is not in the table allows no producer. Adding a new operation kind to Platform
 //! therefore fails closed: its reports are rejected until a row names who may send them, and the
-//! test `every_minted_operation_kind_has_an_authority_row` fails first.
+//! test `every_minted_operation_kind_has_an_authority_row` fails first. A listed kind whose
+//! operation recorded no reporter accepts no producer either, and the test
+//! `every_mint_site_passes_a_lane_for_a_listed_kind` fails when a mint site passes none.
 //!
-//! Residual risk, recorded in `docs/ARCHITECTURE.md` section 11.2: the four extraction and social
-//! producers of `content.capture.submit` can still report for each other's capture operations,
-//! because a capture operation does not record which service it was dispatched to. Per-producer
-//! report subjects would close that and need a contract change.
+//! What this does not close, recorded in `docs/ARCHITECTURE.md` section 11.2: the subject is still
+//! shared, so a compromised producer can forge a report for another operation of its own lane and
+//! tenant, and the X identity can read every tenant's report metadata through its durable.
+//! Per-producer report subjects would close both and need a contract change.
 
 use ratatoskr_identifiers::{TenantRef, UserId};
 use uuid::Uuid;
@@ -73,12 +78,21 @@ pub fn producers_for(kind: &str) -> Option<&'static Producers> {
         .map(|(_, producers)| producers)
 }
 
+/// Whether `producer` may be recorded as the reporter of a new operation of `kind`: the kind has a
+/// listed row and names it. A kind bound some other way (`ai_archive.import`) and a kind without a
+/// row name no reporter.
+#[must_use]
+pub fn allows(kind: &str, producer: &str) -> bool {
+    matches!(producers_for(kind), Some(Producers::Listed(listed)) if listed.contains(&producer))
+}
+
 /// Whether a report from `producer` whose envelope names `envelope_tenant` may be applied to an
-/// operation of `kind` owned by `owner`.
+/// operation of `kind` owned by `owner` that was dispatched to `reporter`.
 ///
 /// `envelope_tenant` is the wire text of the envelope `tenant_id` (`user:<uuid>`), or `None` when
 /// the envelope has none. A kind without a row is refused, and so is a listed kind whose tenant is
-/// missing, malformed or not the owner's.
+/// missing, malformed or not the owner's, whose operation recorded no `reporter`, or whose recorded
+/// `reporter` is not `producer`.
 ///
 /// A [`Producers::ProviderBound`] kind is the one place a missing tenant is tolerated, and only
 /// when `acceptance_bound` says the caller found Platform's own acceptance record for the
@@ -94,6 +108,7 @@ pub fn authorize(
     producer: &str,
     envelope_tenant: Option<&str>,
     owner: Uuid,
+    reporter: Option<&str>,
     acceptance_bound: bool,
 ) -> bool {
     let tenant_ok = match envelope_tenant {
@@ -103,7 +118,9 @@ pub fn authorize(
         None => false,
     };
     match producers_for(kind) {
-        Some(Producers::Listed(listed)) => tenant_ok && listed.contains(&producer),
+        Some(Producers::Listed(listed)) => {
+            tenant_ok && listed.contains(&producer) && reporter == Some(producer)
+        }
         Some(Producers::ProviderBound) => {
             if envelope_tenant.is_some() {
                 tenant_ok
@@ -128,6 +145,7 @@ mod tests {
             "ratatoskr-channel-digests",
             Some(&format!("user:{OWNER}")),
             OWNER,
+            Some("ratatoskr-channel-digests"),
             false,
         ));
     }
@@ -139,6 +157,7 @@ mod tests {
             "ratatoskr-channel-digests",
             None,
             OWNER,
+            Some("ratatoskr-channel-digests"),
             true,
         ));
     }
@@ -150,6 +169,7 @@ mod tests {
             "ratatoskr-claude",
             None,
             OWNER,
+            None,
             true
         ));
         assert!(!authorize(
@@ -157,6 +177,7 @@ mod tests {
             "ratatoskr-claude",
             None,
             OWNER,
+            None,
             false
         ));
     }
@@ -169,6 +190,7 @@ mod tests {
             "ratatoskr-claude",
             Some(&format!("user:{OWNER}")),
             OWNER,
+            None,
             false,
         ));
         for raw in [format!("user:{other}"), "user:not-a-uuid".to_owned()] {
@@ -178,6 +200,7 @@ mod tests {
                     "ratatoskr-claude",
                     Some(&raw),
                     OWNER,
+                    None,
                     true
                 ),
                 "{raw:?}"
@@ -199,10 +222,40 @@ mod tests {
                     "ratatoskr-channel-digests",
                     Some(raw),
                     OWNER,
+                    Some("ratatoskr-channel-digests"),
                     false,
                 ),
                 "{raw:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_listed_kind_needs_the_recorded_reporter_to_be_the_producer() {
+        let tenant = format!("user:{OWNER}");
+        let report = |producer: &str, reporter: Option<&str>| {
+            authorize(
+                "content.capture.submit",
+                producer,
+                Some(&tenant),
+                OWNER,
+                reporter,
+                false,
+            )
+        };
+        assert!(report("ratatoskr-x", Some("ratatoskr-x")));
+        assert!(!report("ratatoskr-x", Some("ratatoskr-instagram")));
+        assert!(!report("ratatoskr-x", None));
+    }
+
+    #[test]
+    fn allows_names_only_the_producers_of_a_listed_kind() {
+        assert!(allows("content.capture.submit", "ratatoskr-threads"));
+        assert!(!allows(
+            "content.capture.submit",
+            "ratatoskr-channel-digests"
+        ));
+        assert!(!allows("ai_archive.import", "ratatoskr-chatgpt"));
+        assert!(!allows("github.sync.requested", "ratatoskr-github"));
     }
 }

@@ -152,6 +152,7 @@ async fn repeated_and_foreign_cancellation_requests_write_nothing_new() {
         "content.capture.submit",
         CORRELATION,
         None,
+        None,
         now(),
     )
     .await
@@ -263,6 +264,7 @@ async fn cancellation_races_resolve_to_one_truthful_outcome() {
         owner_id,
         "content.capture.submit",
         CORRELATION,
+        None,
         None,
         now(),
     )
@@ -458,26 +460,47 @@ async fn listing_fixture(pool: &sqlx::PgPool, owner_id: Uuid, stranger: Uuid) ->
     let base = now() - jiff::SignedDuration::from_hours(1);
     let at =
         |minutes_before_base: i64| base - jiff::SignedDuration::from_secs(60 * minutes_before_base);
-    let oldest =
-        platform_operations::accept(pool, owner_id, CONTENT_KIND, CORRELATION, None, at(40))
-            .await
-            .expect("accepting a fixture row");
-    let running =
-        platform_operations::accept(pool, owner_id, CONTENT_KIND, CORRELATION, None, at(30))
-            .await
-            .expect("accepting a fixture row");
+    let oldest = platform_operations::accept(
+        pool,
+        owner_id,
+        CONTENT_KIND,
+        CORRELATION,
+        None,
+        None,
+        at(40),
+    )
+    .await
+    .expect("accepting a fixture row");
+    let running = platform_operations::accept(
+        pool,
+        owner_id,
+        CONTENT_KIND,
+        CORRELATION,
+        None,
+        None,
+        at(30),
+    )
+    .await
+    .expect("accepting a fixture row");
     let succeeded =
-        platform_operations::accept(pool, owner_id, SOCIAL_KIND, CORRELATION, None, at(20))
+        platform_operations::accept(pool, owner_id, SOCIAL_KIND, CORRELATION, None, None, at(20))
             .await
             .expect("accepting a fixture row");
     let social =
-        platform_operations::accept(pool, owner_id, SOCIAL_KIND, CORRELATION, None, at(10))
+        platform_operations::accept(pool, owner_id, SOCIAL_KIND, CORRELATION, None, None, at(10))
             .await
             .expect("accepting a fixture row");
-    let strangers_row =
-        platform_operations::accept(pool, stranger, CONTENT_KIND, CORRELATION, None, at(25))
-            .await
-            .expect("accepting a fixture row");
+    let strangers_row = platform_operations::accept(
+        pool,
+        stranger,
+        CONTENT_KIND,
+        CORRELATION,
+        None,
+        None,
+        at(25),
+    )
+    .await
+    .expect("accepting a fixture row");
 
     for (row, status) in [
         (&running, OperationStatus::Running),
@@ -643,6 +666,7 @@ async fn pages_walk_a_keyset_cursor_without_drift() {
         owner_id,
         CONTENT_KIND,
         CORRELATION,
+        None,
         None,
         now() + jiff::SignedDuration::from_hours(1),
     )

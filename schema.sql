@@ -618,6 +618,7 @@ create table operations.operations (
     correlation_id     text        not null,
     causation_id       text,
     idempotency_key    text,
+    reporter           text,
     retryable          boolean     not null default false,
     cancellation_requested_at timestamptz,
     accepted_at        timestamptz not null,
@@ -641,6 +642,9 @@ create table operations.operations (
         check (causation_id is null or causation_id ~ '^[a-z][a-z0-9_-]{0,31}:[A-Za-z0-9][A-Za-z0-9._~:@+-]{0,255}$'),
     constraint operations_idempotency_key_is_bounded
         check (idempotency_key is null or length(idempotency_key) between 1 and 255),
+    -- A producer name, as it appears in the envelope `producer` of a report (XR-021 R3-02).
+    constraint operations_reporter_is_a_producer_name
+        check (reporter is null or reporter ~ '^ratatoskr-[a-z0-9-]{1,56}$'),
     constraint operations_status_changed_at_is_not_before_accepted_at
         check (status_changed_at >= accepted_at),
     -- `terminated_at` is set if and only if the status is terminal. This is what makes
@@ -658,6 +662,11 @@ comment on table operations.operations is
 comment on column operations.operations.owner_user_id is
     'References identity.users(user_id) semantically, with no foreign key: DATA_MODEL.md forbids '
     'cross-schema foreign keys. The application enforces it.';
+comment on column operations.operations.reporter is
+    'The one service this operation was dispatched to, as the `producer` of the reports it may '
+    'receive (XR-021 R3-02). Written once, when the operation is accepted. Null for a kind whose '
+    'reports are bound by another record (an AI archive import is bound by its acceptance record). '
+    'For a kind with a listed set of producers, a null reporter accepts no producer.';
 comment on column operations.operations.retryable is
     'Whether the CLIENT may resubmit. Not an internal retry budget: an attempt count belongs to '
     'operations.operation_attempts, and conflating the two is how a user is told to retry work that '

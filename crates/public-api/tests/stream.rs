@@ -85,6 +85,7 @@ async fn seed_operation(pool: &sqlx::PgPool, owner: Uuid, statuses: &[OperationS
         "content.capture.submit",
         CORRELATION,
         None,
+        None,
         now(),
     )
     .await

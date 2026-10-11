@@ -57,7 +57,7 @@ pub async fn request_cancellation(
 ) -> Result<Cancellation, OperationError> {
     let row = sqlx::query(
         "select operation_id, owner_user_id, kind, status, stage, progress_percent,
-                correlation_id, retryable, cancellation_requested_at, accepted_at,
+                correlation_id, reporter, retryable, cancellation_requested_at, accepted_at,
                 status_changed_at, terminated_at
            from operations.operations
           where operation_id = $1 and owner_user_id = $2
@@ -128,6 +128,7 @@ pub(crate) fn operation_from_row(row: &sqlx::postgres::PgRow) -> Result<Operatio
         correlation_id: row
             .try_get("correlation_id")
             .map_err(PersistenceError::Query)?,
+        reporter: row.try_get("reporter").map_err(PersistenceError::Query)?,
         retryable: row.try_get("retryable").map_err(PersistenceError::Query)?,
         cancellation_requested_at: requested_at.map(crate::from_offset),
         accepted_at: crate::from_offset(

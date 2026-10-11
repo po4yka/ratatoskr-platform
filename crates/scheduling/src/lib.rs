@@ -90,6 +90,8 @@ struct Schedule {
     /// Named `id` rather than `schedule_id`: inside a `Schedule` the prefix says nothing, and the
     /// column it comes from is spelled once, in the `select` above the struct.
     id: Uuid,
+    /// The service that registered the schedule, which is the producer of its occurrences' reports.
+    service_name: String,
     name: String,
     owner_user_id: Uuid,
     command_type: String,
@@ -267,7 +269,7 @@ async fn claim(
     now: Timestamp,
 ) -> Result<Option<Schedule>, SchedulingError> {
     let row = sqlx::query(
-        "select schedule_id, name, owner_user_id, command_type, operation_kind, payload,
+        "select schedule_id, service_name, name, owner_user_id, command_type, operation_kind, payload,
                 cron_expression, next_due_at
            from operations.schedules
           where schedule_id = $1 and enabled and next_due_at <= $2
@@ -287,6 +289,9 @@ async fn claim(
 
     Ok(Some(Schedule {
         id: schedule_id,
+        service_name: row
+            .try_get("service_name")
+            .map_err(PersistenceError::Query)?,
         name: row.try_get("name").map_err(PersistenceError::Query)?,
         owner_user_id: row
             .try_get("owner_user_id")
@@ -342,6 +347,11 @@ async fn publish(
         &schedule.operation_kind,
         &correlation,
         Some(&idempotency_key),
+        // The registering service is the lane of its occurrences when the kind lists it. A kind
+        // with no authority row (the legacy GitHub schedule) has no reportable lane to record.
+        Some(schedule.service_name.as_str()).filter(|service| {
+            platform_operations::authority::allows(&schedule.operation_kind, service)
+        }),
         now,
     )
     .await?;

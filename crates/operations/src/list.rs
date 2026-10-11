@@ -63,7 +63,7 @@ where
     let limit = usize::try_from(scope.limit.max(0)).unwrap_or(0);
     let rows = sqlx::query(
         "select operation_id, owner_user_id, kind, status, stage, progress_percent,
-                correlation_id, retryable, cancellation_requested_at,
+                correlation_id, reporter, retryable, cancellation_requested_at,
                 accepted_at, status_changed_at, terminated_at
            from operations.operations
           where owner_user_id = $1

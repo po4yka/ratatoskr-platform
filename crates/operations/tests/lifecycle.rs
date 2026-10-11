@@ -107,6 +107,7 @@ async fn an_operation_runs_from_acceptance_to_success() {
         "content.capture.submit",
         CORRELATION,
         Some("idem-1"),
+        None,
         now(),
     )
     .await
@@ -171,6 +172,7 @@ async fn a_late_older_status_is_stale_and_writes_nothing() {
         owner(),
         "content.capture.submit",
         CORRELATION,
+        None,
         None,
         now(),
     )
@@ -245,6 +247,7 @@ async fn two_terminal_outcomes_conflict() {
         "content.capture.submit",
         CORRELATION,
         None,
+        None,
         now(),
     )
     .await
@@ -295,6 +298,7 @@ async fn one_idempotency_key_accepts_one_operation_per_actor_and_kind() {
         "content.capture.submit",
         CORRELATION,
         Some("k"),
+        None,
         now(),
     )
     .await
@@ -306,6 +310,7 @@ async fn one_idempotency_key_accepts_one_operation_per_actor_and_kind() {
         "content.capture.submit",
         CORRELATION,
         Some("k"),
+        None,
         now(),
     )
     .await;
@@ -321,6 +326,7 @@ async fn one_idempotency_key_accepts_one_operation_per_actor_and_kind() {
         "social.source.sync",
         CORRELATION,
         Some("k"),
+        None,
         now(),
     )
     .await
@@ -340,6 +346,7 @@ async fn the_snapshot_projection_satisfies_the_contract() {
         owner(),
         "content.capture.submit",
         CORRELATION,
+        None,
         None,
         now(),
     )

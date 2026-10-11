@@ -417,3 +417,44 @@ async fn missing_idempotency_key_is_400() {
     assert_eq!(total_outbox_rows(pool).await, 0);
     harness.cleanup().await.expect("cleanup");
 }
+
+/// R3-02. Both digest routes are handled by channel-digests, which is therefore the only producer
+/// allowed to report for their operations.
+#[tokio::test]
+async fn the_digest_routes_record_channel_digests_as_reporter() {
+    let harness = TestDatabase::create().await.expect("a test database");
+    let pool = harness.pool();
+    seed(pool).await;
+    let app = app(&harness);
+
+    let (status, subscription) = send(
+        &app,
+        put_subscription(
+            "example_channel",
+            Some("reporter-subscription"),
+            r#"{"desired_state":"active"}"#,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{subscription}");
+    let (status, run) = send(
+        &app,
+        post_run(Some("reporter-run"), r#"{"output_language":"ru"}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{run}");
+
+    for body in [&subscription, &run] {
+        let operation = platform_operations::find(pool, operation_of(body))
+            .await
+            .expect("reading")
+            .expect("the operation");
+        assert_eq!(
+            operation.reporter.as_deref(),
+            Some("ratatoskr-channel-digests"),
+            "{}",
+            operation.kind
+        );
+    }
+    harness.cleanup().await.expect("cleanup");
+}

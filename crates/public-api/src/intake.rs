@@ -30,6 +30,9 @@ pub(crate) struct Intake<'a> {
     pub(crate) fingerprint: &'a [u8],
     /// The request correlation (ADR-0007).
     pub(crate) correlation: &'a str,
+    /// The one service the command is dispatched to, recorded on the operation as the only
+    /// producer allowed to report for it (XR-021 R3-02).
+    pub(crate) reporter: &'static str,
 }
 
 /// The command one accepted request produces, built once its operation exists.
@@ -95,6 +98,7 @@ where
         intake.kind,
         intake.correlation,
         Some(intake.key),
+        Some(intake.reporter),
         now,
     )
     .await

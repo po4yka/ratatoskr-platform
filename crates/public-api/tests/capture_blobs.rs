@@ -187,6 +187,33 @@ async fn a_telegram_blob_capture_is_accepted_and_emits_one_blob_command() {
     harness.cleanup().await.expect("cleanup");
 }
 
+/// R3-02. A blob capture is dispatched to the extractor, which is therefore the only producer
+/// allowed to report for it.
+#[tokio::test]
+async fn a_blob_capture_records_the_extractor() {
+    let harness = TestDatabase::create().await.expect("a test database");
+    let pool = harness.pool();
+    seed_session(pool, CREDENTIAL, AUDIENCE, SessionKind::TelegramMiniApp).await;
+    let app = app(state(&harness));
+
+    let (status, body) = send(
+        &app,
+        submit_blob(
+            Some(CREDENTIAL),
+            Some("blob-reporter"),
+            &blob_body("ratatoskr-telegram", 100),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    let operation = platform_operations::find(pool, operation_of(&body))
+        .await
+        .expect("reading")
+        .expect("the operation");
+    assert_eq!(operation.reporter.as_deref(), Some("ratatoskr-extractor"));
+    harness.cleanup().await.expect("cleanup");
+}
+
 /// S11. The blob route exists for the Telegram bot. Any other kind of session is refused before
 /// anything is written: the store is content-addressed and shared, so the session kind is the gate.
 #[tokio::test]

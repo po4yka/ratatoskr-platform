@@ -133,6 +133,7 @@ async fn bound_to_its_operation(
         &message.producer,
         envelope_tenant,
         operation.owner_user_id,
+        operation.reporter.as_deref(),
         binding.is_some(),
     ) {
         tracing::warn!(

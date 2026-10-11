@@ -163,6 +163,30 @@ async fn a_signal_becomes_one_operation_and_one_command() {
     assert_eq!(payload["payload"]["url"], "https://example.test/feed/1");
 }
 
+/// R3-02. The content-capture target hands the signal to the extractor, so the extractor is the
+/// only producer allowed to report for the operation.
+#[tokio::test]
+async fn a_content_capture_signal_records_the_extractor_as_reporter() {
+    let harness = TestDatabase::create().await.expect("a test database");
+    let pool = harness.pool();
+    let (_owner, source) = seed(pool, TOKEN).await;
+    let app = app(&harness);
+
+    let (status, body) = send(&app, push(source, Some(TOKEN), Some("reporter-1"), SIGNAL)).await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let operation_id: Uuid = body["operation_id"]
+        .as_str()
+        .expect("an operation id")
+        .parse()
+        .expect("a uuid");
+    let operation = platform_operations::find(pool, operation_id)
+        .await
+        .expect("a read")
+        .expect("an operation");
+    assert_eq!(operation.reporter.as_deref(), Some("ratatoskr-extractor"));
+    harness.cleanup().await.expect("cleanup");
+}
+
 /// I-2. The command a webhook produces is indistinguishable from the one the client route produces.
 ///
 /// This is the whole justification for routing a webhook into an existing bounded context rather

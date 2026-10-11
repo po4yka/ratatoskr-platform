@@ -59,6 +59,16 @@ pub enum OperationError {
     #[error("no such operation")]
     NotFound,
 
+    /// The reporter named for a new operation is not a producer the kind allows. A programming
+    /// error in the intake path that mints the operation, not a condition a client can cause.
+    #[error("{reporter} is not a producer that may report for {kind}")]
+    ReporterNotAllowed {
+        /// The operation kind being accepted.
+        kind: String,
+        /// The producer that was named.
+        reporter: String,
+    },
+
     /// A stored row does not satisfy a contract invariant, so no snapshot can be emitted for it.
     /// This is a defect in whatever wrote the row, and it is caught before the value reaches a
     /// client rather than after.
@@ -87,6 +97,9 @@ pub struct Operation {
     pub progress_percent: Option<i16>,
     /// The namespaced correlation identifier.
     pub correlation_id: String,
+    /// The one service this operation was dispatched to, as the `producer` of its reports
+    /// (XR-021 R3-02). `None` for a kind whose reports are bound by another record.
+    pub reporter: Option<String>,
     /// Whether the client may resubmit.
     pub retryable: bool,
     /// When the owner asked for the work to stop, if it was asked. A request, not a state: the
@@ -145,33 +158,49 @@ pub(crate) fn from_offset(value: time::OffsetDateTime) -> jiff::Timestamp {
 /// It starts in `accepted`, which ARCHITECTURE S5.1 defines as durable acceptance — the state the
 /// `202 Accepted` response is allowed to describe, and nothing more.
 ///
+/// `reporter` is the one service the work is dispatched to, recorded as the only producer whose
+/// reports Platform will apply for a kind with a listed set of producers (XR-021 R3-02). It is
+/// `None` for a kind bound some other way, such as an AI archive import, whose acceptance record
+/// binds the provider.
+///
 /// # Errors
 ///
-/// [`OperationError::Persistence`] if the insert fails, including a duplicate idempotency key
-/// within one owner and kind.
+/// [`OperationError::ReporterNotAllowed`] if `reporter` is not in the allow-list of `kind`; nothing
+/// is written. [`OperationError::Persistence`] if the insert fails, including a duplicate
+/// idempotency key within one owner and kind.
 pub async fn accept<'e, E>(
     executor: E,
     owner_user_id: Uuid,
     kind: &str,
     correlation_id: &str,
     idempotency_key: Option<&str>,
+    reporter: Option<&str>,
     now: jiff::Timestamp,
 ) -> Result<Operation, OperationError>
 where
     E: PgExecutor<'e>,
 {
+    if let Some(reporter) = reporter
+        && !authority::allows(kind, reporter)
+    {
+        return Err(OperationError::ReporterNotAllowed {
+            kind: kind.to_owned(),
+            reporter: reporter.to_owned(),
+        });
+    }
     let operation_id = Uuid::now_v7();
     sqlx::query(
         "insert into operations.operations
              (operation_id, owner_user_id, kind, status, correlation_id, idempotency_key,
-              accepted_at, status_changed_at)
-         values ($1, $2, $3, 'accepted', $4, $5, $6, $6)",
+              reporter, accepted_at, status_changed_at)
+         values ($1, $2, $3, 'accepted', $4, $5, $6, $7, $7)",
     )
     .bind(operation_id)
     .bind(owner_user_id)
     .bind(kind)
     .bind(correlation_id)
     .bind(idempotency_key)
+    .bind(reporter)
     .bind(to_offset(now))
     .execute(executor)
     .await
@@ -185,6 +214,7 @@ where
         stage: None,
         progress_percent: None,
         correlation_id: correlation_id.to_owned(),
+        reporter: reporter.map(str::to_owned),
         retryable: false,
         cancellation_requested_at: None,
         accepted_at: now,
@@ -207,7 +237,7 @@ where
 {
     let row = sqlx::query(
         "select operation_id, owner_user_id, kind, status, stage, progress_percent,
-                correlation_id, retryable, cancellation_requested_at,
+                correlation_id, reporter, retryable, cancellation_requested_at,
                 accepted_at, status_changed_at, terminated_at
            from operations.operations where operation_id = $1",
     )
@@ -243,6 +273,7 @@ where
         correlation_id: row
             .try_get("correlation_id")
             .map_err(PersistenceError::Query)?,
+        reporter: row.try_get("reporter").map_err(PersistenceError::Query)?,
         retryable: row.try_get("retryable").map_err(PersistenceError::Query)?,
         cancellation_requested_at: requested_at.map(from_offset),
         accepted_at: from_offset(

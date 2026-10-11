@@ -61,11 +61,25 @@ fn message(producer: &str, tenant: Option<Uuid>, operation_id: Uuid) -> Incoming
     }
 }
 
-async fn accepted(pool: &sqlx::PgPool, kind: &str) -> Uuid {
-    platform_operations::accept(pool, OWNER, kind, CORRELATION, None, now())
+/// An operation accepted for `reporter`, the lane Platform dispatched it to (XR-021 R3-02).
+async fn accepted_by(pool: &sqlx::PgPool, kind: &str, reporter: Option<&str>) -> Uuid {
+    platform_operations::accept(pool, OWNER, kind, CORRELATION, None, reporter, now())
         .await
         .expect("accepting")
         .operation_id
+}
+
+/// An operation accepted for the lane the kind's own intake path records: the extractor for a
+/// capture, channel-digests for a channel digest, and none for a kind bound some other way.
+async fn accepted(pool: &sqlx::PgPool, kind: &str) -> Uuid {
+    let reporter = match kind {
+        "content.capture.submit" => Some("ratatoskr-extractor"),
+        "channel_digest.subscription.set"
+        | "channel_digest.run"
+        | "channel_digest.schedule.occurrence" => Some("ratatoskr-channel-digests"),
+        _ => None,
+    };
+    accepted_by(pool, kind, reporter).await
 }
 
 async fn status(pool: &sqlx::PgPool, operation_id: Uuid) -> OperationStatus {
@@ -161,7 +175,7 @@ async fn each_capture_producer_with_the_owners_tenant_is_applied() {
         "ratatoskr-instagram",
         "ratatoskr-threads",
     ] {
-        let operation = accepted(pool, "content.capture.submit").await;
+        let operation = accepted_by(pool, "content.capture.submit", Some(producer)).await;
         expect(
             pool,
             operation,
@@ -170,6 +184,104 @@ async fn each_capture_producer_with_the_owners_tenant_is_applied() {
         )
         .await;
     }
+
+    harness.cleanup().await.expect("cleanup");
+}
+
+/// XR-021 R3-02: the lane an operation was dispatched to is recorded, and only that lane reports.
+#[tokio::test]
+async fn an_x_report_for_an_instagram_capture_is_rejected() {
+    let harness = TestDatabase::create().await.expect("a test database");
+    let pool = harness.pool();
+    let operation = accepted_by(pool, "content.capture.submit", Some("ratatoskr-instagram")).await;
+
+    for other in ["ratatoskr-x", "ratatoskr-threads", "ratatoskr-extractor"] {
+        expect(
+            pool,
+            operation,
+            &message(other, Some(OWNER), operation),
+            Outcome::Rejected,
+        )
+        .await;
+    }
+
+    harness.cleanup().await.expect("cleanup");
+}
+
+#[tokio::test]
+async fn a_capture_report_from_its_recorded_reporter_is_applied() {
+    let harness = TestDatabase::create().await.expect("a test database");
+    let pool = harness.pool();
+    let operation = accepted_by(pool, "content.capture.submit", Some("ratatoskr-instagram")).await;
+
+    let stored = platform_operations::find(pool, operation)
+        .await
+        .expect("reading")
+        .expect("the operation");
+    assert_eq!(stored.reporter.as_deref(), Some("ratatoskr-instagram"));
+    expect(
+        pool,
+        operation,
+        &message("ratatoskr-instagram", Some(OWNER), operation),
+        Outcome::Applied,
+    )
+    .await;
+
+    harness.cleanup().await.expect("cleanup");
+}
+
+#[tokio::test]
+async fn a_listed_kind_without_a_recorded_reporter_rejects_every_producer() {
+    let harness = TestDatabase::create().await.expect("a test database");
+    let pool = harness.pool();
+
+    for (kind, producers) in AUTHORITY {
+        let Producers::Listed(listed) = producers else {
+            continue;
+        };
+        let operation = accepted_by(pool, kind, None).await;
+        for producer in *listed {
+            expect(
+                pool,
+                operation,
+                &message(producer, Some(OWNER), operation),
+                Outcome::Rejected,
+            )
+            .await;
+        }
+    }
+
+    harness.cleanup().await.expect("cleanup");
+}
+
+#[tokio::test]
+async fn accept_refuses_a_reporter_outside_the_kinds_list() {
+    let harness = TestDatabase::create().await.expect("a test database");
+    let pool = harness.pool();
+
+    for (kind, reporter) in [
+        ("content.capture.submit", "ratatoskr-channel-digests"),
+        ("channel_digest.run", "ratatoskr-extractor"),
+        ("ai_archive.import", "ratatoskr-chatgpt"),
+        ("github.sync.requested", "ratatoskr-github"),
+    ] {
+        let refused = platform_operations::accept(
+            pool,
+            OWNER,
+            kind,
+            CORRELATION,
+            None,
+            Some(reporter),
+            now(),
+        )
+        .await;
+        assert!(refused.is_err(), "{kind} accepted the reporter {reporter}");
+    }
+    let (count,): (i64,) = sqlx::query_as("select count(*) from operations.operations")
+        .fetch_one(pool)
+        .await
+        .expect("counting");
+    assert_eq!(count, 0, "a refused reporter must record no operation");
 
     harness.cleanup().await.expect("cleanup");
 }
@@ -413,6 +525,96 @@ fn every_minted_operation_kind_has_an_authority_row() {
     }
     // The schedule kind a service registers at runtime cannot be scanned from Platform's sources.
     assert!(producers_for("channel_digest.schedule.occurrence").is_some());
+}
+
+/// The arguments of every `platform_operations::accept(` call in `source`, split at the top level.
+fn accept_calls(source: &str) -> Vec<Vec<String>> {
+    let key = "platform_operations::accept(";
+    let mut calls = Vec::new();
+    let mut rest = source;
+    while let Some(at) = rest.find(key) {
+        let body = rest.get(at + key.len()..).unwrap_or_default();
+        let (mut depth, mut args, mut current) = (1_usize, Vec::new(), String::new());
+        for character in body.chars() {
+            match character {
+                '(' | '[' | '{' => depth += 1,
+                ')' | ']' | '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        break;
+                    }
+                }
+                ',' if depth == 1 => {
+                    args.push(current.trim().to_owned());
+                    current.clear();
+                    continue;
+                }
+                _ => {}
+            }
+            current.push(character);
+        }
+        if !current.trim().is_empty() {
+            args.push(current.trim().to_owned());
+        }
+        calls.push(args);
+        rest = body;
+    }
+    calls
+}
+
+/// XR-021 R3-02: a mint site that passes no lane for a kind with a listed allow-list creates an
+/// operation nobody may report for. The scan is textual (the mint sites live in crates this one
+/// cannot depend on): it finds the reporter argument (the sixth) of each production `accept` call,
+/// and the `reporter:` member of each route's `Intake` literal. It cannot prove the value is the
+/// right lane; the behavioural tests of each intake path do that.
+#[test]
+fn every_mint_site_passes_a_lane_for_a_listed_kind() {
+    for (name, source) in [
+        (
+            "public-api intake",
+            include_str!("../../public-api/src/intake.rs"),
+        ),
+        (
+            "ingest webhook",
+            include_str!("../../ingest/src/webhook.rs"),
+        ),
+        ("scheduler", include_str!("../../scheduling/src/lib.rs")),
+    ] {
+        let calls = accept_calls(source);
+        assert!(!calls.is_empty(), "{name} has no accept call to scan");
+        for args in calls {
+            assert_eq!(
+                args.len(),
+                7,
+                "{name}: accept takes seven arguments: {args:?}"
+            );
+            assert_ne!(args[5], "None", "{name} mints without a lane");
+        }
+    }
+    // AI-archive operations are bound by their acceptance record and record no lane.
+    let archives = accept_calls(include_str!("../../public-api/src/archives.rs"));
+    assert_eq!(archives.len(), 1);
+    assert_eq!(archives[0][5], "None");
+
+    for (name, source) in [
+        ("captures", include_str!("../../public-api/src/captures.rs")),
+        (
+            "channel digests",
+            include_str!("../../public-api/src/channel_digests.rs"),
+        ),
+    ] {
+        let literals = source.matches("Intake {").count();
+        assert!(literals > 0, "{name} builds no Intake to scan");
+        assert_eq!(
+            source.matches("reporter: ").count(),
+            literals,
+            "{name}: every Intake literal names its reporter"
+        );
+        assert!(
+            !source.contains("reporter: None"),
+            "{name} passes no lane for a listed kind"
+        );
+    }
 }
 
 #[test]

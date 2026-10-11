@@ -564,6 +564,42 @@ async fn previous_due_at_is_clamped_to_seven_days_for_a_sparse_cron() {
     database.cleanup().await.expect("cleanup");
 }
 
+/// R3-02. An occurrence's operation records the schedule's service as its reporter when that
+/// service is a producer the kind's authority row names, so only it may report for the occurrence.
+/// A schedule of a kind with no authority row records none: no producer may report for it anyway.
+#[tokio::test]
+async fn an_occurrence_operation_records_the_schedules_service_name() {
+    let database = TestDatabase::create().await.expect("a test database");
+    let pool = database.pool();
+    let due: Timestamp = "2026-10-10T06:00:00Z".parse().expect("a timestamp");
+    let digest_id = Uuid::now_v7();
+    insert_digest_schedule(pool, digest_id, Uuid::now_v7(), "0 6 * * *", due).await;
+    let github = Fixture::new(due);
+    github.insert(pool).await;
+
+    let report = run_once(pool, 32, due + SignedDuration::from_secs(7))
+        .await
+        .expect("the pass must run");
+    assert_eq!((report.due, report.published), (2, 2));
+
+    for (schedule_id, expected) in [
+        (digest_id, Some("ratatoskr-channel-digests")),
+        (github.schedule_id, None),
+    ] {
+        let reporter: Option<String> = sqlx::query_scalar(
+            "select op.reporter from operations.schedule_occurrences o
+               join operations.operations op on op.operation_id = o.operation_id
+              where o.occurrence_id = $1",
+        )
+        .bind(occurrence_id(schedule_id, due))
+        .fetch_one(pool)
+        .await
+        .expect("the occurrence operation");
+        assert_eq!(reporter.as_deref(), expected, "{schedule_id}");
+    }
+    database.cleanup().await.expect("cleanup");
+}
+
 /// S08. Every other command type keeps the legacy document, member for member.
 #[tokio::test]
 async fn a_github_schedule_keeps_the_legacy_command_document() {

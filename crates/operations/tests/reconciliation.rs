@@ -65,9 +65,9 @@ impl Fixture {
     async fn seed(&self, pool: &PgPool) {
         sqlx::query(
             "insert into operations.operations
-                 (operation_id, owner_user_id, kind, status, correlation_id,
+                 (operation_id, owner_user_id, kind, status, correlation_id, reporter,
                   accepted_at, status_changed_at)
-             values ($1, $2, 'content.capture.submit', $3, $4, $5, $5)",
+             values ($1, $2, 'content.capture.submit', $3, $4, 'ratatoskr-extractor', $5, $5)",
         )
         .bind(self.operation_id)
         .bind(OWNER)

@@ -95,6 +95,7 @@ async fn a_published_report_advances_the_projection() {
         "content.capture.submit",
         CORRELATION,
         None,
+        Some("ratatoskr-extractor"),
         now(),
     )
     .await
@@ -134,10 +135,17 @@ async fn archive_report_requires_subject_producer_and_bound_provider() {
     let harness = TestDatabase::create().await.expect("a test database");
     let pool = harness.pool();
     let owner = OWNER;
-    let operation =
-        platform_operations::accept(pool, owner, "ai_archive.import", CORRELATION, None, now())
-            .await
-            .expect("accepting");
+    let operation = platform_operations::accept(
+        pool,
+        owner,
+        "ai_archive.import",
+        CORRELATION,
+        None,
+        None,
+        now(),
+    )
+    .await
+    .expect("accepting");
     platform_operations::record_ai_archive_acceptance(
         pool,
         &platform_operations::AiArchiveAcceptance {
@@ -213,6 +221,7 @@ async fn provider_scoped_archive_report_requires_an_archive_binding() {
         "content.capture.submit",
         CORRELATION,
         None,
+        Some("ratatoskr-extractor"),
         now(),
     )
     .await
@@ -257,6 +266,7 @@ async fn a_success_report_round_trips_complete_blob_ref() {
         "content.capture.submit",
         CORRELATION,
         None,
+        Some("ratatoskr-extractor"),
         now(),
     )
     .await
@@ -315,10 +325,17 @@ async fn a_success_report_round_trips_complete_blob_ref() {
 async fn an_ai_archive_import_summary_round_trips_through_the_public_projection() {
     let harness = TestDatabase::create().await.expect("a test database");
     let pool = harness.pool();
-    let operation =
-        platform_operations::accept(pool, OWNER, "ai_archive.import", CORRELATION, None, now())
-            .await
-            .expect("accepting");
+    let operation = platform_operations::accept(
+        pool,
+        OWNER,
+        "ai_archive.import",
+        CORRELATION,
+        None,
+        None,
+        now(),
+    )
+    .await
+    .expect("accepting");
     let result = serde_json::from_value::<OperationResultRef>(serde_json::json!({
         "result_kind": "ai_archive.import",
         "target": "ai_archive:018f0000-0000-7000-8000-000000000131",
@@ -371,6 +388,7 @@ async fn a_failed_report_round_trips_error_and_warnings() {
         "content.capture.submit",
         CORRELATION,
         None,
+        Some("ratatoskr-extractor"),
         now(),
     )
     .await
@@ -447,6 +465,7 @@ async fn the_projection_applies_advances_and_absorbs_redelivery() {
         "content.capture.submit",
         CORRELATION,
         None,
+        Some("ratatoskr-extractor"),
         now(),
     )
     .await
@@ -539,6 +558,7 @@ async fn an_event_published_to_jetstream_reaches_the_projection() {
         "content.capture.submit",
         CORRELATION,
         None,
+        Some("ratatoskr-extractor"),
         now(),
     )
     .await
@@ -654,10 +674,17 @@ async fn a_partially_succeeded_report_without_a_diagnostic_is_rejected_and_leave
  {
     let harness = TestDatabase::create().await.expect("a test database");
     let pool = harness.pool();
-    let operation =
-        platform_operations::accept(pool, OWNER, "ai_archive.import", CORRELATION, None, now())
-            .await
-            .expect("accepting");
+    let operation = platform_operations::accept(
+        pool,
+        OWNER,
+        "ai_archive.import",
+        CORRELATION,
+        None,
+        None,
+        now(),
+    )
+    .await
+    .expect("accepting");
     assert_eq!(
         deliver(
             pool,
@@ -696,10 +723,17 @@ async fn a_partially_succeeded_report_without_a_diagnostic_is_rejected_and_leave
 async fn a_partially_succeeded_report_with_a_warning_is_applied() {
     let harness = TestDatabase::create().await.expect("a test database");
     let pool = harness.pool();
-    let operation =
-        platform_operations::accept(pool, OWNER, "ai_archive.import", CORRELATION, None, now())
-            .await
-            .expect("accepting");
+    let operation = platform_operations::accept(
+        pool,
+        OWNER,
+        "ai_archive.import",
+        CORRELATION,
+        None,
+        None,
+        now(),
+    )
+    .await
+    .expect("accepting");
     let mut partial = report(operation.operation_id, OperationStatus::PartiallySucceeded);
     partial.warnings =
         vec![ratatoskr_ai_archive_contracts::platform_receipt::incomplete_import_warning()];

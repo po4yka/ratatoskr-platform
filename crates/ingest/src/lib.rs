@@ -99,6 +99,15 @@ impl Target {
         Self::ALL.into_iter().find(|target| target.as_str() == raw)
     }
 
+    /// The service a signal to this target is dispatched to, recorded on its operation as the only
+    /// producer allowed to report for it (XR-021 R3-02).
+    #[must_use]
+    pub const fn reporter(self) -> &'static str {
+        match self {
+            Self::ContentCapture => "ratatoskr-extractor",
+        }
+    }
+
     /// The `operations.operations.kind` a signal to this target creates.
     #[must_use]
     pub const fn operation_kind(self) -> &'static str {
