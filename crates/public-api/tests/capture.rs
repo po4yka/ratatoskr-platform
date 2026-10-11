@@ -136,6 +136,59 @@ async fn an_explicit_x_browser_capture_produces_a_social_command_with_provenance
     harness.cleanup().await.expect("cleanup");
 }
 
+fn threads_capture(url: &str) -> String {
+    format!(
+        r#"{{"url":"{url}","social":{{"provider":"threads","captured_at":"2026-08-27T10:00:00Z","acquisition":"browser_extension","saved_authority":"explicit_user_capture"}}}}"#
+    )
+}
+
+/// C-1b (XR-021 R2-11). Threads' current domain is `threads.com`; the Threads service accepts all
+/// four of its hosts, so Platform must too, or a permalink copied today never reaches the Threads
+/// lane. A lookalike host and a plain `http` link stay refused.
+#[tokio::test]
+async fn threads_dot_com_permalinks_are_accepted_for_the_threads_provider() {
+    let harness = TestDatabase::create().await.expect("a test database");
+    let pool = harness.pool();
+    seed(pool, CREDENTIAL, AUDIENCE).await;
+    let app = app(state(&harness));
+
+    for (index, url) in [
+        "https://www.threads.com/@ratatoskr/post/Cx1AbcDefGh",
+        "https://threads.com/@ratatoskr/post/Cx1AbcDefGh",
+        "https://www.threads.net/@ratatoskr/post/Cx1AbcDefGh",
+        "https://threads.net/@ratatoskr/post/Cx1AbcDefGh",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let key = format!("threads-accept-{index}");
+        let (status, body) = send(
+            &app,
+            submit(Some(CREDENTIAL), Some(&key), &threads_capture(url)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::ACCEPTED, "{url}: {body}");
+    }
+    for (index, url) in [
+        "http://www.threads.com/@ratatoskr/post/Cx1AbcDefGh",
+        "https://threads.com.evil.example/@ratatoskr/post/Cx1AbcDefGh",
+        "https://evil.example/threads.com/@ratatoskr/post/Cx1AbcDefGh",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let key = format!("threads-refuse-{index}");
+        let (status, body) = send(
+            &app,
+            submit(Some(CREDENTIAL), Some(&key), &threads_capture(url)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{url}: {body}");
+    }
+
+    harness.cleanup().await.expect("cleanup");
+}
+
 /// C-2. A retry with the same key and body returns the ORIGINAL operation and creates nothing.
 #[tokio::test]
 async fn a_retry_returns_the_original_operation() {

@@ -256,7 +256,10 @@ fn is_provider_permalink(url: &str, provider: SocialCaptureProvider) -> bool {
             matches!(host.as_str(), "instagram.com" | "www.instagram.com")
         }
         SocialCaptureProvider::Threads => {
-            matches!(host.as_str(), "threads.net" | "www.threads.net")
+            matches!(
+                host.as_str(),
+                "threads.net" | "www.threads.net" | "threads.com" | "www.threads.com"
+            )
         }
         _ => false,
     }

@@ -15,8 +15,8 @@
 
 ## 4. Threads hosts (R2-11)
 
-- [ ] 4.1 Add `capture.rs::threads_dot_com_permalinks_are_accepted_for_the_threads_provider` and run it RED
-- [ ] 4.2 Add `threads.com` and `www.threads.com` to the Threads arm and run it GREEN
+- [x] 4.1 Add `capture.rs::threads_dot_com_permalinks_are_accepted_for_the_threads_provider` and run it RED
+- [x] 4.2 Add `threads.com` and `www.threads.com` to the Threads arm and run it GREEN
 
 ## 5. Chunk 413 in OpenAPI (R2-18)
 
