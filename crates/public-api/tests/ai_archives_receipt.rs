@@ -13,13 +13,20 @@
 )]
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU16, AtomicUsize, Ordering};
 
+use axum::Router;
+use axum::body::Body;
+use axum::response::IntoResponse as _;
+use axum::routing::post;
+use futures_util::StreamExt as _;
 use http::StatusCode;
 use platform_persistence::test_support::TestDatabase;
 use ratatoskr_ai_archive_contracts::platform_receipt::{
     ARCHIVE_MEDIA_TYPE, HEADER_ARCHIVE_BYTE_SIZE, HEADER_ARCHIVE_SHA256, HEADER_CORRELATION_ID,
     HEADER_DEVICE_ID, HEADER_OPERATION_ID, HEADER_USER_ID,
 };
+use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 
 mod support;
@@ -155,4 +162,218 @@ async fn finalize_removes_the_staging_directory_after_success() {
     task.abort();
     let _ = std::fs::remove_dir_all(&staging);
     harness.cleanup().await.expect("cleanup");
+}
+
+/// A loopback receiver whose answer to `POST /v1/ai-archives/receipt` is whatever status is stored
+/// in `answer` at that moment: 202 accepts, any other status is a contract `ErrorEnvelope`. It
+/// drains the body first, as a real receiver does, and counts the deliveries it saw.
+async fn scripted_receipt_stub(
+    answer: Arc<AtomicU16>,
+    deliveries: Arc<AtomicUsize>,
+) -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("a loopback listener");
+    let address = listener.local_addr().expect("a listener address");
+    let router = Router::new().route(
+        "/v1/ai-archives/receipt",
+        post(move |body: Body| {
+            let answer = Arc::clone(&answer);
+            let deliveries = Arc::clone(&deliveries);
+            async move {
+                let _ = body.into_data_stream().count().await;
+                deliveries.fetch_add(1, Ordering::SeqCst);
+                let status =
+                    StatusCode::from_u16(answer.load(Ordering::SeqCst)).expect("a scripted status");
+                if status.is_success() {
+                    return (status, axum::Json(serde_json::Value::Null)).into_response();
+                }
+                (
+                    status,
+                    axum::Json(serde_json::json!({
+                        "code": "chatgpt.account.unmapped",
+                        "message": "This user is not set up for archive import.",
+                        "retryable": false,
+                    })),
+                )
+                    .into_response()
+            }
+        }),
+    );
+    let task = tokio::spawn(async move {
+        axum::serve(listener, router)
+            .await
+            .expect("the scripted receipt stub serves");
+    });
+    (address, task)
+}
+
+/// One archive uploaded and ready to finalize against a receiver that answers `initial`.
+struct Upload {
+    harness: TestDatabase,
+    api: axum::Router,
+    credential: String,
+    operation_id: String,
+    uploads_path: String,
+    token: String,
+    staging: std::path::PathBuf,
+    answer: Arc<AtomicU16>,
+    deliveries: Arc<AtomicUsize>,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl Upload {
+    async fn start(initial: u16) -> Self {
+        let answer = Arc::new(AtomicU16::new(initial));
+        let deliveries = Arc::new(AtomicUsize::new(0));
+        let (address, task) =
+            scripted_receipt_stub(Arc::clone(&answer), Arc::clone(&deliveries)).await;
+        let harness = TestDatabase::create().await.expect("a test database");
+        let device_id = seed_device(harness.pool()).await;
+        let staging = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/archive-staging-tests")
+            .join(uuid::Uuid::now_v7().simple().to_string());
+        std::fs::create_dir_all(&staging).expect("a staging root");
+        let mut api_state = state(&harness, address);
+        api_state.archive_staging_root = Arc::new(staging.clone());
+        let api = app(api_state);
+        let credential = device_credential(&api, device_id).await;
+        let archive = multi_chunk_archive();
+        let (operation_id, uploads_path, token) = prepare_and_open(
+            &api,
+            &credential,
+            "refusal",
+            &sha256_hex(&archive),
+            archive.len(),
+            65_536,
+        )
+        .await;
+        upload_all(&api, &credential, &uploads_path, &token, &archive).await;
+        Self {
+            harness,
+            api,
+            credential,
+            operation_id,
+            uploads_path,
+            token,
+            staging,
+            answer,
+            deliveries,
+            task,
+        }
+    }
+
+    async fn finalize(&self) -> (StatusCode, serde_json::Value) {
+        send(
+            &self.api,
+            finalize_request(&self.uploads_path, &self.token, &self.credential),
+        )
+        .await
+    }
+
+    async fn operation(&self) -> serde_json::Value {
+        let request = http::Request::builder()
+            .method("GET")
+            .uri(format!("/v1/operations/{}", self.operation_id))
+            .header("authorization", format!("Bearer {}", self.credential))
+            .body(axum::body::Body::empty())
+            .expect("an operation request");
+        let (status, body) = send(&self.api, request).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        body
+    }
+
+    async fn session_state(&self) -> String {
+        sqlx::query_scalar(
+            "select session_state from operations.ai_archive_transfers where resumption_token = $1",
+        )
+        .bind(&self.token)
+        .fetch_one(self.harness.pool())
+        .await
+        .expect("the transfer session")
+    }
+
+    fn staged(&self) -> bool {
+        self.staging.join(&self.token).exists()
+    }
+
+    async fn finish(self) {
+        self.task.abort();
+        let _ = std::fs::remove_dir_all(&self.staging);
+        self.harness.cleanup().await.expect("cleanup");
+    }
+}
+
+/// R3-03. A receiver that refuses the archive for good ends the operation in the same request, and
+/// the receiver's refusal reaches the client unchanged.
+#[tokio::test]
+async fn a_403_from_the_receiver_ends_the_operation() {
+    let upload = Upload::start(403).await;
+
+    let (status, refusal) = upload.finalize().await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{refusal}");
+    assert_eq!(refusal["code"], "chatgpt.account.unmapped");
+
+    let operation = upload.operation().await;
+    assert_eq!(operation["status"], "failed", "{operation}");
+    assert_eq!(operation["stage"], "delivery");
+    assert_eq!(
+        operation["errors"][0]["code"],
+        "platform.ai_archive.delivery_failed"
+    );
+    assert_eq!(upload.session_state().await, "failed");
+    assert!(!upload.staged(), "the staging directory is removed");
+
+    let (second, _) = upload.finalize().await;
+    assert_eq!(second, StatusCode::NOT_FOUND, "a dead token is gone");
+    assert_eq!(upload.deliveries.load(Ordering::SeqCst), 1);
+    upload.finish().await;
+}
+
+#[tokio::test]
+async fn a_413_from_the_receiver_ends_the_operation() {
+    let upload = Upload::start(413).await;
+
+    let (status, refusal) = upload.finalize().await;
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE, "{refusal}");
+
+    let operation = upload.operation().await;
+    assert_eq!(operation["status"], "failed", "{operation}");
+    assert_eq!(upload.session_state().await, "failed");
+    assert!(!upload.staged());
+    upload.finish().await;
+}
+
+/// R3-03. A receiver that is merely unavailable does not end anything: the client retries finalize.
+#[tokio::test]
+async fn a_503_from_the_receiver_leaves_the_operation_open() {
+    let upload = Upload::start(503).await;
+
+    let (status, refusal) = upload.finalize().await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{refusal}");
+    assert_eq!(upload.operation().await["status"], "accepted");
+    assert_eq!(upload.session_state().await, "open");
+    assert!(upload.staged(), "the chunks stay for the retry");
+
+    upload.answer.store(202, Ordering::SeqCst);
+    let (status, completed) = upload.finalize().await;
+    assert_eq!(status, StatusCode::OK, "{completed}");
+    assert_eq!(completed["outcome"], "stored");
+    assert_eq!(upload.session_state().await, "finalized");
+    upload.finish().await;
+}
+
+/// R3-03. A receiver's 401 is Edge's fault to explain, never the device's: it becomes a 502 and
+/// ends nothing.
+#[tokio::test]
+async fn an_upstream_401_leaves_the_operation_open() {
+    let upload = Upload::start(401).await;
+
+    let (status, refusal) = upload.finalize().await;
+    assert_eq!(status, StatusCode::BAD_GATEWAY, "{refusal}");
+    assert_eq!(refusal["code"], "edge.upstream_invalid_response");
+    assert_eq!(upload.operation().await["status"], "accepted");
+    assert_eq!(upload.session_state().await, "open");
+    assert!(upload.staged());
+    upload.finish().await;
 }

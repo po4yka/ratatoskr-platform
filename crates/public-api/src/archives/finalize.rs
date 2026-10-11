@@ -177,7 +177,54 @@ pub async fn finalize_transfer(
         }
         return stored_completion(&binding, &provider);
     }
+    if is_permanent_refusal(response.status()) {
+        end_delivery(&state, &binding, operation_id, &directory).await;
+    }
     response
+}
+
+/// Whether a receiver's answer means it will never take this archive: a client error other than
+/// the two that say "ask again" (`408`, `429`). A `5xx`, a timeout and Edge's own `502` for an
+/// upstream `401` are not permanent, so the client may retry finalize (XR-021 R3-03).
+fn is_permanent_refusal(status: http::StatusCode) -> bool {
+    status.is_client_error()
+        && status != http::StatusCode::REQUEST_TIMEOUT
+        && status != http::StatusCode::TOO_MANY_REQUESTS
+}
+
+/// End a delivery the receiver refused for good, in the request that learned of it: the transfer
+/// session becomes `failed` (its token is dead from then on), the operation fails with
+/// `platform.ai_archive.delivery_failed`, and the staged bytes are removed. Each step is best
+/// effort and logged on failure, because the client already has the receiver's refusal to act on;
+/// a step that did not land is picked up by the stale-operation reaper and the staging sweep.
+async fn end_delivery(
+    state: &ApiState,
+    binding: &TransferBinding,
+    operation_id: Uuid,
+    directory: &std::path::Path,
+) {
+    if let Err(error) = sqlx::query(
+        "update operations.ai_archive_transfers set session_state = 'failed'
+          where resumption_token = $1 and session_state = 'open'",
+    )
+    .bind(binding.token.as_str())
+    .execute(state.database.pool())
+    .await
+    {
+        tracing::error!(%error, "a refused archive transfer could not be marked failed");
+    }
+    if let Err(error) = platform_operations::fail_ai_archive_delivery(
+        state.database.pool(),
+        operation_id,
+        jiff::Timestamp::now(),
+    )
+    .await
+    {
+        tracing::error!(%error, "a refused archive delivery could not fail its operation");
+    }
+    if let Err(error) = tokio::fs::remove_dir_all(directory).await {
+        tracing::warn!(%error, "the staging directory of a refused archive could not be removed");
+    }
 }
 
 fn stored_completion(binding: &TransferBinding, provider: &str) -> Response {

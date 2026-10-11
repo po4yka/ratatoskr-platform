@@ -9,7 +9,7 @@ use axum::body::Body;
 use axum::extract::{Extension, Request, State};
 use axum::response::Response;
 use http::header::{AUTHORIZATION, CONNECTION, COOKIE, HOST};
-use http::{HeaderMap, HeaderName, HeaderValue, Uri};
+use http::{HeaderMap, HeaderName, HeaderValue, StatusCode, Uri};
 use hyper_util::client::legacy::Client;
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::TokioExecutor;
@@ -410,7 +410,7 @@ impl Gateway {
         )
         .await
         {
-            Ok(Ok(response)) => response_from_upstream(response).await,
+            Ok(Ok(response)) => response_from_upstream(response, provider).await,
             Ok(Err(_)) => {
                 tracing::warn!(provider, "archive importer could not be reached");
                 platform_http::reject(FailureKind::UpstreamUnavailable)
@@ -482,7 +482,7 @@ pub async fn proxy(
     )
     .await
     {
-        Ok(Ok(response)) => response_from_upstream(response).await,
+        Ok(Ok(response)) => response_from_upstream(response, &route.prefix).await,
         Ok(Err(_)) => {
             tracing::warn!("domain-service upstream could not be reached");
             platform_http::reject(FailureKind::UpstreamUnavailable)
@@ -497,8 +497,29 @@ pub async fn proxy(
 /// Turn an upstream response into an Edge response without buffering successful or streaming
 /// bodies. Error bodies are bounded and parsed because a downstream error is public only when it
 /// is already the shared contract envelope.
-async fn response_from_upstream(response: hyper::Response<hyper::body::Incoming>) -> Response {
+///
+/// A `401` or `407` is never relayed (XR-021 R3-03). Edge authenticated the caller before it
+/// forwarded and sends no `Authorization` to a domain service, so an upstream authentication
+/// challenge is a deployment or contract fault between Edge and that service. Relayed, it would
+/// read to a client as its own credential being rejected, and the export agent removes its pairing
+/// on exactly that. `route` is the configured route prefix or the archive provider, both fixed
+/// labels; the log carries only it and a class.
+async fn response_from_upstream(
+    response: hyper::Response<hyper::body::Incoming>,
+    route: &str,
+) -> Response {
     let (mut parts, body) = response.into_parts();
+    if matches!(
+        parts.status,
+        StatusCode::UNAUTHORIZED | StatusCode::PROXY_AUTHENTICATION_REQUIRED
+    ) {
+        tracing::warn!(
+            route,
+            class = "upstream_unauthenticated",
+            "a domain service answered an authentication challenge Edge never sent"
+        );
+        return platform_http::reject(FailureKind::UpstreamInvalidResponse);
+    }
     parts.headers = response_headers(&parts.headers);
     if !parts.status.is_client_error() && !parts.status.is_server_error() {
         return Response::from_parts(parts, Body::new(body));

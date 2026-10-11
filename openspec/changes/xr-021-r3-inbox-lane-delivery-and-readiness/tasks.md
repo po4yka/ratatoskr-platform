@@ -10,8 +10,8 @@
 
 ## 3. Upstream 401 and permanent refusal (R3-03)
 
-- [ ] 3.1 Add `gateway.rs::an_upstream_401_is_answered_502`, `an_upstream_407_is_answered_502` and the `ai_archives.rs` and `ai_archives_receipt.rs` finalize tests for 403, 413, 503 and 401, and run them RED
-- [ ] 3.2 Map 401 and 407 in `response_from_upstream`, terminate the delivery on a permanent refusal in `finalize_transfer`, document the responses, regenerate `openapi/openapi.json` with `openapic` if the route documentation changed, and run 3.1 GREEN
+- [x] 3.1 Add `gateway.rs::an_upstream_401_is_answered_502`, `an_upstream_407_is_answered_502` and the `ai_archives.rs` and `ai_archives_receipt.rs` finalize tests for 403, 413, 503 and 401, and run them RED
+- [x] 3.2 Map 401 and 407 in `response_from_upstream`, terminate the delivery on a permanent refusal in `finalize_transfer`, document the responses, regenerate `openapi/openapi.json` with `openapic` if the route documentation changed, and run 3.1 GREEN
 
 ## 4. Edge readiness and route diagnostics (R3-13)
 

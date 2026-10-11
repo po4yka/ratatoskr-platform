@@ -271,8 +271,22 @@ pub const FINALIZE_DOC: RouteDoc = RouteDoc {
             payload: Some(Payload::Json("ErrorEnvelope")),
         },
         ResponseDoc {
+            status: 403,
+            description: "The receiver refused the archive for good (any client error other than \
+                          408 and 429 is relayed unchanged; 403 is the receiver's answer for a \
+                          user it is not set up for). The transfer session and the operation have \
+                          failed and the staged bytes are gone; the token is no longer valid.",
+            payload: Some(Payload::Json("ErrorEnvelope")),
+        },
+        ResponseDoc {
             status: 404,
             description: "The bound session is unavailable to this device.",
+            payload: Some(Payload::Json("ErrorEnvelope")),
+        },
+        ResponseDoc {
+            status: 502,
+            description: "The receiver answered something Edge cannot relay, including an \
+                          authentication challenge. Nothing has ended: finalize may be retried.",
             payload: Some(Payload::Json("ErrorEnvelope")),
         },
     ],

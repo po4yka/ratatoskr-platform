@@ -195,6 +195,49 @@ async fn nonconforming_downstream_error_becomes_an_edge_error_envelope() {
     harness.cleanup().await.expect("cleanup");
 }
 
+/// R3-03. Edge authenticates before it forwards and sends the service no `Authorization`, so a
+/// service's own 401 or 407 is a deployment fault. Relayed, it would read to a client as its own
+/// credential being rejected.
+#[tokio::test]
+async fn an_upstream_401_is_answered_502() {
+    upstream_status_is_answered_502(StatusCode::UNAUTHORIZED).await;
+}
+
+#[tokio::test]
+async fn an_upstream_407_is_answered_502() {
+    upstream_status_is_answered_502(StatusCode::PROXY_AUTHENTICATION_REQUIRED).await;
+}
+
+async fn upstream_status_is_answered_502(upstream: StatusCode) {
+    let (address, task) = stub(Router::new().route(
+        "/v1/k/search",
+        any(move || async move {
+            (
+                upstream,
+                axum::Json(serde_json::json!({
+                    "code": "knowledge.auth.unauthenticated",
+                    "message": "The service did not recognise the caller.",
+                    "retryable": false,
+                })),
+            )
+        }),
+    ))
+    .await;
+    let harness = TestDatabase::create().await.expect("a test database");
+    seed(harness.pool()).await;
+    let app = app(&harness, gateway(address, GatewayRouteClass::Control), 15);
+
+    let (status, body) = send(&app, request(Some(CREDENTIAL), Body::empty())).await;
+
+    assert_eq!(status, StatusCode::BAD_GATEWAY, "{upstream}: {body}");
+    assert_eq!(
+        body.get("code").and_then(serde_json::Value::as_str),
+        Some("edge.upstream_invalid_response")
+    );
+    task.abort();
+    harness.cleanup().await.expect("cleanup");
+}
+
 /// A listener that refuses connections is a truthful retryable service unavailability, never 200.
 #[tokio::test]
 async fn refused_downstream_connection_is_a_truthful_503() {
