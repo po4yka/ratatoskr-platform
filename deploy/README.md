@@ -122,7 +122,8 @@ for role in edge ingest scheduler; do
   sudo install -m 0640 -o root -g "ratatoskr-$role" \
     "deploy/systemd/$role.conf.example" "/etc/ratatoskr/$role.conf"
 done
-# Edit each one: the CHANGE-ME passwords, and edge's assertion key and OAuth completion URL.
+# Edit each one: the CHANGE-ME passwords, edge's assertion key (see "The Telegram assertion key"
+# below) and its OAuth completion URL.
 sudo cp deploy/systemd/ratatoskr-*.service /etc/systemd/system/
 sudo cp deploy/logrotate/ratatoskr /etc/logrotate.d/ratatoskr
 sudo systemctl daemon-reload
@@ -157,6 +158,26 @@ other statement is a `grant`, an `alter role`, or an install.
 **A schema change reaches this database only if the database is recreated.** `ratatoskr-edge`
 applies `schema.sql` when the `identity` schema is absent, and skips the apply when the schema is
 already there. An edit to the file therefore changes nothing on a host that has already run step 6.
+
+## The Telegram assertion key
+
+`POST /v1/sessions/telegram` verifies an identity assertion that `ratatoskr-telegram` signs with an Ed25519 key. Telegram holds the PRIVATE seed (a 64-hex-character file, `RATATOSKR__PLATFORM__ASSERTION_SIGNING_KEY_FILE`) and Edge holds only the PUBLIC key, as base64 with padding, in `RATATOSKR__IDENTITY__ASSERTION_KEY` (ADR-0011, rule V14). `edge.conf.example` ships that line active with the placeholder `CHANGE-ME`, which the loader refuses, so an operator who skips this procedure gets a startup error naming `identity.assertion_key` rather than a Mini App that silently answers 401. On the host:
+
+```bash
+# 1. Generate the seed with Telegram's own command. It writes 64 lowercase hex characters, mode 0600,
+#    refuses to overwrite an existing file, and prints the PUBLIC key only.
+sudo ratatoskr-telegram-webhook assertion-key generate /etc/ratatoskr/secrets/telegram-platform-signing-key
+
+# 2. The seed is read by Telegram, so give it to Telegram's group.
+sudo chown root:ratatoskr-telegram-secrets /etc/ratatoskr/secrets/telegram-platform-signing-key
+sudo chmod 0640 /etc/ratatoskr/secrets/telegram-platform-signing-key
+
+# 3. Derive the public key again whenever it is needed (it prints nothing else on stdout) and paste
+#    it into the RATATOSKR__IDENTITY__ASSERTION_KEY line of /etc/ratatoskr/edge.conf.
+sudo ratatoskr-telegram-webhook assertion-key public /etc/ratatoskr/secrets/telegram-platform-signing-key
+```
+
+The known-answer check for both ends is RFC 8032 section 7.1, test 1: the seed `9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60` has the public key `11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=`. Do not use that pair on a host. After editing `edge.conf`, `ratatoskr-edge check-config` accepts the line and `GET /v1/capabilities` lists `telegram.mini_app`.
 
 ## Checking it
 

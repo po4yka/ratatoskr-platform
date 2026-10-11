@@ -173,3 +173,93 @@ fn edge_with_the_shipped_route_table_is_ready_without_any_receiver() {
     assert_eq!(body.matches("\"stale\":true").count(), 7, "{body}");
     assert_eq!(body.matches("\"document\":null").count(), 7, "{body}");
 }
+
+/// R3-12. The Edge example ships `RATATOSKR__IDENTITY__ASSERTION_KEY=CHANGE-ME` active. The loader
+/// refuses the placeholder at startup, by naming the key, and accepts the RFC 8032 vector (the
+/// public key of Telegram's known-answer seed), in the form the example documents.
+#[test]
+fn the_edge_example_assertion_key_is_checked_at_startup() {
+    const VECTOR: &str = "11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=";
+    let example = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../deploy/systemd/edge.conf.example"),
+    )
+    .expect("the Edge example");
+    let placeholder = example
+        .lines()
+        .map(str::trim)
+        .find_map(|line| line.strip_prefix("RATATOSKR__IDENTITY__ASSERTION_KEY="))
+        .expect("the example carries an active assertion key line");
+
+    let refused = Command::new(built_binary("ratatoskr-edge"))
+        .arg("check-config")
+        .env("RATATOSKR__IDENTITY__ASSERTION_KEY", placeholder)
+        .output()
+        .expect("check-config must run");
+    let report = String::from_utf8_lossy(&refused.stderr);
+    assert_eq!(refused.status.code(), Some(78), "{report}");
+    assert!(report.contains("identity.assertion_key"), "{report}");
+    assert!(
+        !report.contains(placeholder) || placeholder.is_empty(),
+        "the report echoed the supplied value: {report}"
+    );
+
+    let accepted = Command::new(built_binary("ratatoskr-edge"))
+        .arg("check-config")
+        .env("RATATOSKR__IDENTITY__ASSERTION_KEY", VECTOR)
+        .output()
+        .expect("check-config must run");
+    assert_eq!(
+        accepted.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&accepted.stderr)
+    );
+}
+
+/// R3-12. Edge booted with a database and the RFC 8032 public key offers the Telegram Mini App.
+/// Without the key `telegram.mini_app` is absent from the capability document (ADR-0011).
+#[test]
+fn an_edge_with_the_assertion_key_and_a_database_offers_the_telegram_mini_app() {
+    const VECTOR: &str = "11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=";
+    let _edge_boot = EDGE_BOOT_LOCK.lock().expect("the edge boot lock");
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("a fixture runtime");
+    let database = runtime
+        .block_on(TestDatabase::create())
+        .expect("a prepared database");
+    seed_browser_session(&runtime, &database);
+
+    let mut offered = Vec::new();
+    for (public, admin, key) in [(8102, 9475, Some(VECTOR)), (8103, 9476, None)] {
+        let mut command = Command::new(built_binary("ratatoskr-edge"));
+        command
+            .env("RATATOSKR__PUBLIC__BIND", format!("127.0.0.1:{public}"))
+            .env("RATATOSKR__ADMIN__BIND", format!("127.0.0.1:{admin}"))
+            .env("RATATOSKR__DATABASE__URL", database.url())
+            .env("RATATOSKR__BUS__URL", bus_url())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        if let Some(key) = key {
+            command.env("RATATOSKR__IDENTITY__ASSERTION_KEY", key);
+        }
+        let mut child = command.spawn().expect("edge spawns");
+        let ready = wait_until_ready(admin);
+        let capabilities = public_get(public, "/v1/capabilities", BOOT_CREDENTIAL);
+        terminate(&child);
+        child.wait().expect("waiting for edge");
+        assert!(ready, "edge never became ready on {public}");
+        let (line, body) = capabilities.expect("the capability document is served");
+        assert!(line.contains("200"), "{line}\n{body}");
+        offered.push(body.contains("\"telegram.mini_app\""));
+    }
+    runtime
+        .block_on(database.cleanup())
+        .expect("the fixture database must drop");
+    assert_eq!(
+        offered,
+        [true, false],
+        "telegram.mini_app is offered exactly when the assertion key is configured"
+    );
+}

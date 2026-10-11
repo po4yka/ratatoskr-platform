@@ -222,3 +222,38 @@ async fn a_nonce_can_be_redeemed_once() {
             .expect("a count");
     assert_eq!(stored, 1);
 }
+
+/// RFC 8032 section 7.1, test 1: the seed, and the public key in the base64 form that rule V14 and
+/// `RATATOSKR__IDENTITY__ASSERTION_KEY` take. Telegram's `assertion-key public` prints the same
+/// string for the same seed, so the two repositories agree on a standard vector (XR-021 R3-12).
+const RFC_8032_SEED_HEX: &str = "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60";
+const RFC_8032_PUBLIC_BASE64: &str = "11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=";
+
+/// A-11. An assertion signed with the RFC 8032 seed verifies against the base64 public key. This
+/// documents behaviour that already holds (the vector is a standard Ed25519 pair), so it was not
+/// seen failing first; it pins the string the operator procedure and the Edge example rely on.
+#[test]
+fn the_rfc_8032_vector_verifies() {
+    let seed: Vec<u8> = RFC_8032_SEED_HEX
+        .as_bytes()
+        .chunks(2)
+        .map(|pair| {
+            let pair = std::str::from_utf8(pair).expect("ASCII hex");
+            u8::from_str_radix(pair, 16).expect("a hex byte")
+        })
+        .collect();
+    let key = Ed25519KeyPair::from_seed_unchecked(&seed).expect("the RFC seed is a valid seed");
+    let public = base64::Engine::decode(
+        &base64::engine::general_purpose::STANDARD,
+        RFC_8032_PUBLIC_BASE64,
+    )
+    .expect("the public key is padded standard base64");
+    assert_eq!(public.len(), 32);
+    assert_eq!(key.public_key().as_ref(), public.as_slice());
+
+    let claims = claims();
+    let token = assertion::sign(&claims, &key).expect("signing");
+    let verified =
+        assertion::verify(&token, &public, AUDIENCE, now()).expect("a vector-signed assertion");
+    assert_eq!(verified, claims);
+}

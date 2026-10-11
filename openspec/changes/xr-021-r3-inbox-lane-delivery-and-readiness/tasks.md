@@ -21,8 +21,8 @@
 
 ## 5. The assertion key procedure (R3-12)
 
-- [ ] 5.1 Add `deployment_profile.rs::the_edge_example_enables_the_assertion_key` and `identity::the_rfc_8032_vector_verifies`, and run the first RED on the commented-out line (the second documents behaviour that already holds and is not a RED)
-- [ ] 5.2 Activate `RATATOSKR__IDENTITY__ASSERTION_KEY=CHANGE-ME` in `edge.conf.example` and `.env.example`, document the procedure in `deploy/README.md`, and run 5.1 GREEN
+- [x] 5.1 Add `deployment_profile.rs::the_edge_example_enables_the_assertion_key` and `identity::the_rfc_8032_vector_verifies`, and run the first RED on the commented-out line (the second documents behaviour that already holds and is not a RED)
+- [x] 5.2 Activate `RATATOSKR__IDENTITY__ASSERTION_KEY=CHANGE-ME` in `edge.conf.example` and `.env.example`, document the procedure in `deploy/README.md`, and run 5.1 GREEN
 
 ## 6. Operator documentation (R3-11, R3-19)
 

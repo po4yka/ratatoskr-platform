@@ -82,9 +82,13 @@ RATATOSKR__BUS__URL=nats://127.0.0.1:4222
 RATATOSKR__BUS__NKEY_SEED_PATH=/etc/ratatoskr/edge.nkey
 
 # The Ed25519 PUBLIC key of `ratatoskr-telegram`, base64 with padding (ADR-0011). Platform holds
-# only the public half, so this is not a secret. Absent means `/v1/sessions/telegram` refuses and
-# `GET /v1/capabilities` reports `telegram.mini_app` unavailable.
-#RATATOSKR__IDENTITY__ASSERTION_KEY=
+# only the public half, so this is not a secret. The placeholder below is refused at startup (rule
+# V14, `check-config` names `identity.assertion_key`) until it is replaced: derive the real value on
+# the host with `ratatoskr-telegram-webhook assertion-key public <seed file>`; the whole procedure is
+# in deploy/README.md, "The Telegram assertion key". Delete the line to run without the Mini App:
+# absent means `/v1/sessions/telegram` refuses and `GET /v1/capabilities` reports
+# `telegram.mini_app` unavailable.
+RATATOSKR__IDENTITY__ASSERTION_KEY=CHANGE-ME
 
 # Where a browser is sent after a provider callback has been relayed. Configured, never taken from
 # the callback: every parameter of that request is attacker-supplied (ADR-0012).

@@ -237,9 +237,12 @@ fn the_config_file_path_variable_scheme_has_no_reserved_collisions() {
 fn every_variable_in_env_example_overrides_its_field() {
     let text = env_example();
 
+    // A variable is documented whether its line is commented out (a default an operator may
+    // override) or active (a placeholder the loader refuses until it is replaced: the assertion
+    // key, XR-021 R3-12).
     let documented: BTreeSet<&str> = text
         .lines()
-        .filter_map(|line| line.strip_prefix('#'))
+        .map(|line| line.strip_prefix('#').unwrap_or(line))
         .filter(|line| line.starts_with("RATATOSKR__"))
         .filter_map(|line| line.split_once('='))
         .map(|(name, _)| name)

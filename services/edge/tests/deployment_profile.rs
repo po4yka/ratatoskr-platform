@@ -324,6 +324,42 @@ fn edge_profile_declares_the_canonical_domain_gateway_table() {
     }
 }
 
+/// The value of the first ACTIVE (uncommented) `KEY=value` line of `text`.
+fn active_setting(text: &str, key: &str) -> Option<String> {
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !line.starts_with('#'))
+        .find_map(|line| line.strip_prefix(&format!("{key}=")))
+        .map(str::to_owned)
+}
+
+/// R3-12. Following the shipped Edge examples must not leave `telegram.mini_app` unavailable by
+/// accident: the assertion key line is active in both, carrying a placeholder the loader refuses
+/// (rule V14), so an operator who forgets it gets a startup error that names the key rather than a
+/// Mini App that quietly 401s. The boot test `the_edge_example_assertion_key_is_checked_at_startup`
+/// runs the loader on the placeholder and on the RFC 8032 vector.
+#[test]
+fn the_edge_example_enables_the_assertion_key() {
+    let root_example = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.env.example"),
+    )
+    .expect("the repository .env.example");
+    for (name, text) in [
+        ("edge.conf.example", environment(RuntimeRole::Edge)),
+        (".env.example", root_example),
+    ] {
+        assert_eq!(
+            active_setting(&text, "RATATOSKR__IDENTITY__ASSERTION_KEY").as_deref(),
+            Some("CHANGE-ME"),
+            "{name} must carry an active RATATOSKR__IDENTITY__ASSERTION_KEY=CHANGE-ME line"
+        );
+        assert!(
+            text.contains("ratatoskr-telegram-webhook assertion-key public"),
+            "{name} must point at the command that derives the key"
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------------------------
 // The deployed ACL, statically (XR-021 CONTRACTS.md section S03). The real-broker matrix in
 // `crates/eventing/tests/deployed_nats_config.rs` proves the same table on the wire.
