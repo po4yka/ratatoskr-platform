@@ -104,6 +104,8 @@ docker exec -i shared-postgres psql -U postgres -d postgres < deploy/postgres/01
 # Set each password through stdin, never as an argument: argv is visible to every user in `ps`.
 printf "alter role ratatoskr_edge password '%s';\n" "$(openssl rand -base64 24 | tr -d '=+/')" \
   | docker exec -i shared-postgres psql -U postgres -q -d postgres      # and ingest, and scheduler
+# Every other service's role comes from its own repository, after step 6 (see "PostgreSQL: one
+# database, one role per service" below).
 
 # 4. The bus credential, then the server. deploy/nats/README.md generates the thirteen pairs (one per
 #    identity), lists each seed file and the variable that names it, and gives the mandatory order:
@@ -158,6 +160,31 @@ other statement is a `grant`, an `alter role`, or an install.
 **A schema change reaches this database only if the database is recreated.** `ratatoskr-edge`
 applies `schema.sql` when the `identity` schema is absent, and skips the apply when the schema is
 already there. An edit to the file therefore changes nothing on a host that has already run step 6.
+
+## PostgreSQL: one database, one role per service
+
+Ratatoskr has ONE database, `ratatoskr`, created by `postgres/01-database-and-roles.sql` with the ICU collation, and every service connects to it as its own role, `ratatoskr_<service>`, with its own schema inside it. Platform owns `ratatoskr_edge`, `ratatoskr_ingest` and `ratatoskr_scheduler`; every other repository provisions its role with a checked-in `deploy/postgres/role.sql` of its own and names it in its example as `postgres://ratatoskr_<service>:CHANGE-ME@127.0.0.1:5432/ratatoskr`.
+
+| Role | Provisioned by | Schema it creates |
+|---|---|---|
+| `ratatoskr_edge`, `ratatoskr_ingest`, `ratatoskr_scheduler` | this repository, `postgres/01-database-and-roles.sql` and `postgres/02-grants.sql` | `identity`, `operations`, `platform_ingest` |
+| `ratatoskr_chatgpt` | `ratatoskr-chatgpt`, `deploy/postgres/role.sql` | `chatgpt_archive` |
+| `ratatoskr_claude` | `ratatoskr-claude`, `deploy/postgres/role.sql` | `claude_archive` |
+| `ratatoskr_knowledge` | `ratatoskr-knowledge`, `deploy/postgres/role.sql` (also runs `create extension vector`, which only an administrator may) | `knowledge` |
+| `ratatoskr_channel_digests` | `ratatoskr-channel-digests`, `deploy/postgres/role.sql` | `channel_digests` |
+| `ratatoskr_telegram` (webhook and dispatcher share it) | `ratatoskr-telegram`, `deploy/postgres/role.sql` | `telegram` |
+| `ratatoskr_x`, `ratatoskr_instagram`, `ratatoskr_threads` | the social repositories, `deploy/postgres/role.sql` | `x_archive`, `instagram_archive`, `threads_archive` |
+| `ratatoskr_vault`, `ratatoskr_github` | `ratatoskr-vault` and `ratatoskr-github`, `deploy/postgres/role.sql` | `git_vault`, `github_catalog` |
+| `ratatoskr_extractor` | `ratatoskr-extractor`, `deploy/postgres/role.sql` | `extractor` |
+
+The order matters, and each step is run by a PostgreSQL administrator:
+
+1. `postgres/01-database-and-roles.sql`: the database, the three Platform roles and the revoke of `connect` from public.
+2. The first start of `ratatoskr-edge`, which applies `schema.sql` and so creates the `identity` and `operations` schemas.
+3. `postgres/02-grants.sql`, which can name those schemas now that they exist.
+4. Each other service's own `deploy/postgres/role.sql`, before that service's first start. A role is created without a password; set it with `\password` (never as an argument) and put it in the service's environment file. Knowledge's file must be run by an administrator because `vector` is not a trusted extension: without it Knowledge's schema apply fails with `permission denied to create extension "vector"`.
+
+A service that starts before its role exists fails to connect and exits; systemd restarts it, so the symptom of a wrong order is a restart loop that names the missing role, not corruption.
 
 ## The Telegram assertion key
 

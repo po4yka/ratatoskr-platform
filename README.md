@@ -294,9 +294,7 @@ The authoritative sequence is `docs/IMPLEMENTATION_PLAN.md`.
 
 ## Workspace integration
 
-The planned `ratatoskr-workspace` topology will pin Platform together with compatible contracts and
-dependent clients. No workspace repository pins exist yet. Platform remains independently buildable
-and testable. Cross-repository changes involving the public API use an explicit changeset.
+`ratatoskr-workspace` pins Platform at an exact commit together with the other repositories of the system, and its harness runs the cross-repository checks against that pin: the port allocation, the NATS ACL (each service's vendored copy of its stanza must equal this repository's `deploy/nats/ratatoskr.conf`), the fixed JetStream durables, and the Edge upstreams (every route Edge forwards to must be bound by the service that owns it). No checked-in cross-service smoke exists yet (the Round 2 native smokes were run by hand), so this README makes no end-to-end claim about the whole system. Platform remains independently buildable and testable and needs no workspace checkout to build. Cross-repository changes involving the public API use an explicit changeset.
 
 ## Project status
 

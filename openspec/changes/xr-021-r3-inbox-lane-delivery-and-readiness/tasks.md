@@ -26,4 +26,4 @@
 
 ## 6. Operator documentation (R3-11, R3-19)
 
-- [ ] 6.1 State the PostgreSQL provisioning order in `deploy/README.md` and rewrite the workspace-pin paragraph of `README.md`. Documentation cannot start from a failing test.
+- [x] 6.1 State the PostgreSQL provisioning order in `deploy/README.md` and rewrite the workspace-pin paragraph of `README.md`. Documentation cannot start from a failing test.
