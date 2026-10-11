@@ -4,9 +4,10 @@
 is the only one that creates anything: it declares both streams, every fixed durable below and the
 completion bucket, and it publishes every command the outbox pump emits. Every other identity can
 inspect, pull from and acknowledge only the durables it owns, publish only the subjects it
-produces, and receive only its private replies. None of them holds `$JS.API.>`, `cmd.>` or
-`evt.>`: an identity allowed to create a consumer could pick a foreign filter and read another
-service's messages through its private inbox. `ratatoskr-ingest` and `ratatoskr-scheduler` hold
+produces, and receive only replies on its own inbox prefix (below). None of them holds `$JS.API.>`,
+`cmd.>` or `evt.>`: an identity allowed to create a consumer could pick a foreign filter and read
+another service's messages through its inbox, which is why no identity but Edge may subscribe to the
+shared `_INBOX.>` namespace. `ratatoskr-ingest` and `ratatoskr-scheduler` hold
 none: they write commands into `operations.outbox` and edge is the only process that moves them
 onto the bus (ADR-0013).
 
@@ -92,6 +93,39 @@ the connected server's `max_payload` treats it as permanently undeliverable inst
 `deployed_nats_config.rs::x_identity_publishes_a_four_mebibyte_envelope` publishes 4 MiB through the
 rendered deployed file on a real broker.
 
+## Inbox prefixes
+
+A JetStream client receives stream info, consumer info and every fetched message on its own inbox,
+and NATS delivers a reply to every subscription that matches the reply subject. A shared `_INBOX.>`
+grant would therefore let a compromised service (X, Instagram, Threads, ChatGPT and Claude parse
+hostile content) read the deliveries of every other service. Each non-Edge identity is confined to
+one prefix, `_INBOX_` followed by its name in lower case with the underscores kept, and subscribes to
+`<prefix>.>` and nothing else. Edge keeps `_INBOX.>`: it creates and administers, and is the trusted
+side. NATS compares whole tokens, so `_INBOX_x.>` does not match `_INBOX.>`.
+
+| Identity | Inbox prefix |
+|---|---|
+| `TELEGRAM` | `_INBOX_telegram` |
+| `CHATGPT` | `_INBOX_chatgpt` |
+| `CLAUDE` | `_INBOX_claude` |
+| `X` | `_INBOX_x` |
+| `INSTAGRAM` | `_INBOX_instagram` |
+| `THREADS` | `_INBOX_threads` |
+| `EXTRACTOR` | `_INBOX_extractor` |
+| `EXTRACTOR_BROWSER_WORKER` | `_INBOX_extractor_browser_worker` |
+| `KNOWLEDGE` | `_INBOX_knowledge` |
+| `GITHUB` | `_INBOX_github` |
+| `VAULT` | `_INBOX_vault` |
+| `CHANNEL_DIGESTS` | `_INBOX_channel_digests` |
+
+Every service MUST open each of its NATS connections with
+`async_nats::ConnectOptions::custom_inbox_prefix("<its prefix>")`. A service that does not keeps the
+default `_INBOX` prefix, the broker refuses the subscription to it, and every JetStream request the
+service makes times out ("didn't receive ack in time", or a consumer lookup that never answers). The
+refusal is visible only in the client's event callback (`Permissions Violation for Subscription to
+"_INBOX.>"`) and as `Subscription Violation` in the server log. Because of this, a service built
+before this ACL cannot talk to a broker running it: deploy one snapshot together.
+
 ## Rollout order
 
 Services fail startup, and systemd restarts them, until Edge has provisioned their durable. On a
@@ -115,6 +149,9 @@ tenant's operation-report metadata through `ratatoskr_x_extractor_reports`. Per-
 subjects would need a contract change.
 
 ## A refusal is silent
+
+A denied subscribe is the same kind of silence: the client call succeeds and the server reports the
+violation to the connection's event callback and to its own log, naming the subject.
 
 A denied publish is never answered, so a client reports "didn't receive ack in time" and the
 outbox records "the message was not acknowledged by the bus", the same text a down broker

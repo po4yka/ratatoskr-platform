@@ -385,6 +385,12 @@ docker exec ratatoskr-platform-nats nats stream rm ratatoskr_commands -f   # the
 JetStream is required, not optional: the publisher waits for an acknowledgement, and core NATS
 acknowledges nothing.
 
+The tests that start a broker of their own with a generated ACL (`crates/eventing/tests/deployed_nats_config.rs`,
+`nats_permissions.rs`) run it as a `nats:2-alpine` container, as CI does. On a machine without a Docker daemon,
+`PLATFORM_TEST_NATS_SERVER=/path/to/nats-server` (2.10 or later) runs the same configuration as a child process on a
+loopback port taken from `PLATFORM_TEST_NATS_PORTS` (`first-last`, default `57623-57639`), with the JetStream store moved
+into the fixture directory and the monitoring listener dropped. The ACL under test is the same file either way.
+
 Subjects are `cmd.<type>` and `evt.<type>` where `<type>` is the contract type name (ADR-0005). The
 class prefix is the privilege boundary a NATS credential is granted over.
 

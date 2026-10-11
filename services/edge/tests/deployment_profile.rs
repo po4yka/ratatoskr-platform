@@ -219,7 +219,7 @@ fn telegram_bus_identity_is_limited_to_its_notification_durable() {
         "{:?}",
         telegram.publish_allow
     );
-    assert_eq!(telegram.subscribe_allow, ["_INBOX.>"]);
+    assert_eq!(telegram.subscribe_allow, ["_INBOX_telegram.>"]);
     for forbidden in [
         "$JS.API.>",
         "cmd.>",
@@ -369,10 +369,16 @@ fn the_deployed_acl_has_the_thirteen_identities_with_exactly_the_contract_grants
             allow,
             "{name} publish allow"
         );
+        // R3-01: EDGE keeps the shared inbox namespace, every other identity its own prefix.
+        let inbox = if name == "EDGE" {
+            "_INBOX.>".to_owned()
+        } else {
+            format!("_INBOX_{}.>", name.to_ascii_lowercase())
+        };
         assert_eq!(
             identity.subscribe_allow,
-            ["_INBOX.>"],
-            "{name} may subscribe to replies only"
+            [inbox],
+            "{name} may subscribe to replies on its own inbox only"
         );
         if name == "EDGE" {
             assert_eq!(

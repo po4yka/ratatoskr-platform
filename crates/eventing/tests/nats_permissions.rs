@@ -51,8 +51,9 @@ impl NatsFixture {
         }
     }
 
-    async fn connect(&self, seed: &str) -> async_nats::Client {
-        connect(&self.container.url, seed).await
+    /// Connect on the inbox prefix the identity's stanza allows (`None` for the unrestricted admin).
+    async fn connect(&self, seed: &str, inbox_prefix: Option<&str>) -> async_nats::Client {
+        connect(&self.container.url, seed, inbox_prefix).await.0
     }
 }
 
@@ -77,7 +78,7 @@ fn nats_config(
                         "$JS.ACK.{stream}.{consumer}.>",
                     ]
                 }}
-                subscribe: {{ allow: ["_INBOX.>"] }}
+                subscribe: {{ allow: ["_INBOX_telegram.>"] }}
             }}
         }}"#
         )
@@ -96,14 +97,14 @@ authorization {{
             nkey: {chatgpt_public}
             permissions: {{
                 publish: {{ allow: ["evt.ai-archive.chatgpt.operation.reported.v1"] }}
-                subscribe: {{ allow: ["_INBOX.>"] }}
+                subscribe: {{ allow: ["_INBOX_chatgpt.>"] }}
             }}
         }},
         {{
             nkey: {claude_public}
             permissions: {{
                 publish: {{ allow: ["evt.ai-archive.claude.operation.reported.v1"] }}
-                subscribe: {{ allow: ["_INBOX.>"] }}
+                subscribe: {{ allow: ["_INBOX_claude.>"] }}
             }}
         }}
     ]
@@ -129,9 +130,13 @@ async fn ai_archive_provider_nkeys_cannot_impersonate_or_subscribe() {
         );
     }
     let fixture = NatsFixture::start(false);
-    let admin = fixture.connect(&fixture.admin_seed).await;
-    let chatgpt = fixture.connect(&fixture.chatgpt_seed).await;
-    let claude = fixture.connect(&fixture.claude_seed).await;
+    let admin = fixture.connect(&fixture.admin_seed, None).await;
+    let chatgpt = fixture
+        .connect(&fixture.chatgpt_seed, Some("_INBOX_chatgpt"))
+        .await;
+    let claude = fixture
+        .connect(&fixture.claude_seed, Some("_INBOX_claude"))
+        .await;
 
     chatgpt
         .publish(CHATGPT, "chatgpt".into())
@@ -178,7 +183,7 @@ async fn ai_archive_provider_nkeys_cannot_impersonate_or_subscribe() {
 #[tokio::test]
 async fn telegram_nkey_permission_matrix_is_enforced_by_nats() {
     let fixture = NatsFixture::start(true);
-    let admin = fixture.connect(&fixture.admin_seed).await;
+    let admin = fixture.connect(&fixture.admin_seed, None).await;
     let admin_jetstream = jetstream::new(admin);
     let stream = admin_jetstream
         .create_stream(jetstream::stream::Config {
@@ -213,7 +218,9 @@ async fn telegram_nkey_permission_matrix_is_enforced_by_nats() {
         .await
         .expect("the fixture event is stored");
 
-    let telegram = fixture.connect(&fixture.telegram_seed).await;
+    let telegram = fixture
+        .connect(&fixture.telegram_seed, Some("_INBOX_telegram"))
+        .await;
     let telegram_jetstream = jetstream::new(telegram.clone());
     let consumer: jetstream::consumer::PullConsumer = telegram_jetstream
         .get_consumer_from_stream(TELEGRAM_NOTIFICATION_CONSUMER, EVENT_STREAM)
