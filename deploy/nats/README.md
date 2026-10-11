@@ -80,6 +80,18 @@ created by Edge and owned by `EXTRACTOR_BROWSER_WORKER`, which opens it with thr
 real-broker matrix proves those three are enough for the client the binaries link. If a client
 upgrade needs another KV subject, add exactly that subject and never `$JS.API.>`.
 
+## Message size
+
+`ratatoskr.conf` sets `max_payload: 8MB` (8388608 bytes) at the top level, up from the 1 MiB server
+default. ChatGPT and Claude embed whole conversations in `ai_archive.conversation.*` envelopes and the
+extractor publishes the whole Document inline, so under the default a large item was refused on every
+attempt. JetStream stream limits are unchanged: neither stream sets a per-message size, so a message
+the broker accepts is a message a stream stores. A publisher whose serialized envelope is larger than
+the connected server's `max_payload` treats it as permanently undeliverable instead of retrying.
+`crates/eventing/tests/deployed_max_payload.rs` asserts the line without Docker, and
+`deployed_nats_config.rs::x_identity_publishes_a_four_mebibyte_envelope` publishes 4 MiB through the
+rendered deployed file on a real broker.
+
 ## Rollout order
 
 Services fail startup, and systemd restarts them, until Edge has provisioned their durable. On a

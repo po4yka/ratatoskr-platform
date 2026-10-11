@@ -184,9 +184,18 @@ impl Deployed {
 
 /// Publish and wait for the stream's acknowledgement. `Err` is the observable form of a refusal.
 async fn publish_acked(client: &async_nats::Client, subject: &str) -> Result<(), String> {
+    publish_body_acked(client, subject, b"{}".to_vec()).await
+}
+
+/// [`publish_acked`] with a body of the caller's choosing.
+async fn publish_body_acked(
+    client: &async_nats::Client,
+    subject: &str,
+    body: Vec<u8>,
+) -> Result<(), String> {
     let context = jetstream::new(client.clone());
     let pending = context
-        .publish(subject.to_owned(), "{}".into())
+        .publish(subject.to_owned(), body.into())
         .await
         .map_err(|error| error.to_string())?;
     match timeout(REQUEST_TIMEOUT + Duration::from_millis(500), pending).await {
@@ -552,6 +561,24 @@ async fn x_identity_matrix() {
         ],
     )
     .await;
+}
+
+/// XR-021 R2-04 rule 1: archive and document facts are inline envelopes, so the broker must accept
+/// one well above the 1 MiB server default. The static twin is `deployed_max_payload.rs`.
+#[tokio::test]
+async fn x_identity_publishes_a_four_mebibyte_envelope() {
+    let broker = Deployed::start();
+    broker.provision().await;
+    let x = broker.client("X").await;
+    let filler = "a".repeat(4 * 1024 * 1024);
+    let envelope = format!(r#"{{"filler":"{filler}"}}"#);
+    publish_body_acked(
+        &x,
+        "evt.platform.operation.reported.v1",
+        envelope.into_bytes(),
+    )
+    .await
+    .expect("a 4 MiB envelope is acknowledged under the deployed max_payload");
 }
 
 #[tokio::test]

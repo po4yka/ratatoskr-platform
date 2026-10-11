@@ -5,8 +5,8 @@
 
 ## 2. Broker payload limit (R2-04 rule 1)
 
-- [ ] 2.1 Add `crates/eventing/tests/deployed_max_payload.rs::deployed_conf_sets_max_payload` and `deployed_nats_config.rs::x_identity_publishes_a_four_mebibyte_envelope` and run the static test RED
-- [ ] 2.2 Set `max_payload: 8MB` in `deploy/nats/ratatoskr.conf`, update the README and `compose.yaml` comments, and run the static test GREEN
+- [x] 2.1 Add `crates/eventing/tests/deployed_max_payload.rs::deployed_conf_sets_max_payload` and `deployed_nats_config.rs::x_identity_publishes_a_four_mebibyte_envelope` and run the static test RED
+- [x] 2.2 Set `max_payload: 8MB` in `deploy/nats/ratatoskr.conf`, update the README and `compose.yaml` comments, and run the static test GREEN
 
 ## 3. Schedule registration owner check (R2-14)
 

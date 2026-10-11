@@ -41,6 +41,9 @@ services:
     # JetStream, not core NATS: the outbox assumes at-least-once delivery with redelivery and a
     # dead-letter path, and core NATS is at-most-once with no persistence at all.
     image: nats:2-alpine
+    # This is the unauthenticated development broker, so it keeps the server's 1 MiB `max_payload`.
+    # The deployed `deploy/nats/ratatoskr.conf` raises it to 8 MiB for archive and document facts;
+    # anything that depends on the larger limit is tested against that file, not against this service.
     container_name: ratatoskr-platform-nats
     command: ["--jetstream", "--store_dir=/data", "--http_port=8222"]
     ports:
