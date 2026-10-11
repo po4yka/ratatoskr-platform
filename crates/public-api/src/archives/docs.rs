@@ -171,6 +171,11 @@ pub const CHUNK_DOC: RouteDoc = RouteDoc {
             description: "The bound session is unavailable to this device.",
             payload: Some(Payload::Json("ErrorEnvelope")),
         },
+        ResponseDoc {
+            status: 413,
+            description: "The chunk is larger than the route accepts. Permanent for this chunk: retrying the same bytes cannot help.",
+            payload: Some(Payload::Json("ErrorEnvelope")),
+        },
     ],
 };
 

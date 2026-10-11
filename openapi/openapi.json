@@ -3368,6 +3368,16 @@
               }
             },
             "description": "The bound session is unavailable to this device."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The chunk is larger than the route accepts. Permanent for this chunk: retrying the same bytes cannot help."
           }
         },
         "security": [

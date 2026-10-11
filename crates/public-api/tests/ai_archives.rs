@@ -705,3 +705,33 @@ async fn prepare_accepts_an_archive_larger_than_the_transfer_body_budget() {
     assert_eq!(status, StatusCode::ACCEPTED, "{body}");
     harness.cleanup().await.expect("cleanup");
 }
+
+/// R2-18. The chunk route answers 413 when a chunk is over the body limit, so its description and
+/// the generated document both say so. `openapi/openapi.json` is written by `openapic`, never by
+/// hand: this reads the committed artifact, so a description edited without regenerating fails too.
+#[test]
+fn the_chunk_route_documents_payload_too_large() {
+    use platform_api_doc::Payload;
+
+    let documented = platform_public_api::archives::CHUNK_DOC
+        .responses
+        .iter()
+        .find(|response| response.status == 413)
+        .expect("CHUNK_DOC lists a 413 response");
+    assert!(
+        matches!(documented.payload, Some(Payload::Json("ErrorEnvelope"))),
+        "the 413 carries the ErrorEnvelope"
+    );
+
+    let document: serde_json::Value =
+        serde_json::from_str(include_str!("../../../openapi/openapi.json"))
+            .expect("the committed OpenAPI document parses");
+    let chunk = &document["paths"]["/v1/ai-archives/{provider}/{operation_id}/uploads/{token}/chunks/{index}"]
+        ["put"];
+    assert_eq!(
+        chunk["responses"]["413"]["content"]["application/json"]["schema"]["$ref"],
+        "#/components/schemas/ErrorEnvelope",
+        "the generated document has the 413: {}",
+        chunk["responses"]
+    );
+}

@@ -20,8 +20,8 @@
 
 ## 5. Chunk 413 in OpenAPI (R2-18)
 
-- [ ] 5.1 Add `ai_archives.rs::the_chunk_route_documents_payload_too_large` and run it RED
-- [ ] 5.2 Add the 413 `ResponseDoc`, regenerate `openapi/openapi.json` with `openapic`, and run it GREEN
+- [x] 5.1 Add `ai_archives.rs::the_chunk_route_documents_payload_too_large` and run it RED
+- [x] 5.2 Add the 413 `ResponseDoc`, regenerate `openapi/openapi.json` with `openapic`, and run it GREEN
 
 ## 6. Documentation corrections (R2-10, R2-01)
 
