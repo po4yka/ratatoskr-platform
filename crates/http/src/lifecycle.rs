@@ -292,6 +292,12 @@ impl RuntimeState {
     }
 
     /// Whether new work may be routed to this process.
+    ///
+    /// The four archive receiver checks are reported by [`Self::checks`] but do not count here
+    /// (XR-021 R3-13): Edge serves the public API, captures, sessions and operations without either
+    /// importer, and preparation already refuses only the provider whose path is unavailable, so a
+    /// receiver that is down, or not started yet, must not take Edge out of rotation. Everything
+    /// else does: startup, drain, the database, the bus and the staging root Edge writes to.
     #[must_use]
     pub fn is_ready(&self) -> bool {
         self.startup_complete.load(Ordering::Acquire)
@@ -299,7 +305,7 @@ impl RuntimeState {
             && self
                 .checks()
                 .iter()
-                .all(|check| check.state == CheckState::Pass)
+                .all(|check| !check.name.gates_readiness() || check.state == CheckState::Pass)
     }
 
     /// `platform_readiness{role}`, the aggregate of [`Self::checks`].
@@ -355,6 +361,21 @@ pub enum CheckName {
     Drain,
     /// Configuration, telemetry and every configured listener are up.
     Startup,
+}
+
+impl CheckName {
+    /// Whether a failing check makes the process unready. The archive receiver checks describe
+    /// optional services Edge forwards to, so they are reported and never gate (XR-021 R3-13).
+    #[must_use]
+    pub const fn gates_readiness(self) -> bool {
+        !matches!(
+            self,
+            Self::ArchiveChatgptReceipt
+                | Self::ArchiveChatgptReport
+                | Self::ArchiveClaudeReceipt
+                | Self::ArchiveClaudeReport
+        )
+    }
 }
 
 fn set_dependency(state: &AtomicU8, ready: bool) {

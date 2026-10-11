@@ -173,3 +173,84 @@ fn secret_is_redacted_in_debug_and_check_config() {
         Ok(())
     });
 }
+
+/// A chatgpt and a claude route on the wrong ports, built as the figment defaults serialise them.
+fn misrouted_archive_receivers() -> platform_core::config::PlatformConfig {
+    use platform_core::config::{GatewayRouteClass, GatewayRouteConfig, PlatformConfig};
+
+    let mut configured = PlatformConfig::defaults(RuntimeRole::Edge);
+    for (service, prefix, listener) in [
+        ("chatgpt", "/v1/chatgpt", "127.0.0.1:9096"),
+        ("claude", "/v1/claude", "127.0.0.1:9097"),
+    ] {
+        configured.gateway.routes.insert(
+            service.to_owned(),
+            GatewayRouteConfig {
+                prefix: prefix.to_owned(),
+                listener: listener.parse().expect("a socket address"),
+                class: Some(GatewayRouteClass::Transfer),
+                capabilities_path: "/v1/capabilities".to_owned(),
+                archive_receipt_path: "/v1/ai-archives/receipt".to_owned(),
+            },
+        );
+    }
+    configured
+}
+
+/// XR-021 R3-13. A route violation says which route failed. Seven identical `RATATOSKR__GATEWAY__ROUTES`
+/// entries were all the Round 2 smoke could show an operator.
+#[test]
+fn a_misrouted_gateway_route_is_named_in_its_violation() {
+    use figment::Figment;
+    use figment::providers::Serialized;
+
+    let Err(ConfigError::Invalid(found)) = config::load_from(
+        RuntimeRole::Edge,
+        Figment::from(Serialized::defaults(misrouted_archive_receivers())),
+    ) else {
+        panic!("misrouted receivers must be refused");
+    };
+
+    let chatgpt: Vec<&Violation> = found
+        .iter()
+        .filter(|violation| violation.key == "gateway.routes.chatgpt.listener")
+        .collect();
+    assert_eq!(chatgpt.len(), 1, "{found:?}");
+    assert_eq!(
+        chatgpt[0].env_var,
+        "RATATOSKR__GATEWAY__ROUTES__CHATGPT__LISTENER"
+    );
+}
+
+/// XR-021 R3-13. Two failed routes are two distinct entries, one per failed field.
+#[test]
+fn two_failed_routes_yield_two_distinct_entries() {
+    use figment::Figment;
+    use figment::providers::Serialized;
+
+    let Err(ConfigError::Invalid(found)) = config::load_from(
+        RuntimeRole::Edge,
+        Figment::from(Serialized::defaults(misrouted_archive_receivers())),
+    ) else {
+        panic!("misrouted receivers must be refused");
+    };
+
+    let listeners: Vec<(&str, &str)> = found
+        .iter()
+        .filter(|violation| violation.key.ends_with(".listener"))
+        .map(|violation| (&*violation.key, &*violation.env_var))
+        .collect();
+    assert_eq!(
+        listeners,
+        [
+            (
+                "gateway.routes.chatgpt.listener",
+                "RATATOSKR__GATEWAY__ROUTES__CHATGPT__LISTENER"
+            ),
+            (
+                "gateway.routes.claude.listener",
+                "RATATOSKR__GATEWAY__ROUTES__CLAUDE__LISTENER"
+            ),
+        ]
+    );
+}

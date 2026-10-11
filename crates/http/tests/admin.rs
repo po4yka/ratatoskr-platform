@@ -152,8 +152,9 @@ async fn archive_readiness_reports_each_provider_path_independently() {
     state.set_archive_receipt_ready("claude", false);
     state.set_archive_report_ready("claude", true);
 
+    // R3-13: the receivers are optional, so a failing one is reported but does not make Edge unready.
     let (status, body) = json(admin(&state), "/health/ready").await;
-    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(status, StatusCode::OK);
     let checks = body["checks"].as_array().expect("readiness checks");
     for (name, expected) in [
         ("archive_chatgpt_receipt", "pass"),
@@ -170,6 +171,54 @@ async fn archive_readiness_reports_each_provider_path_independently() {
             expected
         );
     }
+}
+
+/// R3-13. Edge serves the public API, captures, sessions and operations without either archive
+/// receiver, so a receiver that is down or not yet started must not take Edge out of rotation. The
+/// failed checks stay in the body, with their reason, for the operator and for `/v1/capabilities`.
+#[tokio::test]
+async fn a_down_archive_receiver_does_not_make_edge_unready() {
+    let state = started(RuntimeRole::Edge);
+    state.set_database_reachable(true);
+    state.set_bus_reachable(true);
+    state.set_archive_staging_ready(true);
+    for provider in ["chatgpt", "claude"] {
+        state.set_archive_receipt_ready(provider, false);
+        state.set_archive_report_ready(provider, false);
+    }
+    assert!(state.is_ready());
+
+    let (status, body) = json(admin(&state), "/health/ready").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let checks = body["checks"].as_array().expect("readiness checks");
+    for name in [
+        "archive_chatgpt_receipt",
+        "archive_chatgpt_report",
+        "archive_claude_receipt",
+        "archive_claude_report",
+    ] {
+        let check = checks
+            .iter()
+            .find(|check| check["name"] == name)
+            .unwrap_or_else(|| panic!("{name} is missing from the body"));
+        assert_eq!(check["state"], "fail", "{name}");
+        assert_eq!(check["reason"], "dependency_unavailable", "{name}");
+    }
+}
+
+/// R3-13. What Edge needs itself still gates readiness: staging is where uploads land.
+#[tokio::test]
+async fn an_unwritable_staging_root_makes_edge_unready() {
+    let state = started(RuntimeRole::Edge);
+    state.set_database_reachable(true);
+    state.set_bus_reachable(true);
+    state.set_archive_staging_ready(false);
+    state.set_archive_receipt_ready("chatgpt", true);
+    state.set_archive_report_ready("chatgpt", true);
+
+    assert!(!state.is_ready());
+    let (status, body) = json(admin(&state), "/health/ready").await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
 }
 
 /// H-5: a reason is a token from a closed set, never a formatted dependency error.

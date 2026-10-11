@@ -15,9 +15,9 @@
 
 ## 4. Edge readiness and route diagnostics (R3-13)
 
-- [ ] 4.1 Add `admin.rs::a_down_archive_receiver_does_not_make_edge_unready` and `an_unwritable_staging_root_makes_edge_unready`, `boot.rs` shipped-route-table readiness, and `config_archive_and_digests.rs` route-named violation tests, and run them RED
-- [ ] 4.2 Make `is_ready` ignore the four receiver checks, name the route in the violation `key` and `env_var`, and run 4.1 GREEN
-- [ ] 4.3 Correct the two `schema.sql` comments about the outbox payload bound. Documentation cannot start from a failing test.
+- [x] 4.1 Add `admin.rs::a_down_archive_receiver_does_not_make_edge_unready` and `an_unwritable_staging_root_makes_edge_unready`, `boot.rs` shipped-route-table readiness, and `config_archive_and_digests.rs` route-named violation tests, and run them RED
+- [x] 4.2 Make `is_ready` ignore the four receiver checks, name the route in the violation `key` and `env_var`, and run 4.1 GREEN
+- [x] 4.3 Correct the two `schema.sql` comments about the outbox payload bound. Documentation cannot start from a failing test.
 
 ## 5. The assertion key procedure (R3-12)
 

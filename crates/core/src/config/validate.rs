@@ -7,6 +7,7 @@
 //! figment's own extraction is fail-fast, so the "report every problem" guarantee comes from this
 //! pass and not from serde.
 
+use std::borrow::Cow;
 use std::fmt::Write as _;
 
 use figment::error::Kind;
@@ -19,15 +20,20 @@ use crate::role::RuntimeRole;
 
 /// One startup-rule violation.
 ///
-/// Every member is `&'static str`. It is therefore STRUCTURALLY IMPOSSIBLE for a supplied value to
-/// appear in a configuration failure report, so the report can never echo a secret. This is a type
-/// property, not a rule someone has to remember.
+/// `rule` is `&'static str`, and `key` and `env_var` are built only from literals or from a route
+/// name that [`gateway_service`] has matched against its closed list. It is therefore STRUCTURALLY
+/// IMPOSSIBLE for a supplied value to appear in a configuration failure report, so the report can
+/// never echo a secret: the one place a map key reaches a report is the route table, and an
+/// unrecognised route name is reported without being named. This is a property of the
+/// constructors, not a rule someone has to remember.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Violation {
     /// The dotted configuration path, e.g. `public.bind`.
-    pub key: &'static str,
-    /// The environment variable that sets it, e.g. `RATATOSKR__PUBLIC__BIND`.
-    pub env_var: &'static str,
+    pub key: Cow<'static, str>,
+    /// The environment variable that sets it, e.g. `RATATOSKR__PUBLIC__BIND`. A rule about one
+    /// entry of a map names that entry (`RATATOSKR__GATEWAY__ROUTES__CHATGPT__LISTENER`), so a
+    /// report with several failed routes says which one each entry is about.
+    pub env_var: Cow<'static, str>,
     /// What the rule requires, and the document that requires it.
     pub rule: &'static str,
 }
@@ -51,13 +57,13 @@ pub(crate) fn validate(role: RuntimeRole, config: &PlatformConfig) -> Vec<Violat
     // V1 — the role decides whether a public listener may exist at all (ARCHITECTURE.md S18).
     match (role.may_have_public_listener(), config.public.as_ref()) {
         (true, None) => found.push(Violation {
-            key: PUBLIC_BIND.0,
-            env_var: PUBLIC_BIND.1,
+            key: PUBLIC_BIND.0.into(),
+            env_var: PUBLIC_BIND.1.into(),
             rule: required_public_listener(role),
         }),
         (false, Some(_)) => found.push(Violation {
-            key: PUBLIC_BIND.0,
-            env_var: PUBLIC_BIND.1,
+            key: PUBLIC_BIND.0.into(),
+            env_var: PUBLIC_BIND.1.into(),
             rule: forbidden_public_listener(role),
         }),
         _ => {}
@@ -67,8 +73,8 @@ pub(crate) fn validate(role: RuntimeRole, config: &PlatformConfig) -> Vec<Violat
         // V2 — one listener would silently win and /metrics would be published on the public port.
         if public.bind == config.admin.bind {
             found.push(Violation {
-                key: PUBLIC_BIND.0,
-                env_var: PUBLIC_BIND.1,
+                key: PUBLIC_BIND.0.into(),
+                env_var: PUBLIC_BIND.1.into(),
                 rule: "must not equal admin.bind; the operator plane and the public surface are \
                        separate listeners (AGENTS.md)",
             });
@@ -77,8 +83,8 @@ pub(crate) fn validate(role: RuntimeRole, config: &PlatformConfig) -> Vec<Violat
         // V3
         if !(1..=300).contains(&public.request_timeout_seconds) {
             found.push(Violation {
-                key: "public.request_timeout_seconds",
-                env_var: "RATATOSKR__PUBLIC__REQUEST_TIMEOUT_SECONDS",
+                key: "public.request_timeout_seconds".into(),
+                env_var: "RATATOSKR__PUBLIC__REQUEST_TIMEOUT_SECONDS".into(),
                 rule: "must be 1..=300 (ARCHITECTURE.md S5.2)",
             });
         }
@@ -86,8 +92,8 @@ pub(crate) fn validate(role: RuntimeRole, config: &PlatformConfig) -> Vec<Violat
         // V4
         if !(1024..=104_857_600).contains(&public.max_body_bytes) {
             found.push(Violation {
-                key: "public.max_body_bytes",
-                env_var: "RATATOSKR__PUBLIC__MAX_BODY_BYTES",
+                key: "public.max_body_bytes".into(),
+                env_var: "RATATOSKR__PUBLIC__MAX_BODY_BYTES".into(),
                 rule: "must be 1024..=104857600 (ARCHITECTURE.md S14)",
             });
         }
@@ -96,8 +102,8 @@ pub(crate) fn validate(role: RuntimeRole, config: &PlatformConfig) -> Vec<Violat
     // V5 — a bad filter otherwise silences every log line at the moment you need them.
     if EnvFilter::try_new(&config.telemetry.log_filter).is_err() {
         found.push(Violation {
-            key: "telemetry.log_filter",
-            env_var: "RATATOSKR__TELEMETRY__LOG_FILTER",
+            key: "telemetry.log_filter".into(),
+            env_var: "RATATOSKR__TELEMETRY__LOG_FILTER".into(),
             rule: "must parse as a tracing-subscriber EnvFilter directive string, e.g. \
                    info,tower_http=info",
         });
@@ -110,8 +116,8 @@ pub(crate) fn validate(role: RuntimeRole, config: &PlatformConfig) -> Vec<Violat
     let grace = config.shutdown.grace_seconds;
     if drain > 60 {
         found.push(Violation {
-            key: "shutdown.drain_seconds",
-            env_var: "RATATOSKR__SHUTDOWN__DRAIN_SECONDS",
+            key: "shutdown.drain_seconds".into(),
+            env_var: "RATATOSKR__SHUTDOWN__DRAIN_SECONDS".into(),
             rule: "must be 0..=60, and drain_seconds + grace_seconds must not exceed 120",
         });
     }
@@ -119,8 +125,8 @@ pub(crate) fn validate(role: RuntimeRole, config: &PlatformConfig) -> Vec<Violat
         || drain.saturating_add(grace) > SHUTDOWN_CEILING_SECONDS
     {
         found.push(Violation {
-            key: "shutdown.grace_seconds",
-            env_var: "RATATOSKR__SHUTDOWN__GRACE_SECONDS",
+            key: "shutdown.grace_seconds".into(),
+            env_var: "RATATOSKR__SHUTDOWN__GRACE_SECONDS".into(),
             rule: "must be 1..=120, and drain_seconds + grace_seconds must not exceed 120",
         });
     }
@@ -137,8 +143,8 @@ pub(crate) fn validate(role: RuntimeRole, config: &PlatformConfig) -> Vec<Violat
 
     if !config.archive_staging.root.is_absolute() {
         found.push(Violation {
-            key: "archive_staging.root",
-            env_var: "RATATOSKR__ARCHIVE_STAGING__ROOT",
+            key: "archive_staging.root".into(),
+            env_var: "RATATOSKR__ARCHIVE_STAGING__ROOT".into(),
             rule: "must be an absolute private directory so staging never depends on process cwd",
         });
     }
@@ -163,8 +169,8 @@ fn archive_ceiling_violations(config: &PlatformConfig) -> Vec<Violation> {
         return Vec::new();
     }
     vec![Violation {
-        key: "archive_staging.max_archive_bytes",
-        env_var: "RATATOSKR__ARCHIVE_STAGING__MAX_ARCHIVE_BYTES",
+        key: "archive_staging.max_archive_bytes".into(),
+        env_var: "RATATOSKR__ARCHIVE_STAGING__MAX_ARCHIVE_BYTES".into(),
         rule: "must be 1048576..=10737418240 bytes (V21); staging needs about twice this much \
                free space per in-flight archive",
     }]
@@ -186,23 +192,23 @@ fn channel_digests_violations(role: RuntimeRole, config: &PlatformConfig) -> Vec
     let mut found = Vec::new();
     if role != RuntimeRole::Edge {
         found.push(Violation {
-            key: "channel_digests",
-            env_var: "RATATOSKR__CHANNEL_DIGESTS__LISTENER",
+            key: "channel_digests".into(),
+            env_var: "RATATOSKR__CHANNEL_DIGESTS__LISTENER".into(),
             rule: "may be configured only for ratatoskr-edge; no other role reads digests (V22)",
         });
     }
     if !digests.listener.ip().is_loopback() || digests.listener.port() != CHANNEL_DIGESTS_PORT {
         found.push(Violation {
-            key: "channel_digests.listener",
-            env_var: "RATATOSKR__CHANNEL_DIGESTS__LISTENER",
+            key: "channel_digests.listener".into(),
+            env_var: "RATATOSKR__CHANNEL_DIGESTS__LISTENER".into(),
             rule: "must be a loopback address on port 8098, the channel-digests API (V22)",
         });
     }
     let secret_length = digests.service_secret.expose_secret().len();
     if secret_length == 0 || secret_length > CHANNEL_DIGESTS_SECRET_MAX_BYTES {
         found.push(Violation {
-            key: "channel_digests.service_secret",
-            env_var: "RATATOSKR__CHANNEL_DIGESTS__SERVICE_SECRET",
+            key: "channel_digests.service_secret".into(),
+            env_var: "RATATOSKR__CHANNEL_DIGESTS__SERVICE_SECRET".into(),
             rule: "must be 1..=4096 bytes and set together with the listener (V22)",
         });
     }
@@ -215,8 +221,8 @@ fn gateway_violations(role: RuntimeRole, config: &PlatformConfig) -> Vec<Violati
     let mut found = Vec::new();
     if role != RuntimeRole::Edge && !config.gateway.routes.is_empty() {
         found.push(Violation {
-            key: "gateway.routes",
-            env_var: "RATATOSKR__GATEWAY__ROUTES",
+            key: "gateway.routes".into(),
+            env_var: "RATATOSKR__GATEWAY__ROUTES".into(),
             rule: "may be configured only for ratatoskr-edge; clients reach domain APIs through Edge",
         });
     }
@@ -227,8 +233,8 @@ fn gateway_violations(role: RuntimeRole, config: &PlatformConfig) -> Vec<Violati
     let claude = config.gateway.routes.contains_key("claude");
     if chatgpt != claude {
         found.push(Violation {
-            key: "gateway.routes.archive_receivers",
-            env_var: "RATATOSKR__GATEWAY__ROUTES",
+            key: "gateway.routes.archive_receivers".into(),
+            env_var: "RATATOSKR__GATEWAY__ROUTES".into(),
             rule: "must configure both canonical ChatGPT and Claude archive receivers or neither",
         });
     }
@@ -259,20 +265,45 @@ fn gateway_budget_violations(budgets: &crate::config::GatewayRouteBudgets) -> Ve
     ] {
         if !(1024..=104_857_600).contains(&budget.max_body_bytes) {
             found.push(Violation {
-                key,
-                env_var,
+                key: key.into(),
+                env_var: env_var.into(),
                 rule: "must be 1024..=104857600 for every gateway route class",
             });
         }
         if !(1..=300).contains(&budget.response_timeout_seconds) {
             found.push(Violation {
-                key,
-                env_var,
+                key: key.into(),
+                env_var: env_var.into(),
                 rule: "must be 1..=300 for every gateway route class",
             });
         }
     }
     found
+}
+
+/// A violation of one field of one gateway route (XR-021 R3-13). `route` is the route name when it
+/// is one of the closed list, and then the key and the variable name it
+/// (`gateway.routes.chatgpt.listener`, `RATATOSKR__GATEWAY__ROUTES__CHATGPT__LISTENER`); for an
+/// unrecognised name it is `None` and the report carries the table-level key without echoing the
+/// name. `field` is the lowercase member name.
+fn route_violation(route: Option<&str>, field: &'static str, rule: &'static str) -> Violation {
+    match route {
+        Some(route) => Violation {
+            key: format!("gateway.routes.{route}.{field}").into(),
+            env_var: format!(
+                "RATATOSKR__GATEWAY__ROUTES__{}__{}",
+                route.to_ascii_uppercase(),
+                field.to_ascii_uppercase()
+            )
+            .into(),
+            rule,
+        },
+        None => Violation {
+            key: format!("gateway.routes.{field}").into(),
+            env_var: "RATATOSKR__GATEWAY__ROUTES".into(),
+            rule,
+        },
+    }
 }
 
 fn gateway_route_violations(
@@ -282,69 +313,71 @@ fn gateway_route_violations(
     found: &mut Vec<Violation>,
     prefixes: &mut std::collections::BTreeSet<String>,
 ) {
+    let known = gateway_service(service);
+    let name = known.map(|_| service);
     if !prefixes.insert(route.prefix.clone()) {
-        found.push(Violation {
-            key: "gateway.routes.prefix",
-            env_var: "RATATOSKR__GATEWAY__ROUTES",
-            rule: "must be unique across the gateway route table",
-        });
+        found.push(route_violation(
+            name,
+            "prefix",
+            "must be unique across the gateway route table",
+        ));
     }
     if route.class.is_none() {
-        found.push(Violation {
-            key: "gateway.routes.class",
-            env_var: "RATATOSKR__GATEWAY__ROUTES",
-            rule: "must select control, stream, or transfer so Edge can enforce a finite budget",
-        });
+        found.push(route_violation(
+            name,
+            "class",
+            "must select control, stream, or transfer so Edge can enforce a finite budget",
+        ));
     }
-    let Some((prefix, port)) = gateway_service(service) else {
-        found.push(Violation {
-            key: "gateway.routes.service",
-            env_var: "RATATOSKR__GATEWAY__ROUTES",
-            rule: "must name one of knowledge, github, vault, social, ai, chatgpt, claude",
-        });
+    let Some((prefix, port)) = known else {
+        found.push(route_violation(
+            None,
+            "service",
+            "must name one of knowledge, github, vault, social, ai, chatgpt, claude",
+        ));
         return;
     };
     if route.prefix != prefix {
-        found.push(Violation {
-            key: "gateway.routes.prefix",
-            env_var: "RATATOSKR__GATEWAY__ROUTES",
-            rule: "must be the service's unique canonical /v1 prefix",
-        });
+        found.push(route_violation(
+            name,
+            "prefix",
+            "must be the service's unique canonical /v1 prefix",
+        ));
     }
     if !route.listener.ip().is_loopback() || route.listener.port() != port {
-        found.push(Violation {
-            key: "gateway.routes.listener",
-            env_var: "RATATOSKR__GATEWAY__ROUTES",
-            rule: "must be the service's allocated loopback listener from DEPLOYMENT_TARGET.md",
-        });
+        found.push(route_violation(
+            name,
+            "listener",
+            "must be the service's allocated loopback listener from DEPLOYMENT_TARGET.md",
+        ));
     }
     if route.capabilities_path != "/v1/capabilities" {
-        found.push(Violation {
-            key: "gateway.routes.capabilities_path",
-            env_var: "RATATOSKR__GATEWAY__ROUTES",
-            rule: "must be /v1/capabilities so aggregation reads the service-owned document",
-        });
+        found.push(route_violation(
+            name,
+            "capabilities_path",
+            "must be /v1/capabilities so aggregation reads the service-owned document",
+        ));
     }
     if route.archive_receipt_path != "/v1/ai-archives/receipt" {
-        found.push(Violation {
-            key: "gateway.routes.archive_receipt_path",
-            env_var: "RATATOSKR__GATEWAY__ROUTES",
-            rule: "must be /v1/ai-archives/receipt so archive delivery has one bounded service-owned path",
-        });
+        found.push(route_violation(
+            name,
+            "archive_receipt_path",
+            "must be /v1/ai-archives/receipt so archive delivery has one bounded service-owned path",
+        ));
     }
     if let (Some(public), Some(class)) = (config.public.as_ref(), route.class) {
         let budget = config.gateway.budgets.for_class(class);
         if public.max_body_bytes < budget.max_body_bytes {
             found.push(Violation {
-                key: "public.max_body_bytes",
-                env_var: "RATATOSKR__PUBLIC__MAX_BODY_BYTES",
+                key: "public.max_body_bytes".into(),
+                env_var: "RATATOSKR__PUBLIC__MAX_BODY_BYTES".into(),
                 rule: "must be at least the largest configured gateway route body budget",
             });
         }
         if public.request_timeout_seconds < budget.response_timeout_seconds {
             found.push(Violation {
-                key: "public.request_timeout_seconds",
-                env_var: "RATATOSKR__PUBLIC__REQUEST_TIMEOUT_SECONDS",
+                key: "public.request_timeout_seconds".into(),
+                env_var: "RATATOSKR__PUBLIC__REQUEST_TIMEOUT_SECONDS".into(),
                 rule: "must be at least the largest configured gateway response-header budget",
             });
         }
@@ -374,8 +407,8 @@ fn operations_violations(config: &PlatformConfig) -> Vec<Violation> {
     let mut found = Vec::new();
     if !(3600..=2_592_000).contains(&config.operations.stale_after_seconds) {
         found.push(Violation {
-            key: "operations.stale_after_seconds",
-            env_var: "RATATOSKR__OPERATIONS__STALE_AFTER_SECONDS",
+            key: "operations.stale_after_seconds".into(),
+            env_var: "RATATOSKR__OPERATIONS__STALE_AFTER_SECONDS".into(),
             rule: "must be 3600..=2592000; zero harvests every unterminated operation rather than \
                    disabling the reaper",
         });
@@ -395,15 +428,15 @@ fn limit_violations(config: &PlatformConfig) -> Vec<Violation> {
     };
     if !(1..=4096).contains(&public.max_concurrent_requests) {
         found.push(Violation {
-            key: "public.max_concurrent_requests",
-            env_var: "RATATOSKR__PUBLIC__MAX_CONCURRENT_REQUESTS",
+            key: "public.max_concurrent_requests".into(),
+            env_var: "RATATOSKR__PUBLIC__MAX_CONCURRENT_REQUESTS".into(),
             rule: "must be 1..=4096; zero refuses every request rather than disabling the limit",
         });
     }
     if !(1..=100_000).contains(&public.actor_requests_per_minute) {
         found.push(Violation {
-            key: "public.actor_requests_per_minute",
-            env_var: "RATATOSKR__PUBLIC__ACTOR_REQUESTS_PER_MINUTE",
+            key: "public.actor_requests_per_minute".into(),
+            env_var: "RATATOSKR__PUBLIC__ACTOR_REQUESTS_PER_MINUTE".into(),
             rule: "must be 1..=100000; zero refuses every request rather than disabling the limit",
         });
     }
@@ -423,8 +456,8 @@ fn retention_violations(config: &PlatformConfig) -> Vec<Violation> {
     let mut found = Vec::new();
     if config.retention.inbox_days < crate::config::model::EVENT_RETENTION_DAYS {
         found.push(Violation {
-            key: "retention.inbox_days",
-            env_var: "RATATOSKR__RETENTION__INBOX_DAYS",
+            key: "retention.inbox_days".into(),
+            env_var: "RATATOSKR__RETENTION__INBOX_DAYS".into(),
             rule: "must be at least as long as the event stream keeps a message, or the inbox \
                    forgets a message the bus can still redeliver",
         });
@@ -446,8 +479,8 @@ fn identity_violations(config: &PlatformConfig) -> Vec<Violation> {
         let decoded = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, key);
         if !decoded.is_ok_and(|bytes| bytes.len() == 32) {
             found.push(Violation {
-                key: "identity.assertion_key",
-                env_var: "RATATOSKR__IDENTITY__ASSERTION_KEY",
+                key: "identity.assertion_key".into(),
+                env_var: "RATATOSKR__IDENTITY__ASSERTION_KEY".into(),
                 rule: "must be a base64 Ed25519 PUBLIC key decoding to exactly 32 bytes (ADR-0011)",
             });
         }
@@ -459,8 +492,8 @@ fn identity_violations(config: &PlatformConfig) -> Vec<Violation> {
         && (!matches!(url.scheme(), "http" | "https") || url.host().is_none())
     {
         found.push(Violation {
-            key: "identity.oauth_completion_url",
-            env_var: "RATATOSKR__IDENTITY__OAUTH_COMPLETION_URL",
+            key: "identity.oauth_completion_url".into(),
+            env_var: "RATATOSKR__IDENTITY__OAUTH_COMPLETION_URL".into(),
             rule: "must be an http or https URL with a host; a browser is redirected to it",
         });
     }
@@ -479,8 +512,8 @@ fn otlp_violations(config: &PlatformConfig) -> Vec<Violation> {
         let scheme_ok = matches!(otlp.endpoint.scheme(), "http" | "https");
         if !scheme_ok || otlp.endpoint.host().is_none() {
             found.push(Violation {
-                key: "telemetry.otlp.endpoint",
-                env_var: "RATATOSKR__TELEMETRY__OTLP__ENDPOINT",
+                key: "telemetry.otlp.endpoint".into(),
+                env_var: "RATATOSKR__TELEMETRY__OTLP__ENDPOINT".into(),
                 rule: "must be an http or https URL with a host",
             });
         }
@@ -488,8 +521,8 @@ fn otlp_violations(config: &PlatformConfig) -> Vec<Violation> {
         // V8
         if !(1..=60).contains(&otlp.timeout_seconds) {
             found.push(Violation {
-                key: "telemetry.otlp.timeout_seconds",
-                env_var: "RATATOSKR__TELEMETRY__OTLP__TIMEOUT_SECONDS",
+                key: "telemetry.otlp.timeout_seconds".into(),
+                env_var: "RATATOSKR__TELEMETRY__OTLP__TIMEOUT_SECONDS".into(),
                 rule: "must be 1..=60",
             });
         }
@@ -497,8 +530,8 @@ fn otlp_violations(config: &PlatformConfig) -> Vec<Violation> {
         // V9 — a header name containing a control character is a request-splitting primitive.
         if !otlp.headers.keys().all(|name| is_header_name(name)) {
             found.push(Violation {
-                key: "telemetry.otlp.headers",
-                env_var: "RATATOSKR__TELEMETRY__OTLP__HEADERS__<NAME>",
+                key: "telemetry.otlp.headers".into(),
+                env_var: "RATATOSKR__TELEMETRY__OTLP__HEADERS__<NAME>".into(),
                 rule: "every header name must match ^[a-z0-9-]{1,64}$",
             });
         }
@@ -515,8 +548,8 @@ fn otlp_violations(config: &PlatformConfig) -> Vec<Violation> {
             || otlp.endpoint.query().is_some()
         {
             found.push(Violation {
-                key: "telemetry.otlp.endpoint",
-                env_var: "RATATOSKR__TELEMETRY__OTLP__ENDPOINT",
+                key: "telemetry.otlp.endpoint".into(),
+                env_var: "RATATOSKR__TELEMETRY__OTLP__ENDPOINT".into(),
                 rule: "must not embed a user name, a password or a query string; a collector \
                        credential belongs in telemetry.otlp.headers, which cannot be printed \
                        (SECURITY.md)",
@@ -539,8 +572,8 @@ fn bus_violations(config: &PlatformConfig) -> Vec<Violation> {
 
     if !matches!(bus.url.scheme(), "nats" | "tls" | "ws" | "wss") {
         found.push(Violation {
-            key: "bus.url",
-            env_var: "RATATOSKR__BUS__URL",
+            key: "bus.url".into(),
+            env_var: "RATATOSKR__BUS__URL".into(),
             rule: "must be a nats://, tls://, ws:// or wss:// URL",
         });
     }
@@ -549,8 +582,8 @@ fn bus_violations(config: &PlatformConfig) -> Vec<Violation> {
     // effective-configuration line, so a credential in it is a credential in the log.
     if !bus.url.username().is_empty() || bus.url.password().is_some() {
         found.push(Violation {
-            key: "bus.url",
-            env_var: "RATATOSKR__BUS__URL",
+            key: "bus.url".into(),
+            env_var: "RATATOSKR__BUS__URL".into(),
             rule: "must not embed a user name or a password; a bus credential belongs in a \
                    credentials file read by path (SECURITY.md)",
         });
@@ -564,8 +597,8 @@ fn bus_violations(config: &PlatformConfig) -> Vec<Violation> {
     if let Some(path) = bus.nkey_seed_path.as_deref() {
         if !path.is_absolute() {
             found.push(Violation {
-                key: "bus.nkey_seed_path",
-                env_var: "RATATOSKR__BUS__NKEY_SEED_PATH",
+                key: "bus.nkey_seed_path".into(),
+                env_var: "RATATOSKR__BUS__NKEY_SEED_PATH".into(),
                 rule: "must be an absolute path; a relative one resolves against the unit's \
                        working directory",
             });
@@ -578,8 +611,8 @@ fn bus_violations(config: &PlatformConfig) -> Vec<Violation> {
             // it there?" when the question is "can this process start?" is a rule that passes at the
             // one moment it exists to fail.
             found.push(Violation {
-                key: "bus.nkey_seed_path",
-                env_var: "RATATOSKR__BUS__NKEY_SEED_PATH",
+                key: "bus.nkey_seed_path".into(),
+                env_var: "RATATOSKR__BUS__NKEY_SEED_PATH".into(),
                 rule: "must name a file this process can READ, holding its NATS nkey seed; a \
                        permission failure here is usually the unit's Group= (deploy/nats/README.md)",
             });
@@ -607,16 +640,16 @@ fn database_violations(config: &PlatformConfig) -> Vec<Violation> {
     {
         if !(1..=100).contains(&database.max_connections) {
             found.push(Violation {
-                key: "database.max_connections",
-                env_var: "RATATOSKR__DATABASE__MAX_CONNECTIONS",
+                key: "database.max_connections".into(),
+                env_var: "RATATOSKR__DATABASE__MAX_CONNECTIONS".into(),
                 rule: "must be 1..=100",
             });
         }
 
         if !(1..=30).contains(&database.acquire_timeout_seconds) {
             found.push(Violation {
-                key: "database.acquire_timeout_seconds",
-                env_var: "RATATOSKR__DATABASE__ACQUIRE_TIMEOUT_SECONDS",
+                key: "database.acquire_timeout_seconds".into(),
+                env_var: "RATATOSKR__DATABASE__ACQUIRE_TIMEOUT_SECONDS".into(),
                 rule: "must be 1..=30",
             });
         }
@@ -627,8 +660,8 @@ fn database_violations(config: &PlatformConfig) -> Vec<Violation> {
         let url = database.url.expose_secret();
         if !(url.starts_with("postgres://") || url.starts_with("postgresql://")) {
             found.push(Violation {
-                key: "database.url",
-                env_var: "RATATOSKR__DATABASE__URL",
+                key: "database.url".into(),
+                env_var: "RATATOSKR__DATABASE__URL".into(),
                 rule: "must be a postgres:// or postgresql:// URL",
             });
         }

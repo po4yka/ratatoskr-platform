@@ -151,7 +151,7 @@ fn gateway_requires_both_distinct_archive_receivers_when_archive_ingress_is_enab
     let ConfigError::Invalid(found) = error else {
         panic!("expected semantic gateway validation failure");
     };
-    assert!(names(&found, "gateway.routes.listener"));
+    assert!(names(&found, "gateway.routes.claude.listener"));
 }
 
 /// C-7. `ARCHITECTURE.md` S18: the edge role serves the public API, so a missing public listener is

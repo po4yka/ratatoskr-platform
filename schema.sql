@@ -1009,10 +1009,12 @@ create table operations.outbox (
     -- A command may not be larger than the bus will carry.
     --
     -- The publisher serializes `payload` straight onto NATS. A server refuses a publish above
-    -- `max_payload` — 1 MiB by default and the value `deploy/nats/ratatoskr.conf` leaves at its
-    -- default — and the refusal arrives as a message that was not acknowledged. The outbox reads
-    -- that as a transport failure and does exactly the wrong thing with it: it backs the row off and
-    -- retries, forever, until twelve attempts are spent.
+    -- `max_payload` — 8 MiB in `deploy/nats/ratatoskr.conf`, raised from the 1 MiB server default so
+    -- the archive and document facts other services publish fit — and the refusal arrives as a
+    -- message that was not acknowledged. The outbox reads that as a transport failure and does
+    -- exactly the wrong thing with it: it backs the row off and retries, forever, until twelve
+    -- attempts are spent. The 768 KiB bound below is Platform's own command limit, deliberately far
+    -- under the broker's: a command is a small instruction, not a payload.
     --
     -- The cost is not one row. `pump::run_once` claims a batch of 64 and publishes them in order, so
     -- an oversized row consumes a claim slot every pass, and its retries are indistinguishable from
@@ -1041,11 +1043,12 @@ comment on column operations.outbox.message_id is
     'deduplication key a consumer stores in its inbox, and the unique index below makes enqueuing '
     'idempotent: a retried request that re-runs the same transaction cannot produce two messages.';
 comment on column operations.outbox.payload is
-    'The serialized envelope. Bounded to 768 KiB, which is the NATS default max_payload of 1 MiB '
-    'with room for the headers and for the difference between jsonb''s own text rendering and '
-    'serde_json''s. Not a tuning knob: a larger message is a different design — a reference to a '
-    'blob — rather than a larger limit. Raising max_payload on the server without raising this '
-    'constraint is safe; the reverse is not.';
+    'The serialized envelope. Bounded to 768 KiB, which is Platform''s own command limit and sits '
+    'well under the 8 MiB max_payload that deploy/nats/ratatoskr.conf sets on the broker, with room '
+    'for the headers and for the difference between jsonb''s own text rendering and serde_json''s. '
+    'Not a tuning knob: a larger message is a different design — a reference to a blob — rather '
+    'than a larger limit. Raising max_payload on the server without raising this constraint is '
+    'safe; the reverse is not.';
 comment on column operations.outbox.claimed_until is
     'A lease, not a flag. A publisher that crashes mid-batch leaves rows claimed; the lease expiring '
     'is what returns them to the queue without an operator having to notice.';
