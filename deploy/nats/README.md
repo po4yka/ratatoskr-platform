@@ -16,9 +16,9 @@ Each service that is not Platform carries a byte-equal copy of its own stanza in
 | Identity | Seed file | Environment variable that names it | Used by |
 |---|---|---|---|
 | `EDGE` | `/etc/ratatoskr/edge.nkey` | `RATATOSKR__BUS__NKEY_SEED_PATH` | `ratatoskr-edge` |
-| `TELEGRAM` | `/etc/ratatoskr/telegram.nkey` | `RATATOSKR__BUS__NKEY_SEED_PATH` | `ratatoskr-telegram-dispatcher` |
-| `CHATGPT` | `/etc/ratatoskr/chatgpt.nkey` | `RATATOSKR__BUS__NKEY_SEED_PATH` | `ratatoskr-chatgpt` |
-| `CLAUDE` | `/etc/ratatoskr/claude.nkey` | `RATATOSKR__BUS__NKEY_SEED_PATH` | `ratatoskr-claude` |
+| `TELEGRAM` | `/etc/ratatoskr/telegram.nkey` | `RATATOSKR__NOTIFICATION_BUS__CREDENTIALS_FILE` (dispatcher only) | `ratatoskr-telegram-dispatcher` |
+| `CHATGPT` | `/etc/ratatoskr/chatgpt.nkey` | `RATATOSKR__RECEIPT__EVENT_BUS_NKEY_SEED_PATH`, with `RATATOSKR__RECEIPT__EVENT_BUS_URL` | `ratatoskr-chatgpt` |
+| `CLAUDE` | `/etc/ratatoskr/claude.nkey` | `RATATOSKR__RECEIPT__EVENT_BUS_NKEY_SEED_PATH`, with `RATATOSKR__RECEIPT__EVENT_BUS_URL` | `ratatoskr-claude` |
 | `X` | `/etc/ratatoskr/x.nkey` | `RATATOSKR__BUS__NKEY_SEED_PATH` | `ratatoskr-x` |
 | `INSTAGRAM` | `/etc/ratatoskr/instagram.nkey` | `RATATOSKR__BUS__NKEY_SEED_PATH` | `ratatoskr-instagram` |
 | `THREADS` | `/etc/ratatoskr/threads.nkey` | `RATATOSKR__BUS__NKEY_SEED_PATH` | `ratatoskr-threads` |
@@ -162,8 +162,10 @@ for identity in edge telegram chatgpt claude x instagram threads extractor \
 done
 ```
 
-The AI archive services configure their `bus.nkey_seed_path` to `/etc/ratatoskr/chatgpt.nkey` and
-`/etc/ratatoskr/claude.nkey` respectively. Telegram's seed is installed as:
+The AI archive services point `RATATOSKR__RECEIPT__EVENT_BUS_NKEY_SEED_PATH` at
+`/etc/ratatoskr/chatgpt.nkey` and `/etc/ratatoskr/claude.nkey` respectively, and name the broker
+with `RATATOSKR__RECEIPT__EVENT_BUS_URL`. The Telegram dispatcher points
+`RATATOSKR__NOTIFICATION_BUS__CREDENTIALS_FILE` at its seed, which is installed as:
 
 ```bash
 sudo install -m 0640 -o root -g ratatoskr-telegram-dispatcher \

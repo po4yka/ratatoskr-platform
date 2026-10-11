@@ -25,4 +25,4 @@
 
 ## 6. Documentation corrections (R2-10, R2-01)
 
-- [ ] 6.1 Correct the seed variable table in `deploy/nats/README.md` and state the Edge upstream owners in `deploy/README.md` and `deploy/systemd/edge.conf.example`. Documentation cannot start from a failing test.
+- [x] 6.1 Correct the seed variable table in `deploy/nats/README.md` and state the Edge upstream owners in `deploy/README.md` and `deploy/systemd/edge.conf.example`. Documentation cannot start from a failing test.

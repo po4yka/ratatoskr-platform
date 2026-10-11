@@ -49,6 +49,13 @@ bind to `0.0.0.0`.
 | 4222 | NATS | this host |
 | 5432 | PostgreSQL | this host |
 
+Edge also forwards to loopback upstreams, whose addresses are allocated in the workspace port table and
+configured in `systemd/edge.conf.example`. Each is bound by the owning service's own listener rather
+than its operator listener: Knowledge's API listener on 8091, GitHub's on 8092, and the ChatGPT and
+Claude receipt listeners on 8096 and 8097. Vault (8093), social (8094) and AI (8095) have no
+implementing service yet, so nothing listens there and Edge reports their capability stale on
+purpose. That is the truthful answer, not a fault to silence.
+
 `8081` is deliberately unused: it is held by another process, which is why `ratatoskr-ingest` carries
 no compiled default public port and rule V1 refuses to start it until an operator names one.
 
