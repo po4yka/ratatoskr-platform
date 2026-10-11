@@ -123,11 +123,17 @@ async fn bound_to_its_operation(
         .payload
         .get("tenant_id")
         .and_then(serde_json::Value::as_str);
+    // The acceptance record counts as a binding only when it names this operation's owner.
+    let binding = crate::find_ai_archive_acceptance(&mut **transaction, operation_id)
+        .await
+        .map_err(map_operation_error)?
+        .filter(|binding| binding.owner_user_id == operation.owner_user_id);
     if !crate::authority::authorize(
         &operation.kind,
         &message.producer,
         envelope_tenant,
         operation.owner_user_id,
+        binding.is_some(),
     ) {
         tracing::warn!(
             %operation_id,
@@ -137,10 +143,7 @@ async fn bound_to_its_operation(
         return Ok(false);
     }
 
-    if let Some(binding) = crate::find_ai_archive_acceptance(&mut **transaction, operation_id)
-        .await
-        .map_err(map_operation_error)?
-    {
+    if let Some(binding) = binding {
         let (expected_subject, expected_producer) = match binding.provider.as_str() {
             "chatgpt" => (
                 "evt.ai-archive.chatgpt.operation.reported.v1",

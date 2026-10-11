@@ -388,8 +388,11 @@ A report is applied only when the operation it names belongs to the report's ten
 producer is allowed to report for the operation's kind. The projection loads the operation first,
 then requires the envelope `tenant_id` to equal `user:<owner>` and the envelope `producer` to be in
 the allow-list for the kind (`crates/operations/src/authority.rs`; `ai_archive.import` keeps its
-provider-bound subject and producer check). A kind that is not in the table allows no producer, so a
-new operation kind fails closed until a row names who may report for it. A rejected report is
+provider-bound subject and producer check). The ChatGPT and Claude services publish their reports
+with no envelope `tenant_id`, so for `ai_archive.import` the tenant may be absent when Platform's own
+acceptance record for the operation names the owner; a tenant that is present is always checked, and
+an import with no usable acceptance record needs the tenant like any other kind. A kind that is not
+in the table allows no producer, so a new operation kind fails closed until a row names who may report for it. A rejected report is
 recorded in the inbox, leaves the status unchanged and logs only the operation id and a class.
 
 The residual risk is narrower than before and not gone: `evt.platform.operation.reported.v1` is one

@@ -240,6 +240,121 @@ async fn a_kind_with_no_row_is_rejected_for_every_producer() {
     harness.cleanup().await.expect("cleanup");
 }
 
+/// A report exactly as the two AI archive services publish it today: the envelope their
+/// `operation_report_envelope` builds carries no `tenant_id`, and their outbox pump publishes the
+/// stored document unchanged. The tenant of an AI-archive import is bound by Platform's own
+/// acceptance record, so this shape must keep being applied (XR-021 R2-02, AI-archive amendment).
+fn archive_service_message(provider: &str, operation_id: Uuid) -> Incoming {
+    let producer = format!("ratatoskr-{provider}");
+    let event_id = Uuid::now_v7();
+    let envelope = serde_json::json!({
+        "event_id": event_id,
+        "event_type": "platform.operation.reported.v1",
+        "occurred_at": "2023-11-14T22:13:20Z",
+        "producer": producer,
+        "aggregate_id": format!("operation:{operation_id}"),
+        "correlation_id": format!("event:{event_id}"),
+        "schema_version": 1,
+        "payload": report(operation_id),
+    });
+    assert!(
+        envelope.get("tenant_id").is_none(),
+        "the AI archive services publish no tenant_id"
+    );
+    Incoming {
+        message_id: Uuid::now_v7(),
+        subject: Subject::parse(&format!("evt.ai-archive.{provider}.operation.reported.v1"))
+            .expect("the provider report subject"),
+        producer,
+        payload: envelope,
+    }
+}
+
+async fn accepted_import(pool: &sqlx::PgPool, provider: &str, binding_owner: Uuid) -> Uuid {
+    let operation = accepted(pool, "ai_archive.import").await;
+    platform_operations::record_ai_archive_acceptance(
+        pool,
+        &platform_operations::AiArchiveAcceptance {
+            operation_id: operation,
+            owner_user_id: binding_owner,
+            device_id: Uuid::now_v7(),
+            provider: provider.to_owned(),
+            sha256: "00".repeat(32),
+            byte_size: 1,
+            accepted_at: now(),
+        },
+    )
+    .await
+    .expect("recording the archive binding");
+    operation
+}
+
+#[tokio::test]
+async fn a_bound_ai_archive_report_without_a_tenant_is_applied() {
+    let harness = TestDatabase::create().await.expect("a test database");
+    let pool = harness.pool();
+
+    for provider in ["chatgpt", "claude"] {
+        let operation = accepted_import(pool, provider, OWNER).await;
+        expect(
+            pool,
+            operation,
+            &archive_service_message(provider, operation),
+            Outcome::Applied,
+        )
+        .await;
+    }
+
+    harness.cleanup().await.expect("cleanup");
+}
+
+#[tokio::test]
+async fn a_bound_ai_archive_report_naming_another_tenant_is_rejected() {
+    let harness = TestDatabase::create().await.expect("a test database");
+    let pool = harness.pool();
+    let operation = accepted_import(pool, "chatgpt", OWNER).await;
+
+    let mut forged = archive_service_message("chatgpt", operation);
+    forged.payload["tenant_id"] = serde_json::json!(format!("user:{OTHER}"));
+    expect(pool, operation, &forged, Outcome::Rejected).await;
+    forged.message_id = Uuid::now_v7();
+    forged.payload["tenant_id"] = serde_json::json!("user:not-a-uuid");
+    expect(pool, operation, &forged, Outcome::Rejected).await;
+
+    harness.cleanup().await.expect("cleanup");
+}
+
+#[tokio::test]
+async fn an_acceptance_record_for_another_owner_does_not_bind_the_operation() {
+    let harness = TestDatabase::create().await.expect("a test database");
+    let pool = harness.pool();
+    let operation = accepted_import(pool, "claude", OTHER).await;
+
+    expect(
+        pool,
+        operation,
+        &archive_service_message("claude", operation),
+        Outcome::Rejected,
+    )
+    .await;
+
+    harness.cleanup().await.expect("cleanup");
+}
+
+#[tokio::test]
+async fn an_import_report_without_a_tenant_or_an_acceptance_record_is_rejected() {
+    let harness = TestDatabase::create().await.expect("a test database");
+    let pool = harness.pool();
+    let operation = accepted(pool, "ai_archive.import").await;
+
+    let mut unbound = message("ratatoskr-chatgpt", None, operation);
+    expect(pool, operation, &unbound, Outcome::Rejected).await;
+    unbound = archive_service_message("chatgpt", operation);
+    expect(pool, operation, &unbound, Outcome::Rejected).await;
+
+    harness.cleanup().await.expect("cleanup");
+}
+
 /// The quoted value on the line after `marker`, or the first quoted value of the line holding it.
 fn literal_after(source: &str, marker: &str) -> Vec<String> {
     source

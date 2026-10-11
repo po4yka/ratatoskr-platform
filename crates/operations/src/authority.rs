@@ -4,7 +4,8 @@
 //! it are told apart only by the envelope `producer` field. Before a report is applied, the
 //! projection loads the operation and asks [`authorize`] two questions: is the envelope tenant the
 //! operation's owner, and is the producer in the list for the operation's kind. The table below is
-//! the only place the second answer lives.
+//! the only place the second answer lives. An AI-archive import is the exception on the first
+//! question: its reports carry no tenant, and Platform's acceptance record binds the owner instead.
 //!
 //! A kind that is not in the table allows no producer. Adding a new operation kind to Platform
 //! therefore fails closed: its reports are rejected until a row names who may send them, and the
@@ -76,20 +77,40 @@ pub fn producers_for(kind: &str) -> Option<&'static Producers> {
 /// operation of `kind` owned by `owner`.
 ///
 /// `envelope_tenant` is the wire text of the envelope `tenant_id` (`user:<uuid>`), or `None` when
-/// the envelope has none. A missing, malformed or different tenant is a refusal, and so is a kind
-/// without a row. For a [`Producers::ProviderBound`] kind this answers only the tenant question:
-/// the caller still checks the acceptance binding.
+/// the envelope has none. A kind without a row is refused, and so is a listed kind whose tenant is
+/// missing, malformed or not the owner's.
+///
+/// A [`Producers::ProviderBound`] kind is the one place a missing tenant is tolerated, and only
+/// when `acceptance_bound` says the caller found Platform's own acceptance record for the
+/// operation, naming the same owner. The two AI archive services publish their operation
+/// reports with no envelope tenant, and the acceptance record is the stronger evidence: Platform
+/// wrote it when it accepted the upload, so it pins the owner, the provider and (through the
+/// projection) the subject and producer. A tenant that is present is still checked, because a
+/// wrong one is a bug or a forgery whichever kind it arrives on. The caller checks the subject
+/// and producer of the binding.
 #[must_use]
-pub fn authorize(kind: &str, producer: &str, envelope_tenant: Option<&str>, owner: Uuid) -> bool {
-    let Some(tenant) = envelope_tenant.and_then(|raw| TenantRef::parse(raw).ok()) else {
-        return false;
+pub fn authorize(
+    kind: &str,
+    producer: &str,
+    envelope_tenant: Option<&str>,
+    owner: Uuid,
+    acceptance_bound: bool,
+) -> bool {
+    let tenant_ok = match envelope_tenant {
+        Some(raw) => {
+            TenantRef::parse(raw).is_ok_and(|tenant| tenant == TenantRef::of_user(UserId(owner)))
+        }
+        None => false,
     };
-    if tenant != TenantRef::of_user(UserId(owner)) {
-        return false;
-    }
     match producers_for(kind) {
-        Some(Producers::Listed(listed)) => listed.contains(&producer),
-        Some(Producers::ProviderBound) => true,
+        Some(Producers::Listed(listed)) => tenant_ok && listed.contains(&producer),
+        Some(Producers::ProviderBound) => {
+            if envelope_tenant.is_some() {
+                tenant_ok
+            } else {
+                acceptance_bound
+            }
+        }
         None => false,
     }
 }
@@ -107,7 +128,61 @@ mod tests {
             "ratatoskr-channel-digests",
             Some(&format!("user:{OWNER}")),
             OWNER,
+            false,
         ));
+    }
+
+    #[test]
+    fn a_listed_kind_needs_a_tenant_even_when_an_acceptance_record_exists() {
+        assert!(!authorize(
+            "channel_digest.run",
+            "ratatoskr-channel-digests",
+            None,
+            OWNER,
+            true,
+        ));
+    }
+
+    #[test]
+    fn a_provider_bound_kind_without_a_tenant_needs_the_acceptance_record() {
+        assert!(authorize(
+            "ai_archive.import",
+            "ratatoskr-claude",
+            None,
+            OWNER,
+            true
+        ));
+        assert!(!authorize(
+            "ai_archive.import",
+            "ratatoskr-claude",
+            None,
+            OWNER,
+            false
+        ));
+    }
+
+    #[test]
+    fn a_provider_bound_kind_checks_a_tenant_that_is_present() {
+        let other = Uuid::from_u128(0x018f_0000_0000_7000_8000_0000_0000_0c02);
+        assert!(authorize(
+            "ai_archive.import",
+            "ratatoskr-claude",
+            Some(&format!("user:{OWNER}")),
+            OWNER,
+            false,
+        ));
+        for raw in [format!("user:{other}"), "user:not-a-uuid".to_owned()] {
+            assert!(
+                !authorize(
+                    "ai_archive.import",
+                    "ratatoskr-claude",
+                    Some(&raw),
+                    OWNER,
+                    true
+                ),
+                "{raw:?}"
+            );
+        }
     }
 
     #[test]
@@ -123,7 +198,8 @@ mod tests {
                     "channel_digest.run",
                     "ratatoskr-channel-digests",
                     Some(raw),
-                    OWNER
+                    OWNER,
+                    false,
                 ),
                 "{raw:?}"
             );
