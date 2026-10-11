@@ -29,7 +29,7 @@ use tokio::time::timeout;
 
 mod support;
 
-use support::{Container, REQUEST_TIMEOUT, ServerErrors, connect};
+use support::{Container, REQUEST_TIMEOUT, connect};
 
 const CONF: &str = include_str!("../../../deploy/nats/ratatoskr.conf");
 
@@ -80,35 +80,6 @@ const OWNERS: [(&str, &str, &str); 24] = [
     ("EDGE", EVT, "platform_ai_archive_chatgpt_projection"),
     ("EDGE", EVT, "platform_ai_archive_claude_projection"),
 ];
-
-/// XR-021 R3-01: each non-Edge identity's inbox prefix, the only namespace it may subscribe to. The
-/// prefix is `_INBOX_` and the identity name in lower case, underscores kept. Written out rather
-/// than derived, so the table is the contract and the deployed file is what is checked against it.
-const INBOX_PREFIXES: [(&str, &str); 12] = [
-    ("TELEGRAM", "_INBOX_telegram"),
-    ("CHATGPT", "_INBOX_chatgpt"),
-    ("CLAUDE", "_INBOX_claude"),
-    ("X", "_INBOX_x"),
-    ("INSTAGRAM", "_INBOX_instagram"),
-    ("THREADS", "_INBOX_threads"),
-    ("EXTRACTOR", "_INBOX_extractor"),
-    (
-        "EXTRACTOR_BROWSER_WORKER",
-        "_INBOX_extractor_browser_worker",
-    ),
-    ("KNOWLEDGE", "_INBOX_knowledge"),
-    ("GITHUB", "_INBOX_github"),
-    ("VAULT", "_INBOX_vault"),
-    ("CHANNEL_DIGESTS", "_INBOX_channel_digests"),
-];
-
-/// The prefix an identity connects with: its own, or the library default for EDGE.
-fn inbox_prefix(identity: &str) -> Option<&'static str> {
-    INBOX_PREFIXES
-        .iter()
-        .find(|(name, _)| *name == identity)
-        .map(|(_, prefix)| *prefix)
-}
 
 /// Durables only Edge may describe. `platform_edge_projection` is created by Edge's own consumer,
 /// so it may not exist on this broker, which does not change who is refused.
@@ -188,24 +159,19 @@ impl Deployed {
         Self { container, seeds }
     }
 
-    /// Connect as `identity` the way its service does: on its own inbox prefix.
+    /// Connect as `identity` the way its service does: on its own inbox prefix (XR-021 R3-01),
+    /// `_INBOX_` and its name in lower case, underscores kept. EDGE keeps the library default.
+    /// `deployed_inbox_prefixes.rs` checks the deployed file against the written-out table.
     async fn client(&self, identity: &str) -> async_nats::Client {
-        self.client_observed(identity, inbox_prefix(identity))
-            .await
-            .0
-    }
-
-    /// Connect as `identity` with an explicit inbox prefix and the server errors it receives.
-    async fn client_observed(
-        &self,
-        identity: &str,
-        prefix: Option<&str>,
-    ) -> (async_nats::Client, ServerErrors) {
         let seed = self
             .seeds
             .get(identity)
             .unwrap_or_else(|| panic!("the deployed ACL has no {identity} identity"));
-        connect(&self.container.url, seed, prefix).await
+        let prefix =
+            (identity != "EDGE").then(|| format!("_INBOX_{}", identity.to_ascii_lowercase()));
+        connect(&self.container.url, seed, prefix.as_deref())
+            .await
+            .0
     }
 
     /// EDGE declares both streams and every fixed durable, as `ratatoskr-edge` does at startup.
@@ -702,154 +668,4 @@ async fn telegram_identity_may_only_describe_its_own_durable() {
     let telegram = broker.client("TELEGRAM").await;
     assert_only_own_durables(&telegram, "TELEGRAM").await;
     assert_no_broad_access(&telegram, "TELEGRAM").await;
-}
-
-/// Wait until `errors` holds at least `count` entries or the wait ends, then return them.
-async fn server_errors(errors: &ServerErrors, count: usize) -> Vec<String> {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    loop {
-        let seen = errors.lock().expect("the server error sink").clone();
-        if seen.len() >= count || tokio::time::Instant::now() >= deadline {
-            return seen;
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-}
-
-/// XR-021 R3-01 invariant 7, statically: no non-Edge stanza subscribes to anything but the single
-/// entry `<prefix>.>` of its row, so none can read the shared `_INBOX.>` namespace or any other
-/// service's replies. NATS compares whole tokens, so `_INBOX_x.>` does not match `_INBOX.>`.
-#[test]
-fn every_non_edge_stanza_subscribes_only_to_its_own_inbox_prefix() {
-    let identities = platform_nats_profile::parse(CONF).expect("the deployed ACL parses");
-    assert_eq!(identities.len(), INBOX_PREFIXES.len() + 1);
-    for identity in &identities {
-        if identity.name == "EDGE" {
-            assert_eq!(
-                identity.subscribe_allow,
-                ["_INBOX.>"],
-                "EDGE keeps the shared inbox"
-            );
-            continue;
-        }
-        let prefix = inbox_prefix(&identity.name)
-            .unwrap_or_else(|| panic!("{} has no row in the prefix table", identity.name));
-        assert_eq!(
-            identity.subscribe_allow,
-            [format!("{prefix}.>")],
-            "{} may subscribe to its own inbox prefix only",
-            identity.name
-        );
-    }
-}
-
-/// XR-021 R3-01: the shared namespace is closed to every service. A refused subscription is only
-/// visible as a server error on the connection (and a `Subscription Violation` in the server log).
-#[tokio::test]
-async fn a_service_cannot_subscribe_to_the_shared_inbox_namespace() {
-    let broker = Deployed::start();
-    // The trusted side is the control: its subscription to the shared namespace raises no error.
-    let (edge, edge_errors) = broker.client_observed("EDGE", None).await;
-    let _edge_subscription = edge.subscribe("_INBOX.>").await.expect("EDGE subscribes");
-    edge.flush().await.expect("EDGE flushes");
-    for (identity, prefix) in INBOX_PREFIXES {
-        let (client, errors) = broker.client_observed(identity, Some(prefix)).await;
-        let _subscription = client
-            .subscribe("_INBOX.>")
-            .await
-            .expect("the client accepts the request before server authorization");
-        client.flush().await.expect("the flush completes");
-        let seen = server_errors(&errors, 1).await;
-        assert!(
-            seen.iter()
-                .any(|error| error
-                    .contains("Permissions Violation for Subscription to \"_INBOX.>\"")),
-            "{identity} was not refused the shared inbox namespace: {seen:?}"
-        );
-    }
-    assert_eq!(
-        server_errors(&edge_errors, 0).await,
-        Vec::<String>::new(),
-        "EDGE was refused its own inbox namespace"
-    );
-}
-
-/// XR-021 R3-01: a service cannot read another service's replies either.
-#[tokio::test]
-async fn a_service_cannot_subscribe_to_another_services_inbox_prefix() {
-    let broker = Deployed::start();
-    for (identity, prefix) in INBOX_PREFIXES {
-        let (client, errors) = broker.client_observed(identity, Some(prefix)).await;
-        let foreign: Vec<String> = INBOX_PREFIXES
-            .iter()
-            .filter(|(name, _)| *name != identity)
-            .map(|(_, other)| format!("{other}.>"))
-            .collect();
-        let mut subscriptions = Vec::new();
-        for subject in &foreign {
-            subscriptions.push(
-                client
-                    .subscribe(subject.clone())
-                    .await
-                    .expect("the request is sent"),
-            );
-        }
-        // Its own prefix is accepted: the last subscription must not raise an error.
-        subscriptions.push(
-            client
-                .subscribe(format!("{prefix}.>"))
-                .await
-                .expect("the request is sent"),
-        );
-        client.flush().await.expect("the flush completes");
-        let seen = server_errors(&errors, foreign.len()).await;
-        for subject in &foreign {
-            assert!(
-                seen.iter().any(|error| error.contains(&format!(
-                    "Permissions Violation for Subscription to \"{subject}\""
-                ))),
-                "{identity} was not refused {subject}: {seen:?}"
-            );
-        }
-        assert_eq!(
-            seen.len(),
-            foreign.len(),
-            "{identity} was refused its own prefix or something else: {seen:?}"
-        );
-    }
-}
-
-/// XR-021 R3-01: the refusal does not break the service. On its own prefix every identity completes
-/// a JetStream request (it describes a durable it owns, or publishes and awaits the stream's
-/// acknowledgement when it owns none), and on the library default it cannot.
-#[tokio::test]
-async fn each_service_completes_a_jetstream_request_on_its_own_prefix() {
-    let broker = Deployed::start();
-    broker.provision().await;
-    for (identity, prefix) in INBOX_PREFIXES {
-        let owned = OWNERS.iter().find(|(owner, _, _)| *owner == identity);
-        for (label, inbox) in [("own prefix", Some(prefix)), ("default inbox", None)] {
-            let (client, _errors) = broker.client_observed(identity, inbox).await;
-            let outcome = match owned {
-                Some((_, stream, durable)) => jetstream::new(client)
-                    .get_consumer_from_stream::<jetstream::consumer::pull::Config, _, _>(
-                        *durable, *stream,
-                    )
-                    .await
-                    .map(|_| ())
-                    .map_err(|error| error.to_string()),
-                None => publish_acked(&client, "evt.ai_archive.archive.imported.v1").await,
-            };
-            if inbox.is_some() {
-                outcome.unwrap_or_else(|error| {
-                    panic!("{identity} failed a JetStream request on its {label}: {error}")
-                });
-            } else {
-                assert!(
-                    outcome.is_err(),
-                    "{identity} completed a JetStream request on the {label}, which the ACL withholds"
-                );
-            }
-        }
-    }
 }

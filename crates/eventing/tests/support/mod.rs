@@ -4,7 +4,7 @@
 //! The broker is a `nats:2-alpine` container, as `compose.yaml` runs it. On a machine without a
 //! Docker daemon, `PLATFORM_TEST_NATS_SERVER` may name a native `nats-server` binary (2.10 or
 //! later) instead: the same configuration then runs as a child process on a loopback port taken
-//! from `PLATFORM_TEST_NATS_PORTS` (`first-last`, default `57623-57639`), with the JetStream store
+//! from `PLATFORM_TEST_NATS_PORTS` (`first-last`, default `57623-57639`), with the `JetStream` store
 //! moved into the fixture directory and the monitoring listener removed. CI uses the container.
 
 #![allow(
@@ -54,7 +54,7 @@ impl Container {
             .join("../../target/nats-fixtures")
             .join(&name);
         std::fs::create_dir_all(&directory).expect("the disposable NATS directory");
-        if let Some(binary) = std::env::var_os("PLATFORM_TEST_NATS_SERVER") {
+        if let Some(binary) = native_server() {
             return Self::start_native(&binary, name, directory, conf);
         }
         std::fs::write(directory.join("nats.conf"), conf).expect("the NATS configuration");
@@ -149,7 +149,7 @@ impl Container {
     }
 }
 
-/// The configuration with its container-only settings replaced: the JetStream store moves into
+/// The configuration with its container-only settings replaced: the `JetStream` store moves into
 /// the fixture directory and the monitoring listener (a fixed port) is dropped.
 fn adapt_for_native(conf: &str, store: &std::path::Path) -> String {
     let mut adapted = String::with_capacity(conf.len());
@@ -167,7 +167,7 @@ fn adapt_for_native(conf: &str, store: &std::path::Path) -> String {
             adapted.push_str(head);
             adapted.push(' ');
             adapted.push_str(&store.display().to_string());
-            adapted.push_str(&tail[end..]);
+            adapted.push_str(tail.get(end..).unwrap_or_default());
         } else {
             adapted.push_str(line);
         }
@@ -176,10 +176,28 @@ fn adapt_for_native(conf: &str, store: &std::path::Path) -> String {
     adapted
 }
 
+/// The native `nats-server` binary the environment selects, if any.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test helper choosing which broker to run; the workspace bans direct environment \
+              reads so that production configuration has one loader"
+)]
+fn native_server() -> Option<std::ffi::OsString> {
+    std::env::var_os("PLATFORM_TEST_NATS_SERVER")
+}
+
+/// The `first-last` port range the environment selects for native brokers, if any.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test helper choosing which ports to run on; see `native_server`"
+)]
+fn port_setting() -> Option<String> {
+    std::env::var("PLATFORM_TEST_NATS_PORTS").ok()
+}
+
 /// The loopback port range a native broker may use.
 fn port_range() -> std::ops::RangeInclusive<u16> {
-    let text =
-        std::env::var("PLATFORM_TEST_NATS_PORTS").unwrap_or_else(|_| "57623-57639".to_owned());
+    let text = port_setting().unwrap_or_else(|| "57623-57639".to_owned());
     let (first, last) = text
         .split_once('-')
         .expect("PLATFORM_TEST_NATS_PORTS is first-last");
@@ -188,7 +206,7 @@ fn port_range() -> std::ops::RangeInclusive<u16> {
 
 /// Take a free port of the range, waiting while every one is held by another test.
 fn claim_port() -> u16 {
-    let deadline = std::time::Instant::now() + Duration::from_secs(180);
+    let deadline = std::time::Instant::now() + Duration::from_mins(3);
     loop {
         {
             let mut claimed = CLAIMED_PORTS.lock().expect("the port claims");
