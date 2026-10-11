@@ -35,7 +35,7 @@ const BOOT_CREDENTIAL: &str = "boot-capabilities-credential-0000";
 /// A user with a live browser session that authenticates with [`BOOT_CREDENTIAL`] on Edge.
 fn seed_browser_session(runtime: &tokio::runtime::Runtime, database: &TestDatabase) {
     runtime.block_on(async {
-        let now = jiff::Timestamp::now();
+        let now = jiff::Timestamp::now(); // wall-clock: the spawned edge binary checks session expiry against its own clock
         let user = platform_identity::user::create_user(database.pool(), now)
             .await
             .expect("a user");
