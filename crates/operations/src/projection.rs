@@ -30,27 +30,7 @@ impl Handler for ProgressProjection {
             return Ok(Outcome::Rejected);
         };
 
-        if let Some(binding) =
-            crate::find_ai_archive_acceptance(&mut **transaction, report.operation_id)
-                .await
-                .map_err(map_operation_error)?
-        {
-            let (expected_subject, expected_producer) = match binding.provider.as_str() {
-                "chatgpt" => (
-                    "evt.ai-archive.chatgpt.operation.reported.v1",
-                    "ratatoskr-chatgpt",
-                ),
-                "claude" => (
-                    "evt.ai-archive.claude.operation.reported.v1",
-                    "ratatoskr-claude",
-                ),
-                _ => return Ok(Outcome::Rejected),
-            };
-            if message.subject.as_str() != expected_subject || message.producer != expected_producer
-            {
-                return Ok(Outcome::Rejected);
-            }
-        } else if message.subject.as_str().starts_with("evt.ai-archive.") {
+        if !bound_to_its_operation(transaction, message, report.operation_id).await? {
             return Ok(Outcome::Rejected);
         }
 
@@ -117,6 +97,64 @@ impl Handler for ProgressProjection {
             // `record_status` cannot return `Conflict` here; it is handled above.
             Transition::Conflict => Outcome::Rejected,
         })
+    }
+}
+
+/// Whether `message` may be applied to the operation it names: the operation exists, the envelope
+/// tenant is its owner and the producer is allowed for its kind (XR-021 R2-02), and an AI-archive
+/// operation is reported on its own provider's subject by its own provider's producer.
+///
+/// Logs only the operation id and a class: the envelope tenant and producer are the claims under
+/// test, and the report is never logged.
+async fn bound_to_its_operation(
+    transaction: &mut sqlx::PgTransaction<'_>,
+    message: &Incoming,
+    operation_id: Uuid,
+) -> Result<bool, EventingError> {
+    // An operation Platform does not have is an event for somebody else's operation, or one
+    // already collected.
+    let Some(operation) = crate::find(&mut **transaction, operation_id)
+        .await
+        .map_err(map_operation_error)?
+    else {
+        return Ok(false);
+    };
+    let envelope_tenant = message
+        .payload
+        .get("tenant_id")
+        .and_then(serde_json::Value::as_str);
+    if !crate::authority::authorize(
+        &operation.kind,
+        &message.producer,
+        envelope_tenant,
+        operation.owner_user_id,
+    ) {
+        tracing::warn!(
+            %operation_id,
+            class = "report_not_authorized",
+            "an operation report was rejected",
+        );
+        return Ok(false);
+    }
+
+    if let Some(binding) = crate::find_ai_archive_acceptance(&mut **transaction, operation_id)
+        .await
+        .map_err(map_operation_error)?
+    {
+        let (expected_subject, expected_producer) = match binding.provider.as_str() {
+            "chatgpt" => (
+                "evt.ai-archive.chatgpt.operation.reported.v1",
+                "ratatoskr-chatgpt",
+            ),
+            "claude" => (
+                "evt.ai-archive.claude.operation.reported.v1",
+                "ratatoskr-claude",
+            ),
+            _ => return Ok(false),
+        };
+        Ok(message.subject.as_str() == expected_subject && message.producer == expected_producer)
+    } else {
+        Ok(!message.subject.as_str().starts_with("evt.ai-archive."))
     }
 }
 

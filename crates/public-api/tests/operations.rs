@@ -520,14 +520,19 @@ fn social_report(operation_id: Uuid, name: &str) -> serde_json::Value {
     report
 }
 
-async fn deliver_social_report(pool: &sqlx::PgPool, operation_id: Uuid, name: &str) {
+async fn deliver_social_report(pool: &sqlx::PgPool, owner: Uuid, operation_id: Uuid, name: &str) {
     use platform_eventing::{Incoming, MessageClass, Subject, deliver};
     let message = Incoming {
         message_id: Uuid::now_v7(),
         subject: Subject::new(MessageClass::Event, "platform.operation.reported.v1")
             .expect("a subject"),
         producer: "ratatoskr-x".to_owned(),
-        payload: social_report(operation_id, name),
+        payload: serde_json::json!({
+            "event_id": Uuid::now_v7(),
+            "producer": "ratatoskr-x",
+            "tenant_id": format!("user:{owner}"),
+            "payload": social_report(operation_id, name),
+        }),
     };
     deliver(
         pool,
@@ -552,21 +557,21 @@ async fn social_capture_reports_are_visible_with_the_codes_the_extension_reads()
     let deleted = seed_operation(pool, owner, KIND, 1).await;
     let preserved = seed_operation(pool, owner, KIND, 1).await;
 
-    deliver_social_report(pool, deleted, "queued").await;
+    deliver_social_report(pool, owner, deleted, "queued").await;
     let (status, queued) = send(&app, read_one(Some(CREDENTIAL), &deleted.to_string())).await;
     assert_eq!(status, StatusCode::OK, "{queued}");
     assert_eq!(queued["status"], "queued");
     assert_eq!(queued["stage"], "capture_queued");
 
-    deliver_social_report(pool, deleted, "deleted").await;
+    deliver_social_report(pool, owner, deleted, "deleted").await;
     let (status, failed) = send(&app, read_one(Some(CREDENTIAL), &deleted.to_string())).await;
     assert_eq!(status, StatusCode::OK, "{failed}");
     assert_eq!(failed["status"], "failed");
     assert_eq!(failed["errors"][0]["code"], "social.source.deleted");
     assert_eq!(failed["errors"][0]["retryable"], false);
 
-    deliver_social_report(pool, preserved, "queued").await;
-    deliver_social_report(pool, preserved, "preserved").await;
+    deliver_social_report(pool, owner, preserved, "queued").await;
+    deliver_social_report(pool, owner, preserved, "preserved").await;
     let (status, succeeded) = send(&app, read_one(Some(CREDENTIAL), &preserved.to_string())).await;
     assert_eq!(status, StatusCode::OK, "{succeeded}");
     assert_eq!(succeeded["status"], "succeeded");

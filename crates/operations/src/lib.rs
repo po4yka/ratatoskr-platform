@@ -33,6 +33,7 @@ use uuid::Uuid;
 
 mod admin;
 pub mod archive;
+pub mod authority;
 pub mod cancel;
 pub mod list;
 pub mod projection;

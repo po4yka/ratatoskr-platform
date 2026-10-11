@@ -26,6 +26,23 @@ use uuid::Uuid;
 
 const CORRELATION: &str = "correlation:01a0153f-63e5-7010-a4c9-1fe6c43bcc39";
 
+/// The owner of every operation these tests accept. Each test has its own database, so one fixed
+/// identity is enough, and every report below names it as its tenant (XR-021 R2-02).
+const OWNER: Uuid = Uuid::from_u128(0x018f_0000_0000_7000_8000_0000_0000_0a01);
+
+/// The envelope a producer publishes: the report is the `payload`, and `tenant_id` names the owner.
+fn envelope(producer: &str, body: serde_json::Value) -> serde_json::Value {
+    let mut envelope = serde_json::Map::new();
+    envelope.insert("event_id".to_owned(), serde_json::json!(Uuid::now_v7()));
+    envelope.insert("producer".to_owned(), serde_json::json!(producer));
+    envelope.insert(
+        "tenant_id".to_owned(),
+        serde_json::json!(format!("user:{OWNER}")),
+    );
+    envelope.insert("payload".to_owned(), body);
+    serde_json::Value::Object(envelope)
+}
+
 /// Where the broker is. Matches `compose.yaml`.
 #[expect(
     clippy::disallowed_methods,
@@ -60,12 +77,11 @@ fn event(operation_id: Uuid, status: OperationStatus) -> Incoming {
         subject: Subject::new(MessageClass::Event, "platform.operation.reported.v1")
             .expect("a subject"),
         producer: "ratatoskr-extractor".to_owned(),
-        payload: serde_json::json!({
-            "event_id": Uuid::now_v7(),
-            "producer": "ratatoskr-extractor",
-            "payload": serde_json::to_value(report(operation_id, status))
+        payload: envelope(
+            "ratatoskr-extractor",
+            serde_json::to_value(report(operation_id, status))
                 .expect("the published payload serializes"),
-        }),
+        ),
     }
 }
 
@@ -75,7 +91,7 @@ async fn a_published_report_advances_the_projection() {
     let pool = harness.pool();
     let operation = platform_operations::accept(
         pool,
-        Uuid::now_v7(),
+        OWNER,
         "content.capture.submit",
         CORRELATION,
         None,
@@ -88,8 +104,11 @@ async fn a_published_report_advances_the_projection() {
         subject: Subject::new(MessageClass::Event, "platform.operation.reported.v1")
             .expect("a subject"),
         producer: "ratatoskr-extractor".to_owned(),
-        payload: serde_json::to_value(report(operation.operation_id, OperationStatus::Running))
-            .expect("the published payload serializes"),
+        payload: envelope(
+            "ratatoskr-extractor",
+            serde_json::to_value(report(operation.operation_id, OperationStatus::Running))
+                .expect("the published payload serializes"),
+        ),
     };
 
     assert_eq!(
@@ -114,7 +133,7 @@ async fn a_published_report_advances_the_projection() {
 async fn archive_report_requires_subject_producer_and_bound_provider() {
     let harness = TestDatabase::create().await.expect("a test database");
     let pool = harness.pool();
-    let owner = Uuid::now_v7();
+    let owner = OWNER;
     let operation =
         platform_operations::accept(pool, owner, "ai_archive.import", CORRELATION, None, now())
             .await
@@ -149,8 +168,11 @@ async fn archive_report_requires_subject_producer_and_bound_provider() {
             message_id: Uuid::now_v7(),
             subject: Subject::parse(subject).expect("the report subject"),
             producer: producer.to_owned(),
-            payload: serde_json::to_value(report(operation.operation_id, OperationStatus::Running))
-                .expect("the report serializes"),
+            payload: envelope(
+                producer,
+                serde_json::to_value(report(operation.operation_id, OperationStatus::Running))
+                    .expect("the report serializes"),
+            ),
         };
         assert_eq!(
             deliver(pool, &ProgressProjection, &message, now())
@@ -165,8 +187,11 @@ async fn archive_report_requires_subject_producer_and_bound_provider() {
         subject: Subject::parse("evt.ai-archive.chatgpt.operation.reported.v1")
             .expect("the report subject"),
         producer: "ratatoskr-chatgpt".to_owned(),
-        payload: serde_json::to_value(report(operation.operation_id, OperationStatus::Running))
-            .expect("the report serializes"),
+        payload: envelope(
+            "ratatoskr-chatgpt",
+            serde_json::to_value(report(operation.operation_id, OperationStatus::Running))
+                .expect("the report serializes"),
+        ),
     };
     assert_eq!(
         deliver(pool, &ProgressProjection, &valid, now())
@@ -184,7 +209,7 @@ async fn provider_scoped_archive_report_requires_an_archive_binding() {
     let pool = harness.pool();
     let operation = platform_operations::accept(
         pool,
-        Uuid::now_v7(),
+        OWNER,
         "content.capture.submit",
         CORRELATION,
         None,
@@ -197,8 +222,11 @@ async fn provider_scoped_archive_report_requires_an_archive_binding() {
         subject: Subject::parse("evt.ai-archive.chatgpt.operation.reported.v1")
             .expect("the provider-scoped report subject"),
         producer: "ratatoskr-chatgpt".to_owned(),
-        payload: serde_json::to_value(report(operation.operation_id, OperationStatus::Running))
-            .expect("the report serializes"),
+        payload: envelope(
+            "ratatoskr-chatgpt",
+            serde_json::to_value(report(operation.operation_id, OperationStatus::Running))
+                .expect("the report serializes"),
+        ),
     };
 
     assert_eq!(
@@ -225,7 +253,7 @@ async fn a_success_report_round_trips_complete_blob_ref() {
     let pool = harness.pool();
     let operation = platform_operations::accept(
         pool,
-        Uuid::now_v7(),
+        OWNER,
         "content.capture.submit",
         CORRELATION,
         None,
@@ -260,11 +288,10 @@ async fn a_success_report_round_trips_complete_blob_ref() {
         subject: Subject::new(MessageClass::Event, "platform.operation.reported.v1")
             .expect("a subject"),
         producer: "ratatoskr-extractor".to_owned(),
-        payload: serde_json::json!({
-            "event_id": Uuid::now_v7(),
-            "producer": "ratatoskr-extractor",
-            "payload": serde_json::to_value(success).expect("the report serializes"),
-        }),
+        payload: envelope(
+            "ratatoskr-extractor",
+            serde_json::to_value(success).expect("the report serializes"),
+        ),
     };
 
     assert_eq!(
@@ -288,16 +315,10 @@ async fn a_success_report_round_trips_complete_blob_ref() {
 async fn an_ai_archive_import_summary_round_trips_through_the_public_projection() {
     let harness = TestDatabase::create().await.expect("a test database");
     let pool = harness.pool();
-    let operation = platform_operations::accept(
-        pool,
-        Uuid::now_v7(),
-        "ai_archive.import",
-        CORRELATION,
-        None,
-        now(),
-    )
-    .await
-    .expect("accepting");
+    let operation =
+        platform_operations::accept(pool, OWNER, "ai_archive.import", CORRELATION, None, now())
+            .await
+            .expect("accepting");
     let result = serde_json::from_value::<OperationResultRef>(serde_json::json!({
         "result_kind": "ai_archive.import",
         "target": "ai_archive:018f0000-0000-7000-8000-000000000131",
@@ -320,11 +341,10 @@ async fn an_ai_archive_import_summary_round_trips_through_the_public_projection(
         subject: Subject::new(MessageClass::Event, "platform.operation.reported.v1")
             .expect("a subject"),
         producer: "ratatoskr-chatgpt".to_owned(),
-        payload: serde_json::json!({
-            "event_id": Uuid::now_v7(),
-            "producer": "ratatoskr-chatgpt",
-            "payload": serde_json::to_value(succeeded).expect("the report serializes"),
-        }),
+        payload: envelope(
+            "ratatoskr-chatgpt",
+            serde_json::to_value(succeeded).expect("the report serializes"),
+        ),
     };
 
     assert_eq!(
@@ -347,7 +367,7 @@ async fn a_failed_report_round_trips_error_and_warnings() {
     let pool = harness.pool();
     let operation = platform_operations::accept(
         pool,
-        Uuid::now_v7(),
+        OWNER,
         "content.capture.submit",
         CORRELATION,
         None,
@@ -393,11 +413,10 @@ async fn a_failed_report_round_trips_error_and_warnings() {
         subject: Subject::new(MessageClass::Event, "platform.operation.reported.v1")
             .expect("a subject"),
         producer: "ratatoskr-extractor".to_owned(),
-        payload: serde_json::json!({
-            "event_id": Uuid::now_v7(),
-            "producer": "ratatoskr-extractor",
-            "payload": serde_json::to_value(failed).expect("the report serializes"),
-        }),
+        payload: envelope(
+            "ratatoskr-extractor",
+            serde_json::to_value(failed).expect("the report serializes"),
+        ),
     };
 
     assert_eq!(
@@ -424,7 +443,7 @@ async fn the_projection_applies_advances_and_absorbs_redelivery() {
     let pool = harness.pool();
     let operation = platform_operations::accept(
         pool,
-        Uuid::now_v7(),
+        OWNER,
         "content.capture.submit",
         CORRELATION,
         None,
@@ -516,7 +535,7 @@ async fn an_event_published_to_jetstream_reaches_the_projection() {
     let pool = harness.pool();
     let operation = platform_operations::accept(
         pool,
-        Uuid::now_v7(),
+        OWNER,
         "content.capture.submit",
         CORRELATION,
         None,
@@ -635,16 +654,10 @@ async fn a_partially_succeeded_report_without_a_diagnostic_is_rejected_and_leave
  {
     let harness = TestDatabase::create().await.expect("a test database");
     let pool = harness.pool();
-    let operation = platform_operations::accept(
-        pool,
-        Uuid::now_v7(),
-        "ai_archive.import",
-        CORRELATION,
-        None,
-        now(),
-    )
-    .await
-    .expect("accepting");
+    let operation =
+        platform_operations::accept(pool, OWNER, "ai_archive.import", CORRELATION, None, now())
+            .await
+            .expect("accepting");
     assert_eq!(
         deliver(
             pool,
@@ -683,25 +696,18 @@ async fn a_partially_succeeded_report_without_a_diagnostic_is_rejected_and_leave
 async fn a_partially_succeeded_report_with_a_warning_is_applied() {
     let harness = TestDatabase::create().await.expect("a test database");
     let pool = harness.pool();
-    let operation = platform_operations::accept(
-        pool,
-        Uuid::now_v7(),
-        "ai_archive.import",
-        CORRELATION,
-        None,
-        now(),
-    )
-    .await
-    .expect("accepting");
+    let operation =
+        platform_operations::accept(pool, OWNER, "ai_archive.import", CORRELATION, None, now())
+            .await
+            .expect("accepting");
     let mut partial = report(operation.operation_id, OperationStatus::PartiallySucceeded);
     partial.warnings =
         vec![ratatoskr_ai_archive_contracts::platform_receipt::incomplete_import_warning()];
     let mut message = event(operation.operation_id, OperationStatus::PartiallySucceeded);
-    message.payload = serde_json::json!({
-        "event_id": Uuid::now_v7(),
-        "producer": "ratatoskr-extractor",
-        "payload": serde_json::to_value(partial).expect("the published payload serializes"),
-    });
+    message.payload = envelope(
+        "ratatoskr-extractor",
+        serde_json::to_value(partial).expect("the published payload serializes"),
+    );
 
     assert_eq!(
         deliver(pool, &ProgressProjection, &message, now())

@@ -41,6 +41,9 @@ fn from_offset(value: time::OffsetDateTime) -> Timestamp {
         .expect("a timestamp inside the supported range")
 }
 
+/// The owner of every seeded operation. A progress report must carry it as its tenant (XR-021 R2-02).
+const OWNER: Uuid = Uuid::from_u128(0x018f_0000_0000_7000_8000_0000_0000_0a02);
+
 /// An operation seeded straight into the store, bypassing `accept`, so a test controls its age.
 struct Fixture {
     operation_id: Uuid,
@@ -67,7 +70,7 @@ impl Fixture {
              values ($1, $2, 'content.capture.submit', $3, $4, $5, $5)",
         )
         .bind(self.operation_id)
-        .bind(Uuid::now_v7())
+        .bind(OWNER)
         .bind(self.status)
         .bind(CORRELATION)
         .bind(to_offset(self.changed_at))
@@ -265,6 +268,7 @@ async fn a_late_report_after_reconciliation_does_not_resurrect() {
         payload: serde_json::json!({
             "event_id": Uuid::now_v7(),
             "producer": "ratatoskr-extractor",
+            "tenant_id": format!("user:{OWNER}"),
             "payload": serde_json::to_value(OperationReported {
                 operation_id: OperationId(fixture.operation_id),
                 status: OperationStatus::Running,

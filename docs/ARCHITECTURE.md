@@ -384,6 +384,20 @@ Domain services produce `platform.operation.reported.v1`; Platform consumes thos
 produces full `OperationSnapshot` values for clients. Platform consumes only the fields required to
 maintain public projections. It does not duplicate complete domain records.
 
+A report is applied only when the operation it names belongs to the report's tenant and the
+producer is allowed to report for the operation's kind. The projection loads the operation first,
+then requires the envelope `tenant_id` to equal `user:<owner>` and the envelope `producer` to be in
+the allow-list for the kind (`crates/operations/src/authority.rs`; `ai_archive.import` keeps its
+provider-bound subject and producer check). A kind that is not in the table allows no producer, so a
+new operation kind fails closed until a row names who may report for it. A rejected report is
+recorded in the inbox, leaves the status unchanged and logs only the operation id and a class.
+
+The residual risk is narrower than before and not gone: `evt.platform.operation.reported.v1` is one
+shared subject trusted by the envelope `producer` field, so the four extraction and social
+producers (`ratatoskr-extractor`, `-x`, `-instagram`, `-threads`) can still report for each other's
+capture operations, because a capture operation does not record which service it was dispatched to.
+Per-producer report subjects would close it and need a contract change.
+
 The Platform-owned `platform.operation.progressed.v1` contract carries a full snapshot, but
 publishing that event is not implemented. Clients currently receive snapshots through REST and SSE.
 
