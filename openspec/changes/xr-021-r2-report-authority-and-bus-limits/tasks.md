@@ -10,8 +10,8 @@
 
 ## 3. Schedule registration owner check (R2-14)
 
-- [ ] 3.1 Add the unknown-owner, suspended-owner and active-owner registration tests and run them RED
-- [ ] 3.2 Check `identity.users` inside the registration transaction, update `deploy/systemd/edge.conf.example`, and run them GREEN
+- [x] 3.1 Add the unknown-owner, suspended-owner and active-owner registration tests and run them RED
+- [x] 3.2 Check `identity.users` inside the registration transaction, update `deploy/systemd/edge.conf.example`, and run them GREEN
 
 ## 4. Threads hosts (R2-11)
 

@@ -97,6 +97,9 @@ RATATOSKR__TELEMETRY__LOG_FORMAT=json
 # Operator prerequisite for the digest schedule: RATATOSKR__SCHEDULE__OWNER_USER_ID, set on the
 # channel-digests worker, must name a user that exists in identity.users. Platform has no system
 # principal: every occurrence creates an operation owned by the schedule's owner, who is the only
-# one able to read it. Nothing in the schema checks that the id is a user, so a wrong id registers
-# and publishes without complaint and its operations belong to nobody.
+# one able to read it. Platform checks the id when the registration arrives: an owner that is not an
+# active user in identity.users is rejected, no schedule is stored, and the refusal is written to
+# identity.audit_events (action schedule.registration, outcome denied) with the log class
+# schedule_owner_unknown. A wrong id therefore shows up as a worker that registered nothing, not as
+# operations that belong to nobody.
 RATATOSKR__SCHEDULING__ALLOWED_REGISTRARS=["ratatoskr-github","ratatoskr-channel-digests"]

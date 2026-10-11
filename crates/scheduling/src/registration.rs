@@ -89,6 +89,25 @@ impl RegistrationHandler {
         let Some(next_due_at) = next_after(&input.cron_expression, now) else {
             return Ok(ScheduleRegistration::Rejected);
         };
+        // Every occurrence operation belongs to the owner, so an owner who is not an active user
+        // would mint operations for nobody (XR-021 R2-14). Checked in this transaction, before the
+        // upsert, and audited like every other refusal.
+        let owner_is_active: bool = sqlx::query_scalar(
+            "select exists (select 1 from identity.users
+                             where user_id = $1 and status = 'active')",
+        )
+        .bind(input.owner_user_id)
+        .fetch_one(&mut **transaction)
+        .await
+        .map_err(PersistenceError::Query)?;
+        if !owner_is_active {
+            tracing::warn!(
+                class = "schedule_owner_unknown",
+                "a schedule registration named an owner that is not an active user",
+            );
+            audit(transaction, None, None, AuditOutcome::Denied, message, now).await?;
+            return Ok(ScheduleRegistration::Rejected);
+        }
         let schedule_id: Uuid = sqlx::query_scalar(
             "insert into operations.schedules
                 (schedule_id, service_name, name, owner_user_id, command_type, operation_kind,

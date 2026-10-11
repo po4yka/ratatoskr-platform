@@ -433,3 +433,107 @@ async fn typed_registration_from_contracts_is_accepted_for_channel_digests_and_r
     assert_eq!(schedules().await, 1);
     database.cleanup().await.expect("cleanup");
 }
+
+async fn owner_registration_outcome(
+    database: &TestDatabase,
+    owner: Uuid,
+    now: Timestamp,
+) -> ScheduleRegistration {
+    RegistrationHandler::new(vec!["ratatoskr-channel-digests".to_owned()])
+        .register(
+            database.pool(),
+            &digest_registration(
+                "ratatoskr-channel-digests",
+                "ratatoskr-channel-digests",
+                owner,
+            ),
+            now,
+        )
+        .await
+        .expect("a refusal is a rejected outcome, not an infrastructure error")
+}
+
+async fn assert_nothing_stored_and_denial_audited(database: &TestDatabase) {
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("select count(*) from operations.schedules")
+            .fetch_one(database.pool())
+            .await
+            .expect("the count must run"),
+        0,
+        "a rejected registration leaves no schedule"
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "select count(*) from identity.audit_events
+              where action = 'schedule.registration' and outcome = 'denied'",
+        )
+        .fetch_one(database.pool())
+        .await
+        .expect("the audit count must run"),
+        1,
+        "the refusal is audited"
+    );
+}
+
+/// XR-021 R2-14. A registration whose owner is not a user would mint every occurrence operation
+/// for nobody, so Platform refuses it and says so in the audit trail.
+#[tokio::test]
+async fn registration_for_an_unknown_owner_is_rejected() {
+    let database = TestDatabase::create().await.expect("a test database");
+    let now = Timestamp::from_second(1_700_000_000).expect("a timestamp");
+
+    assert_eq!(
+        owner_registration_outcome(&database, Uuid::now_v7(), now).await,
+        ScheduleRegistration::Rejected
+    );
+    assert_nothing_stored_and_denial_audited(&database).await;
+    database.cleanup().await.expect("cleanup");
+}
+
+#[tokio::test]
+async fn registration_for_a_suspended_owner_is_rejected() {
+    let database = TestDatabase::create().await.expect("a test database");
+    let now = Timestamp::from_second(1_700_000_000).expect("a timestamp");
+    let owner = create_user(database.pool(), now)
+        .await
+        .expect("an owner")
+        .user_id;
+    platform_identity::user::set_user_status(
+        database.pool(),
+        owner,
+        platform_identity::user::UserStatus::Suspended,
+        now,
+    )
+    .await
+    .expect("suspending the owner");
+
+    assert_eq!(
+        owner_registration_outcome(&database, owner, now).await,
+        ScheduleRegistration::Rejected
+    );
+    assert_nothing_stored_and_denial_audited(&database).await;
+    database.cleanup().await.expect("cleanup");
+}
+
+#[tokio::test]
+async fn registration_for_an_active_owner_still_applies() {
+    let database = TestDatabase::create().await.expect("a test database");
+    let now = Timestamp::from_second(1_700_000_000).expect("a timestamp");
+    let owner = create_user(database.pool(), now)
+        .await
+        .expect("an owner")
+        .user_id;
+
+    assert_eq!(
+        owner_registration_outcome(&database, owner, now).await,
+        ScheduleRegistration::Applied
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("select count(*) from operations.schedules")
+            .fetch_one(database.pool())
+            .await
+            .expect("the count must run"),
+        1
+    );
+    database.cleanup().await.expect("cleanup");
+}

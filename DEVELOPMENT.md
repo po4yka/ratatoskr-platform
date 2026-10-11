@@ -100,8 +100,9 @@ must do for each:
 - Schedules. The scheduler publishes `channel_digest.schedule.occurrence_requested.v1` as a contract
   envelope whose interval is the schedule's cron grid (previous grid point clamped to seven days).
   `RATATOSKR__SCHEDULING__ALLOWED_REGISTRARS` must name `ratatoskr-channel-digests`, and the
-  digest worker's `RATATOSKR__SCHEDULE__OWNER_USER_ID` must be a user that exists in
-  `identity.users`, because Platform has no system principal.
+  digest worker's `RATATOSKR__SCHEDULE__OWNER_USER_ID` must be an active user in
+  `identity.users`, because Platform has no system principal: a registration for any other owner is
+  rejected and audited, and no schedule is stored.
 - The bus. `deploy/nats/README.md` is the operator guide for the thirteen identities and the fixed
   durables Edge provisions at startup: reload NATS, restart Edge, then start the services.
 
