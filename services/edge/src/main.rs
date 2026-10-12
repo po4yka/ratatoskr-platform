@@ -14,6 +14,7 @@ use std::time::Duration;
 use jiff::SignedDuration;
 use platform_core::RuntimeRole;
 use platform_core::config::{PlatformConfig, RetentionConfig};
+use platform_eventing::stream_erasure::StreamErasureHandler;
 use platform_eventing::{
     AI_ARCHIVE_REPORT_CONSUMERS, COMMAND_STREAM, EDGE_PROJECTION_CONSUMER, NatsPublisher,
     StreamSpec, ensure_fixed_topology, pump,
@@ -206,8 +207,13 @@ impl platform_http::PublicRoutes for EdgeRoutes {
                 publisher.clone(),
                 RegistrationHandler::new(config.scheduling.allowed_registrars.clone()),
             ),
-            spawn_bus_prober(publisher, Arc::clone(health)),
-            spawn_observer(database.pool().clone(), Arc::clone(&state)),
+            spawn_stream_erasure(database.pool().clone(), publisher.clone()),
+            spawn_bus_prober(publisher.clone(), Arc::clone(health)),
+            spawn_observer(
+                database.pool().clone(),
+                publisher.clone(),
+                Arc::clone(&state),
+            ),
             spawn_retention(database.pool().clone(), config.retention.clone()),
             spawn_reconciler(
                 database.pool().clone(),
@@ -378,8 +384,10 @@ fn spawn_bus_prober(
 /// permanent silence, which reads on a dashboard exactly like a healthy zero.
 fn spawn_observer(
     pool: PgPool,
+    bus: NatsPublisher,
     state: Arc<platform_public_api::ApiState>,
 ) -> tokio::task::JoinHandle<()> {
+    let durables = platform_eventing::sampled_consumers();
     tokio::spawn(async move {
         let mut ticker = tokio::time::interval(OBSERVE_INTERVAL);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -402,6 +410,9 @@ fn spawn_observer(
             if let Err(error) = platform_operations::sample(&pool, now).await {
                 tracing::warn!(%error, "the operation gauges could not be sampled");
             }
+            // Consumer lag and stream state (R5-13). The sampler logs its own failures and keeps
+            // the last value, so there is nothing to handle here.
+            platform_eventing::observe::sample_bus(bus.context(), &durables, now).await;
         }
     })
 }
@@ -640,6 +651,30 @@ fn spawn_schedule_registration(
         .await;
         if let Err(error) = outcome {
             tracing::error!(%error, "the schedule-registration consumer stopped");
+        }
+    })
+}
+
+/// Erase single events-stream messages at the request of the AI archive importers (R5-12).
+///
+/// The durable is created by this consumer, like `platform_schedule_registration`, and the handler
+/// uses Edge's own connection: Edge is the only identity allowed `STREAM.MSG.GET` and
+/// `STREAM.MSG.DELETE`.
+fn spawn_stream_erasure(pool: PgPool, publisher: NatsPublisher) -> tokio::task::JoinHandle<()> {
+    let handler = StreamErasureHandler::new(publisher.context().clone());
+    tokio::spawn(async move {
+        let outcome = platform_eventing::consumer::run(
+            publisher.context(),
+            &StreamSpec::command_stream(),
+            platform_eventing::stream_erasure::DURABLE,
+            platform_eventing::stream_erasure::SUBJECT,
+            &pool,
+            &handler,
+            std::future::pending::<()>(),
+        )
+        .await;
+        if let Err(error) = outcome {
+            tracing::error!(%error, "the stream-erasure consumer stopped");
         }
     })
 }

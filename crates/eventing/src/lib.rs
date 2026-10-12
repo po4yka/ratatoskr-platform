@@ -29,6 +29,7 @@ pub mod outbox;
 pub mod publisher;
 pub mod pump;
 pub mod stream;
+pub mod stream_erasure;
 
 pub use crate::command::Command;
 pub use crate::consumer::{ConsumerReport, Handler, Incoming, deliver};
@@ -41,10 +42,11 @@ pub use crate::publisher::{NatsPublisher, PublishError, Publisher};
 pub use crate::pump::{PumpReport, run_once};
 pub use crate::stream::{
     AI_ARCHIVE_REPORT_CONSUMERS, AckMode, BROWSER_WORKER_COMPLETIONS_BUCKET, COMMAND_STREAM,
-    COMMAND_SUBJECTS, DOMAIN_CONSUMERS, EDGE_PROJECTION_CONSUMER, EVENT_STREAM, EVENT_SUBJECTS,
-    FixedConsumerSpec, SOCIAL_CAPTURE_CONSUMERS, StartAt, StreamSpec, StreamState,
-    TELEGRAM_NOTIFICATION_CONSUMER, TELEGRAM_NOTIFICATION_CONSUMERS, TELEGRAM_NOTIFICATION_SUBJECT,
-    WhenFull, ensure_domain_topology, ensure_fixed_consumers, ensure_fixed_topology,
+    COMMAND_SUBJECTS, DOMAIN_CONSUMERS, EDGE_INTERNAL_CONSUMERS, EDGE_PROJECTION_CONSUMER,
+    EVENT_STREAM, EVENT_SUBJECTS, FixedConsumerSpec, SOCIAL_CAPTURE_CONSUMERS, StartAt, StreamSpec,
+    StreamState, TELEGRAM_NOTIFICATION_CONSUMER, TELEGRAM_NOTIFICATION_CONSUMERS,
+    TELEGRAM_NOTIFICATION_SUBJECT, WhenFull, ensure_domain_topology, ensure_fixed_consumers,
+    ensure_fixed_topology, sampled_consumers,
 };
 
 /// A failure in the outbox, the inbox, or the subject grammar.

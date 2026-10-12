@@ -14,6 +14,9 @@ use uuid::Uuid;
 use crate::inbox::Outcome;
 use crate::{EventingError, Inbox, Reception, StreamSpec, Subject};
 
+/// How long the broker waits before redelivering a message whose handler failed transiently.
+const TRANSIENT_FAILURE_DELAY: std::time::Duration = std::time::Duration::from_secs(2);
+
 /// What a handler decided about one message.
 ///
 /// Returned rather than logged so the inbox records it: `operations.inbox.outcome` is how an
@@ -169,8 +172,17 @@ pub async fn run<H: Handler>(
                     Err(error) => {
                         // Not acknowledged: `JetStream` redelivers, and the inbox makes that safe.
                         // Acknowledging a message the handler could not apply would lose the work.
+                        // A handler returns an error only for a transient failure (a rejection is an
+                        // outcome, not an error), so the message is Nak'd with a short delay instead
+                        // of waiting out the whole ack wait (XR-021 CONTRACTS.md S02 rule 7).
                         report.failed += 1;
                         tracing::error!(%error, "an event could not be applied");
+                        if let Err(error) = message
+                            .ack_with(jetstream::AckKind::Nak(Some(TRANSIENT_FAILURE_DELAY)))
+                            .await
+                        {
+                            tracing::warn!(%error, "an event could not be negatively acknowledged");
+                        }
                         continue;
                     }
                 }

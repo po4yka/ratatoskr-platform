@@ -1110,6 +1110,41 @@ create index inbox_unprocessed_idx
     where processed_at is null;
 
 -- ---------------------------------------------------------------------------------------------
+-- stream_erasure_audit
+-- ---------------------------------------------------------------------------------------------
+--
+-- One row per stream erasure command Edge handled (XR-021 R5-12 rule 4): who asked, for whom, and
+-- how many of the named stream messages were erased, already gone, or refused. It holds counts and
+-- references only, never a sequence and never message content, so it can be read by anyone who may
+-- read the audit trail. `audit_event_id` joins the row to the `identity.audit_events` record Edge
+-- writes in the same transaction, which has no column for counts.
+
+create table operations.stream_erasure_audit (
+    command_id     uuid        primary key,
+    audit_event_id uuid        not null,
+    producer       text        not null,
+    owner          text        not null,
+    request_ref    text        not null,
+    erased         integer     not null,
+    missing        integer     not null,
+    refused        integer     not null,
+    recorded_at    timestamptz not null,
+
+    constraint stream_erasure_audit_producer_is_bounded
+        check (length(producer) between 1 and 64),
+    constraint stream_erasure_audit_owner_is_a_tenant
+        check (owner ~ '^user:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'),
+    constraint stream_erasure_audit_request_ref_is_bounded
+        check (length(request_ref) between 1 and 289),
+    constraint stream_erasure_audit_counts_are_not_negative
+        check (erased >= 0 and missing >= 0 and refused >= 0)
+);
+
+comment on table operations.stream_erasure_audit is
+    'One content-free row per handled stream erasure command: the requesting producer, the owner, '
+    'the request reference and the counts of erased, missing and refused stream messages.';
+
+-- ---------------------------------------------------------------------------------------------
 -- idempotency_records
 -- ---------------------------------------------------------------------------------------------
 --

@@ -104,7 +104,16 @@ fn the_metric_name_set_is_exactly_the_documented_set() {
             "platform_sse_delivery_lag_seconds",
             "platform_archive_staging_removed_total",
             "platform_archive_staging_oldest_directory_age_seconds",
-            "platform_archive_staging_directories"
+            "platform_archive_staging_directories",
+            "platform_stream_erasure_total",
+            "platform_bus_consumer_pending",
+            "platform_bus_consumer_ack_pending",
+            "platform_bus_consumer_redelivered",
+            "platform_bus_consumer_oldest_unacked_age_seconds",
+            "platform_bus_stream_messages",
+            "platform_bus_stream_bytes",
+            "platform_bus_stream_max_bytes",
+            "platform_bus_stream_oldest_message_age_seconds"
         ],
     );
 

@@ -14,6 +14,7 @@ path = "src/lib.rs"
 [dependencies]
 ratatoskr-platform-core.workspace        = true
 ratatoskr-platform-persistence.workspace = true
+ratatoskr-platform-identity.workspace    = true
 ratatoskr-platform-telemetry.workspace  = true
 metrics.workspace    = true
 ratatoskr-identifiers.workspace          = true
@@ -35,6 +36,7 @@ tracing.workspace    = true
 
 [dev-dependencies]
 nkeys = "0.4.5"
+serde_norway = "0.9"
 platform-nats-profile.workspace = true
 ratatoskr-platform-persistence = { workspace = true, features = ["test-support"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }

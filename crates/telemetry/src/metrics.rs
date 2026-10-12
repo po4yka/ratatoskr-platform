@@ -188,6 +188,58 @@ pub const PLATFORM_ARCHIVE_STAGING_OLDEST_DIRECTORY_AGE_SECONDS: &str =
 /// How many `rst_*` directories remain under the staging root after the last sweep.
 pub const PLATFORM_ARCHIVE_STAGING_DIRECTORIES: &str = "platform_archive_staging_directories";
 
+/// `platform_stream_erasure_total{outcome}` — counter (XR-021 R5-12).
+///
+/// What Edge did with each stream sequence a producer asked it to erase. `outcome` is `erased`, the
+/// message was removed; `missing`, it was already gone; or `refused`, it exists but is not the
+/// requesting producer's own message for the named owner (or is a tombstone or a message outside the
+/// AI archive facts) and was left alone. A `refused` that rises is a producer asking for what is
+/// not its to erase.
+pub const PLATFORM_STREAM_ERASURE_TOTAL: &str = "platform_stream_erasure_total";
+
+/// `platform_bus_consumer_pending{stream,durable}` — gauge (XR-021 R5-13).
+///
+/// Messages the durable has not been delivered yet, as the broker reports them. Sampled by Edge's
+/// observer for every fixed durable and for Edge's own consumers: the label set is the durable
+/// table, so at most 40 series.
+pub const PLATFORM_BUS_CONSUMER_PENDING: &str = "platform_bus_consumer_pending";
+
+/// `platform_bus_consumer_ack_pending{stream,durable}` — gauge (XR-021 R5-13).
+///
+/// Messages delivered and not yet acknowledged.
+pub const PLATFORM_BUS_CONSUMER_ACK_PENDING: &str = "platform_bus_consumer_ack_pending";
+
+/// `platform_bus_consumer_redelivered{stream,durable}` — gauge (XR-021 R5-13).
+///
+/// Messages re-sent because an acknowledgement did not arrive in time. A counter on the broker,
+/// exported as a gauge so a rule can take `increase()` over it.
+pub const PLATFORM_BUS_CONSUMER_REDELIVERED: &str = "platform_bus_consumer_redelivered";
+
+/// `platform_bus_consumer_oldest_unacked_age_seconds{stream,durable}` — gauge (XR-021 R5-13).
+///
+/// The age of the first message after the durable's acknowledgement floor that matches its filter,
+/// and 0 when the durable has caught up. This is the lag an operator alarms on: the events stream
+/// drops its oldest message after seven days, so a consumer whose value approaches that is about to
+/// lose facts it never read.
+pub const PLATFORM_BUS_CONSUMER_OLDEST_UNACKED_AGE_SECONDS: &str =
+    "platform_bus_consumer_oldest_unacked_age_seconds";
+
+/// `platform_bus_stream_messages{stream}` — gauge (XR-021 R5-13). Messages the stream holds.
+pub const PLATFORM_BUS_STREAM_MESSAGES: &str = "platform_bus_stream_messages";
+
+/// `platform_bus_stream_bytes{stream}` — gauge (XR-021 R5-13). Bytes the stream holds.
+pub const PLATFORM_BUS_STREAM_BYTES: &str = "platform_bus_stream_bytes";
+
+/// `platform_bus_stream_max_bytes{stream}` — gauge (XR-021 R5-13). The stream's byte cap.
+pub const PLATFORM_BUS_STREAM_MAX_BYTES: &str = "platform_bus_stream_max_bytes";
+
+/// `platform_bus_stream_oldest_message_age_seconds{stream}` — gauge (XR-021 R5-13).
+///
+/// The age of the oldest message the stream still holds, 0 when it holds none. Against the seven day
+/// retention it says how close the stream is to its age limit.
+pub const PLATFORM_BUS_STREAM_OLDEST_MESSAGE_AGE_SECONDS: &str =
+    "platform_bus_stream_oldest_message_age_seconds";
+
 /// The `route` label of a request that matched no route template.
 ///
 /// A constant, never the request URI: this is what closes the 404-scanning cardinality bomb.
@@ -207,7 +259,7 @@ pub const DURATION_BUCKETS: [f64; 11] = [
 
 /// Every metric name this workspace emits. A rename silently breaks every dashboard and every
 /// alert, so it must break test T-4 first.
-pub const ALL: [&str; 23] = [
+pub const ALL: [&str; 32] = [
     HTTP_SERVER_REQUEST_DURATION_SECONDS,
     PLATFORM_READINESS,
     PLATFORM_BUILD_INFO,
@@ -231,4 +283,13 @@ pub const ALL: [&str; 23] = [
     PLATFORM_ARCHIVE_STAGING_REMOVED_TOTAL,
     PLATFORM_ARCHIVE_STAGING_OLDEST_DIRECTORY_AGE_SECONDS,
     PLATFORM_ARCHIVE_STAGING_DIRECTORIES,
+    PLATFORM_STREAM_ERASURE_TOTAL,
+    PLATFORM_BUS_CONSUMER_PENDING,
+    PLATFORM_BUS_CONSUMER_ACK_PENDING,
+    PLATFORM_BUS_CONSUMER_REDELIVERED,
+    PLATFORM_BUS_CONSUMER_OLDEST_UNACKED_AGE_SECONDS,
+    PLATFORM_BUS_STREAM_MESSAGES,
+    PLATFORM_BUS_STREAM_BYTES,
+    PLATFORM_BUS_STREAM_MAX_BYTES,
+    PLATFORM_BUS_STREAM_OLDEST_MESSAGE_AGE_SECONDS,
 ];

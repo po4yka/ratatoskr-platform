@@ -390,6 +390,44 @@ pub const DOMAIN_CONSUMERS: [FixedConsumerSpec; 23] = [
     },
 ];
 
+/// Edge's own consumers, which `consumer::run` creates when each one first runs.
+///
+/// They are NOT created from this table, and no service verifies them. They are listed here so that
+/// the lag sampler (`observe::sample_bus`) describes them with the same name, stream and filter the
+/// consumers use, in one place that a rename cannot miss (XR-021 CONTRACTS.md R5-13).
+pub const EDGE_INTERNAL_CONSUMERS: [FixedConsumerSpec; 3] = [
+    FixedConsumerSpec::standard(
+        EVENT_STREAM,
+        EDGE_PROJECTION_CONSUMER,
+        "evt.platform.operation.reported.v1",
+    ),
+    FixedConsumerSpec::standard(
+        COMMAND_STREAM,
+        "platform_schedule_registration",
+        "cmd.platform.schedule.registration_requested.v1",
+    ),
+    FixedConsumerSpec::standard(
+        COMMAND_STREAM,
+        crate::stream_erasure::DURABLE,
+        crate::stream_erasure::SUBJECT,
+    ),
+];
+
+/// Every durable the lag sampler describes: the fixed tables Edge creates, and Edge's own consumers.
+///
+/// At most 40 so the `stream` and `durable` labels stay a bounded set.
+#[must_use]
+pub fn sampled_consumers() -> Vec<FixedConsumerSpec> {
+    DOMAIN_CONSUMERS
+        .iter()
+        .chain(SOCIAL_CAPTURE_CONSUMERS.iter())
+        .chain(TELEGRAM_NOTIFICATION_CONSUMERS.iter())
+        .chain(AI_ARCHIVE_REPORT_CONSUMERS.iter())
+        .chain(EDGE_INTERNAL_CONSUMERS.iter())
+        .copied()
+        .collect()
+}
+
 /// The KV bucket the browser worker records render completions in, created by Edge.
 pub const BROWSER_WORKER_COMPLETIONS_BUCKET: &str = "browser_worker_completions";
 
