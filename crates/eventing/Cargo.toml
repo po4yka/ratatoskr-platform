@@ -18,6 +18,7 @@ ratatoskr-platform-telemetry.workspace  = true
 metrics.workspace    = true
 ratatoskr-identifiers.workspace          = true
 ratatoskr-event-envelope.workspace       = true
+ratatoskr-operation-contracts.workspace  = true
 ratatoskr-document-contracts.workspace   = true
 sha2.workspace       = true
 async-nats.workspace  = true
