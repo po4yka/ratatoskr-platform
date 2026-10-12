@@ -71,6 +71,8 @@ or a filter here stops matching them.
 | `ratatoskr_channel_digest_recap_failed` | `ratatoskr_events` | `evt.knowledge.channel_digest_recap.failed.v1` | 30 s | -1 | `CHANNEL_DIGESTS` |
 | `ratatoskr_extractor_render_awaits` | `ratatoskr_events` | `evt.content.render.>` | 30 s, no acks, deliver new | -1 | `EXTRACTOR` |
 
+The durable `ratatoskr_telegram_notifications` is provisioned by Edge and consumed by the Telegram dispatcher, but no identity in `ratatoskr.conf` is allowed to publish `evt.platform.notification.raised.v1` today and nothing in the fleet raises a notification, so the dispatcher is expected to stay ready and idle with zero pending messages on that durable. Seeing it ready and idle is the healthy state, not a fault. Raising a notification is a future capability that needs a publisher stanza in `ratatoskr.conf`, a spec and a harness expectation.
+
 `platform_schedule_registration` (filter `cmd.platform.schedule.registration_requested.v1`) is
 created by Edge's own consumer when it starts, so it is not in the fixed table.
 
@@ -285,6 +287,7 @@ Provision in this order so the least-privilege Telegram process never needs topo
 
    Confirm `Filter Subject: evt.platform.notification.raised.v1`, explicit acknowledgements, and
    pull delivery. Then start `ratatoskr-telegram-dispatcher` and check its private readiness port.
+   The durable is expected to show zero pending and zero delivered messages and the dispatcher is expected to stay ready and idle, because no identity may publish that subject yet (see the paragraph below the durable table).
 
    ```bash
    sudo systemctl start ratatoskr-telegram-dispatcher
