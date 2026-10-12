@@ -318,6 +318,16 @@ async fn assert_no_broad_access(client: &async_nats::Client, identity: &str) {
     ] {
         requests.push((subject, r#"{"seq":1}"#.to_owned()));
     }
+    // R5-12 invariant 7: erasing a message is Edge's, so no other identity reaches the stream
+    // management subjects that delete or purge on a `ratatoskr_*` stream.
+    for stream in [CMD, EVT] {
+        requests.push((
+            format!("$JS.API.STREAM.MSG.DELETE.{stream}"),
+            r#"{"seq":1}"#.to_owned(),
+        ));
+        requests.push((format!("$JS.API.STREAM.PURGE.{stream}"), "{}".to_owned()));
+        requests.push((format!("$JS.API.STREAM.DELETE.{stream}"), "{}".to_owned()));
+    }
     let refusals =
         join_all(requests.into_iter().map(|(subject, body)| async move {
             (answered(client, &subject, &body).await, subject)
@@ -673,6 +683,8 @@ async fn threads_identity_matrix() {
     .await;
 }
 
+const ERASURE_COMMAND: &str = "cmd.platform.stream_erasure.requested.v1";
+
 const AI_ARCHIVE_FACTS: [&str; 8] = [
     "evt.ai_archive.archive.imported.v1",
     "evt.ai_archive.conversation.added.v1",
@@ -686,7 +698,10 @@ const AI_ARCHIVE_FACTS: [&str; 8] = [
 
 #[tokio::test]
 async fn chatgpt_identity_matrix() {
-    let mut granted = vec!["evt.ai-archive.chatgpt.operation.reported.v1"];
+    let mut granted = vec![
+        "evt.ai-archive.chatgpt.operation.reported.v1",
+        ERASURE_COMMAND,
+    ];
     granted.extend(AI_ARCHIVE_FACTS);
     exercise("CHATGPT", &granted).await;
 
@@ -703,7 +718,10 @@ async fn chatgpt_identity_matrix() {
 
 #[tokio::test]
 async fn claude_identity_matrix() {
-    let mut granted = vec!["evt.ai-archive.claude.operation.reported.v1"];
+    let mut granted = vec![
+        "evt.ai-archive.claude.operation.reported.v1",
+        ERASURE_COMMAND,
+    ];
     granted.extend(AI_ARCHIVE_FACTS);
     exercise("CLAUDE", &granted).await;
 
@@ -716,6 +734,37 @@ async fn claude_identity_matrix() {
             .is_err(),
         "Claude impersonated ChatGPT"
     );
+}
+
+/// R5-12 rule 5: only the two AI archive importers may ask Edge to erase, and EDGE itself publishes
+/// no command it did not receive from the outbox, so every other identity is refused the subject.
+#[tokio::test]
+async fn only_chatgpt_and_claude_publish_the_erasure_command() {
+    let broker = Deployed::start();
+    broker.provision().await;
+    for identity in [
+        "X",
+        "INSTAGRAM",
+        "THREADS",
+        "EXTRACTOR",
+        "KNOWLEDGE",
+        "GITHUB",
+        "VAULT",
+        "CHANNEL_DIGESTS",
+        "TELEGRAM",
+    ] {
+        let client = broker.client(identity).await;
+        assert!(
+            publish_acked(&client, ERASURE_COMMAND).await.is_err(),
+            "{identity} published the stream erasure command"
+        );
+    }
+    for identity in ["CHATGPT", "CLAUDE"] {
+        let client = broker.client(identity).await;
+        publish_acked(&client, ERASURE_COMMAND)
+            .await
+            .unwrap_or_else(|error| panic!("{identity} was refused the erasure command: {error}"));
+    }
 }
 
 #[tokio::test]

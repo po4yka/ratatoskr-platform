@@ -80,8 +80,16 @@ The five `*_deletion_acks` durables (XR-021 R5-11) carry Knowledge's acknowledge
 
 The durable `ratatoskr_telegram_notifications` is provisioned by Edge and consumed by the Telegram dispatcher, but no identity in `ratatoskr.conf` is allowed to publish `evt.platform.notification.raised.v1` today and nothing in the fleet raises a notification, so the dispatcher is expected to stay ready and idle with zero pending messages on that durable. Seeing it ready and idle is the healthy state, not a fault. Raising a notification is a future capability that needs a publisher stanza in `ratatoskr.conf`, a spec and a harness expectation.
 
-`platform_schedule_registration` (filter `cmd.platform.schedule.registration_requested.v1`) is
-created by Edge's own consumer when it starts, so it is not in the fixed table.
+`platform_schedule_registration` (filter `cmd.platform.schedule.registration_requested.v1`) and
+`platform_stream_erasure` (filter `cmd.platform.stream_erasure.requested.v1`, explicit
+acknowledgements, 30 s, unlimited redelivery, XR-021 R5-12) are created by Edge's own consumers
+when it starts, so they are not in the fixed table. The second one erases single messages from
+`ratatoskr_events` at the request of `CHATGPT` or `CLAUDE`: the command names an owner and stream
+sequences, and Edge erases a sequence only when its subject is one of the seven content-bearing
+`evt.ai_archive.*` subjects (never the tombstone), its envelope names the requesting producer as
+`producer` and the named owner as `tenant_id`. Every other sequence is counted as refused and left
+alone, and a sequence that no longer exists is counted as missing. Edge writes one audit row per
+command with the three counts and no content.
 
 The KV bucket `browser_worker_completions` (keys expire after 24 hours, direct get allowed) is
 created by Edge and owned by `EXTRACTOR_BROWSER_WORKER`, which opens it with three grants:
@@ -158,6 +166,8 @@ tenant's operation-report metadata through `ratatoskr_x_extractor_reports`. Per-
 subjects would need a contract change.
 
 Every producer of a deletion fact (`CHATGPT`, `CLAUDE`, `X`, `INSTAGRAM` and `THREADS`) reads every tenant's deletion acknowledgement through its `*_deletion_acks` durable: event ids, tenant references and a subject reference, no content (XR-021 R5-11).
+
+A compromised `CHATGPT` or `CLAUDE` identity can still publish forged facts, and since XR-021 R5-12 it can also ask Edge to erase stream messages, but only messages that carry its own producer name and the tenant it names: Edge reads each sequence, erases it only when the stored envelope matches, and counts anything else as refused. No stanza other than `EDGE` holds a publish allow starting with `$JS.API.STREAM.` (the browser worker's read of its own bucket, `$JS.API.STREAM.INFO.KV_browser_worker_completions`, is the one read-only exception and cannot touch a message).
 
 ## A refusal is silent
 

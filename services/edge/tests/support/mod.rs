@@ -41,6 +41,8 @@ fn ai_archive(report: &str, acks: &str) -> Vec<String> {
     ]);
     // R5-11 rule 3: the trio of the producer's own deletion-acknowledgement durable.
     allow.extend(trio(EVT, acks));
+    // R5-12 rule 5: the one command that asks Edge to erase what this producer published.
+    allow.push("cmd.platform.stream_erasure.requested.v1".to_owned());
     allow.sort();
     allow
 }

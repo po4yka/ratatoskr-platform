@@ -481,6 +481,56 @@ fn only_edge_holds_the_control_plane_and_wildcards_are_confined() {
     }
 }
 
+/// S03 invariant 7 (XR-021 R5-12): only EDGE may manage a stream. No other stanza holds a publish
+/// allow that starts with `$JS.API.STREAM.`, with one read-only exception the contract already
+/// fixes: the browser worker opens its own key-value bucket through
+/// `$JS.API.STREAM.INFO.KV_browser_worker_completions`, which describes a stream and cannot read,
+/// write or erase a message. CHATGPT and CLAUDE reach erasure only through the command.
+#[test]
+fn only_edge_holds_a_stream_management_publish_allow() {
+    const KV_INFO: &str = "$JS.API.STREAM.INFO.KV_browser_worker_completions";
+    for identity in deployed_identities() {
+        if identity.name == "EDGE" {
+            continue;
+        }
+        for subject in &identity.publish_allow {
+            if subject.starts_with("$JS.API.STREAM.") {
+                assert!(
+                    identity.name == "EXTRACTOR_BROWSER_WORKER" && subject == KV_INFO,
+                    "{} holds the stream-management publish allow {subject}",
+                    identity.name
+                );
+            }
+        }
+    }
+    let identities = deployed_identities();
+    for name in ["CHATGPT", "CLAUDE"] {
+        let identity = identities
+            .iter()
+            .find(|identity| identity.name == name)
+            .unwrap_or_else(|| panic!("{name} is missing"));
+        assert!(
+            identity
+                .publish_allow
+                .iter()
+                .any(|subject| subject == "cmd.platform.stream_erasure.requested.v1"),
+            "{name} cannot ask Edge to erase its own facts"
+        );
+    }
+    for identity in &identities {
+        let holds = identity
+            .publish_allow
+            .iter()
+            .any(|subject| subject == "cmd.platform.stream_erasure.requested.v1");
+        assert_eq!(
+            holds,
+            matches!(identity.name.as_str(), "CHATGPT" | "CLAUDE"),
+            "{} and the erasure command",
+            identity.name
+        );
+    }
+}
+
 /// The extractor's old stanza held `evt.>` and a `$JS.API.>` fragment, so it could read every
 /// tenant's events and create consumers. That is deleted, not narrowed in place.
 #[test]
