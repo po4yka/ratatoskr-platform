@@ -29,7 +29,7 @@ use platform_core::config::{self, ConfigError, LogFormat, PlatformConfig};
 /// configuration variable, and milestones 5 to 8 added the database, the bus and the identity keys
 /// without touching it — so the claim had been false for four milestones, and this list is what
 /// makes it checkable again.
-const DOCUMENTED: [(&str, &str); 30] = [
+const DOCUMENTED: [(&str, &str); 31] = [
     ("RATATOSKR__ADMIN__BIND", "127.0.0.1:19464"),
     ("RATATOSKR__PUBLIC__BIND", "127.0.0.1:18080"),
     ("RATATOSKR__PUBLIC__REQUEST_TIMEOUT_SECONDS", "17"),
@@ -67,6 +67,7 @@ const DOCUMENTED: [(&str, &str); 30] = [
         "/tmp/ratatoskr-probe-archive-staging",
     ),
     ("RATATOSKR__ARCHIVE_STAGING__MAX_ARCHIVE_BYTES", "3145728"),
+    ("RATATOSKR__ARCHIVE_STAGING__SWEEP_INTERVAL_SECONDS", "120"),
     ("RATATOSKR__CHANNEL_DIGESTS__LISTENER", "127.0.0.1:8098"),
     (
         "RATATOSKR__CHANNEL_DIGESTS__SERVICE_SECRET",
@@ -311,6 +312,7 @@ fn every_variable_in_env_example_overrides_its_field() {
             ["ratatoskr-github", "ratatoskr-channel-digests"]
         );
         assert_eq!(config.archive_staging.max_archive_bytes, 3_145_728);
+        assert_eq!(config.archive_staging.sweep_interval_seconds, 120);
         assert_eq!(
             config.archive_staging.root,
             std::path::Path::new("/tmp/ratatoskr-probe-archive-staging")

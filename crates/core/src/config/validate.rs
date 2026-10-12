@@ -1,4 +1,4 @@
-//! The startup validation rules V1–V22 and the operator-facing failure report.
+//! The startup validation rules V1–V23 and the operator-facing failure report.
 //!
 //! Order at startup is strictly: extract, validate, initialise telemetry, bind listeners. Telemetry
 //! is initialised *after* validation so that an invalid `log_filter` fails as a configuration
@@ -149,6 +149,7 @@ pub(crate) fn validate(role: RuntimeRole, config: &PlatformConfig) -> Vec<Violat
         });
     }
     found.extend(archive_ceiling_violations(config));
+    found.extend(staging_sweep_violations(config));
     found.extend(channel_digests_violations(role, config));
 
     found
@@ -173,6 +174,28 @@ fn archive_ceiling_violations(config: &PlatformConfig) -> Vec<Violation> {
         env_var: "RATATOSKR__ARCHIVE_STAGING__MAX_ARCHIVE_BYTES".into(),
         rule: "must be 1048576..=10737418240 bytes (V21); staging needs about twice this much \
                free space per in-flight archive",
+    }]
+}
+
+/// The shortest staging sweep interval: thirty seconds. A sweep lists the root and runs one query, so
+/// a faster loop spends the Pi's disk on a decision nothing needs.
+const STAGING_SWEEP_MIN_SECONDS: u64 = 30;
+
+/// The longest: one hour. Beyond it a root that filled stays unready for longer than a client's
+/// retry budget, and an upload session (24 hours) would be reaped a day late.
+const STAGING_SWEEP_MAX_SECONDS: u64 = 3600;
+
+/// V23 — the staging reaper's interval is bounded on both sides.
+fn staging_sweep_violations(config: &PlatformConfig) -> Vec<Violation> {
+    if (STAGING_SWEEP_MIN_SECONDS..=STAGING_SWEEP_MAX_SECONDS)
+        .contains(&config.archive_staging.sweep_interval_seconds)
+    {
+        return Vec::new();
+    }
+    vec![Violation {
+        key: "archive_staging.sweep_interval_seconds".into(),
+        env_var: "RATATOSKR__ARCHIVE_STAGING__SWEEP_INTERVAL_SECONDS".into(),
+        rule: "must be 30..=3600 seconds (V23); the staging reaper runs this often",
     }]
 }
 

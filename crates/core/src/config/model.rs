@@ -114,6 +114,21 @@ pub struct ArchiveStagingConfig {
     /// the assembled copy until the receiver has the bytes.
     #[serde(default = "default_max_archive_bytes")]
     pub max_archive_bytes: u64,
+    /// Seconds between two sweeps of the staging reaper (rule V23).
+    ///
+    /// The reaper removes the staging of expired, failed, finalized and abandoned transfers and
+    /// re-evaluates the staging readiness. Five minutes by default: a session lives 24 hours, so a
+    /// sweep minutes late frees the same bytes, while a root that fills or goes read-only is noticed
+    /// within one interval.
+    #[serde(default = "default_sweep_interval_seconds")]
+    pub sweep_interval_seconds: u64,
+}
+
+/// The default sweep interval: five minutes.
+const DEFAULT_STAGING_SWEEP_INTERVAL_SECONDS: u64 = 300;
+
+const fn default_sweep_interval_seconds() -> u64 {
+    DEFAULT_STAGING_SWEEP_INTERVAL_SECONDS
 }
 
 /// The default archive ceiling: 2 GiB, equal to the Export Agent's own default.
@@ -128,6 +143,7 @@ impl Default for ArchiveStagingConfig {
         Self {
             root: PathBuf::from("/tmp/ratatoskr-platform-ai-archive-staging"),
             max_archive_bytes: DEFAULT_MAX_ARCHIVE_BYTES,
+            sweep_interval_seconds: DEFAULT_STAGING_SWEEP_INTERVAL_SECONDS,
         }
     }
 }

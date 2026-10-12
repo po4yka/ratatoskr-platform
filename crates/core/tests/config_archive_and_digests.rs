@@ -65,6 +65,49 @@ fn archive_ceiling_defaults_to_two_gibibytes_and_rejects_out_of_range() {
     }
 }
 
+/// V23. The staging reaper runs every five minutes unless configured, and an interval outside 30 to
+/// 3600 seconds is a startup error that names the key.
+#[test]
+fn staging_sweep_interval_defaults_to_five_minutes_and_rejects_out_of_range() {
+    Jail::expect_with(|_jail| {
+        let loaded = config::load(RuntimeRole::Edge).expect("defaults alone must be valid");
+        assert_eq!(loaded.archive_staging.sweep_interval_seconds, 300);
+        Ok(())
+    });
+
+    for refused in [0_u64, 29, 3601] {
+        Jail::expect_with(|jail| {
+            jail.set_env(
+                "RATATOSKR__ARCHIVE_STAGING__SWEEP_INTERVAL_SECONDS",
+                refused,
+            );
+            let found = violations(RuntimeRole::Edge);
+            assert!(
+                names(&found, "archive_staging.sweep_interval_seconds"),
+                "{refused} must be refused by rule V23"
+            );
+            assert!(
+                found.iter().any(|violation| violation.env_var
+                    == "RATATOSKR__ARCHIVE_STAGING__SWEEP_INTERVAL_SECONDS"),
+                "the violation names the environment variable"
+            );
+            Ok(())
+        });
+    }
+
+    for accepted in [30_u64, 120, 3600] {
+        Jail::expect_with(|jail| {
+            jail.set_env(
+                "RATATOSKR__ARCHIVE_STAGING__SWEEP_INTERVAL_SECONDS",
+                accepted,
+            );
+            let loaded = config::load(RuntimeRole::Edge).expect("the bounds of V23 are legal");
+            assert_eq!(loaded.archive_staging.sweep_interval_seconds, accepted);
+            Ok(())
+        });
+    }
+}
+
 const DIGESTS_SECRET: &str = "channel-digests-secret-value-0123456789";
 
 /// V22. The digest API is a loopback listener on 8098 plus a bearer secret, and the two come together

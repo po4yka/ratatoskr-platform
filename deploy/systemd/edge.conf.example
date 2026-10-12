@@ -31,6 +31,11 @@ RATATOSKR__ARCHIVE_STAGING__ROOT=/mnt/nvme/ratatoskr/archive-staging
 # per in-flight archive, because the chunks and the assembled copy coexist until the receiver has
 # the bytes.
 RATATOSKR__ARCHIVE_STAGING__MAX_ARCHIVE_BYTES=2147483648
+# How often the staging reaper sweeps (rule V23: 30..=3600 seconds). Each sweep removes the staging
+# of transfers that expired, failed, finalized or whose operation ended ten minutes ago, and
+# unowned `rst_*` directories older than an hour, 200 of each kind at most, and it re-checks that
+# the root is writable and the volume holds twice the ceiling above.
+RATATOSKR__ARCHIVE_STAGING__SWEEP_INTERVAL_SECONDS=300
 
 # Domain APIs are loopback-only. Edge owns the public prefixes, validates the session and mints
 # only x-ratatoskr-user-id, optional x-ratatoskr-device-id and x-correlation-id for each request.

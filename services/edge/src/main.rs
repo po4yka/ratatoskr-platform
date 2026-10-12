@@ -21,6 +21,7 @@ use platform_eventing::{
 use platform_http::{RuntimeState, Serving};
 use platform_operations::ProgressProjection;
 use platform_persistence::Database;
+use platform_public_api::archives;
 use platform_scheduling::RegistrationHandler;
 use sqlx::PgPool;
 
@@ -161,43 +162,25 @@ impl platform_http::PublicRoutes for EdgeRoutes {
             // `GET /v1/capabilities` asks.
             true,
         );
-        // Decoded once, here, rather than on every request. Rule V14 already refused a key that is
-        // not 32 bytes, so this cannot fail on a configuration the process started with — and if it
-        // somehow did, refusing to start is right: a route that verifies nothing would accept
-        // nothing, silently, for the life of the deployment.
-        if let Some(key) = config.identity.assertion_key.as_deref() {
-            let decoded =
-                base64::Engine::decode(&base64::engine::general_purpose::STANDARD, key)
-                    .map_err(|error| format!("the assertion key could not be decoded: {error}"))?;
-            state.assertion_key = Some(decoded);
-        }
-        state
-            .oauth_completion_url
-            .clone_from(&config.identity.oauth_completion_url);
-        // The constructor's default exists so a test can build a state without a configuration; a
-        // deployment states its own allowance, and rule V18 has already refused a zero.
-        if let Some(public) = config.public.as_ref() {
-            state.actor_limit = Arc::new(platform_http::ActorLimiter::new(
-                public.actor_requests_per_minute,
-            ));
-        }
-        state.gateway = platform_public_api::gateway::Gateway::from_config(&config.gateway);
-        state.archive_staging_root = Arc::new(config.archive_staging.root.clone());
-        state.archive_max_bytes = config.archive_staging.max_archive_bytes;
-        state.channel_digests = config.channel_digests.as_ref().map(|digests| {
-            Arc::new(
-                platform_public_api::channel_digests::ChannelDigestsClient::new(
-                    digests.listener,
-                    digests.service_secret.clone(),
-                ),
-            )
-        });
+        configure_state(&mut state, config)?;
         let archive_enabled = ["chatgpt", "claude"]
             .iter()
             .any(|provider| state.gateway.has_archive_receiver(provider));
+        let staging = archives::staging::StagingSettings {
+            root: config.archive_staging.root.clone(),
+            max_archive_bytes: config.archive_staging.max_archive_bytes,
+            interval: Duration::from_secs(config.archive_staging.sweep_interval_seconds),
+            limits: archives::reaper::SweepLimits::default(),
+        };
         if archive_enabled {
-            health
-                .set_archive_staging_ready(staging_is_writable(&config.archive_staging.root).await);
+            health.set_archive_staging_ready(
+                archives::staging::staging_is_ready(
+                    &staging.root,
+                    staging.max_archive_bytes,
+                    &archives::staging::volume_free_bytes,
+                )
+                .await,
+            );
         }
         for provider in ["chatgpt", "claude"] {
             if state.gateway.has_archive_receiver(provider) {
@@ -210,7 +193,7 @@ impl platform_http::PublicRoutes for EdgeRoutes {
         // computed from the SAME state the route reports (ADR-0008: one source for that fact, or
         // the two disagree and one of them is wrong).
         let state = Arc::new(state);
-        let tasks = vec![
+        let mut tasks = vec![
             spawn_publisher(database.pool().clone(), publisher.clone()),
             spawn_projection(database.pool().clone(), publisher.clone()),
             spawn_archive_projections(
@@ -231,6 +214,16 @@ impl platform_http::PublicRoutes for EdgeRoutes {
                 config.operations.stale_after_seconds,
             ),
         ];
+        // The reaper and the periodic staging readiness exist only where archives can arrive: a
+        // deployment with no receiver never writes under the root, so there is nothing to reap.
+        if archive_enabled {
+            tasks.push(tokio::spawn(archives::staging::run(
+                database.pool().clone(),
+                Arc::clone(health),
+                staging,
+                archives::staging::volume_free_bytes,
+            )));
+        }
 
         Ok(Serving {
             routes: platform_public_api::routes(state),
@@ -238,6 +231,45 @@ impl platform_http::PublicRoutes for EdgeRoutes {
             tasks,
         })
     }
+}
+
+/// Copy the configuration into the API state: the assertion key, the OAuth completion URL, the
+/// per-actor allowance, the gateway, the staging root and ceiling, and the channel-digests client.
+fn configure_state(
+    state: &mut platform_public_api::ApiState,
+    config: &PlatformConfig,
+) -> Result<(), String> {
+    // Decoded once, here, rather than on every request. Rule V14 already refused a key that is
+    // not 32 bytes, so this cannot fail on a configuration the process started with — and if it
+    // somehow did, refusing to start is right: a route that verifies nothing would accept
+    // nothing, silently, for the life of the deployment.
+    if let Some(key) = config.identity.assertion_key.as_deref() {
+        let decoded = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, key)
+            .map_err(|error| format!("the assertion key could not be decoded: {error}"))?;
+        state.assertion_key = Some(decoded);
+    }
+    state
+        .oauth_completion_url
+        .clone_from(&config.identity.oauth_completion_url);
+    // The constructor's default exists so a test can build a state without a configuration; a
+    // deployment states its own allowance, and rule V18 has already refused a zero.
+    if let Some(public) = config.public.as_ref() {
+        state.actor_limit = Arc::new(platform_http::ActorLimiter::new(
+            public.actor_requests_per_minute,
+        ));
+    }
+    state.gateway = platform_public_api::gateway::Gateway::from_config(&config.gateway);
+    state.archive_staging_root = Arc::new(config.archive_staging.root.clone());
+    state.archive_max_bytes = config.archive_staging.max_archive_bytes;
+    state.channel_digests = config.channel_digests.as_ref().map(|digests| {
+        Arc::new(
+            platform_public_api::channel_digests::ChannelDigestsClient::new(
+                digests.listener,
+                digests.service_secret.clone(),
+            ),
+        )
+    });
+    Ok(())
 }
 
 async fn ensure_fixed_bus_topology(publisher: &NatsPublisher) -> Result<(), String> {
@@ -587,27 +619,6 @@ fn spawn_archive_projections(
             }
         }
     })
-}
-
-async fn staging_is_writable(root: &std::path::Path) -> bool {
-    if tokio::fs::create_dir_all(root).await.is_err() {
-        return false;
-    }
-    let probe = root.join(format!(".readiness-{}", uuid::Uuid::now_v7()));
-    match tokio::fs::OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .open(&probe)
-        .await
-    {
-        Ok(file) => {
-            let synced = file.sync_all().await.is_ok();
-            drop(file);
-            let removed = tokio::fs::remove_file(probe).await.is_ok();
-            synced && removed
-        }
-        Err(_) => false,
-    }
 }
 
 /// Receive domain schedule registrations through Edge's sole bus connection.

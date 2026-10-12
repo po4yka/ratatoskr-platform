@@ -281,9 +281,19 @@ fn edge_profile_declares_the_canonical_domain_gateway_table() {
         "the sandbox must permit writes only to the configured staging root"
     );
     let tmpfiles = include_str!("../../../deploy/tmpfiles.d/ratatoskr-platform.conf");
+    let directives: Vec<&str> = tmpfiles
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .collect();
     assert_eq!(
-        tmpfiles.trim(),
-        "d /mnt/nvme/ratatoskr/archive-staging 0700 ratatoskr-edge ratatoskr-edge -"
+        directives,
+        ["d /mnt/nvme/ratatoskr/archive-staging 0700 ratatoskr-edge ratatoskr-edge -"],
+        "the age stays `-`: the staging reaper owns removal (XR-021 R5-04)"
+    );
+    assert!(
+        tmpfiles.contains("reaper owns removal") || tmpfiles.contains("owns removal"),
+        "the file says why the age is `-`"
     );
     assert_eq!(
         setting(&text, "RATATOSKR__PUBLIC__MAX_BODY_BYTES").as_deref(),
