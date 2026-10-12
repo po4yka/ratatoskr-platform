@@ -5,5 +5,5 @@
 
 ## 2. The handler (R5-12 rule 4)
 
-- [ ] 2.1 Add `crates/eventing/tests/stream_erasure.rs` (own message erased and neighbour kept, foreign producer refused, foreign owner refused, tombstone and non-ai_archive refused, missing sequence, replay absorbed, envelope mismatch Termed, one audit row with the counts and no content, outcome counters) against a real broker and the deployed ACL, and a stub handler that acknowledges everything, and run it RED on the assertions
-- [ ] 2.2 Implement `platform_eventing::stream_erasure`, register the metric, add the audit table, spawn `platform_stream_erasure` in Edge, and run 2.1 GREEN
+- [x] 2.1 Add `crates/eventing/tests/stream_erasure.rs` (own message erased and neighbour kept, foreign producer refused, foreign owner refused, tombstone and non-ai_archive refused, missing sequence, replay absorbed, envelope mismatch Termed, one audit row with the counts and no content, outcome counters; three scenario tests, each on its own throwaway broker running the rendered deployed ACL, with the real `platform_stream_erasure` consumer), and a stub handler that acknowledges everything, and run it RED on the assertions
+- [x] 2.2 Implement `platform_eventing::stream_erasure`, register the metric, add the audit table, spawn `platform_stream_erasure` in Edge, and run 2.1 GREEN

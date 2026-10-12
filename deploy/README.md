@@ -292,6 +292,19 @@ something is republishing an occurrence that already happened.
   on the compiled 1 MiB default still cannot take chunks above 1 MiB). The archive ceiling is
   `RATATOSKR__ARCHIVE_STAGING__MAX_ARCHIVE_BYTES` (default 2 GiB); staging needs about twice that
   in free space on the staging mount per in-flight archive.
+- The bus carries the owner's stream policy (XR-021 R5-11 to R5-13). `ratatoskr_events` keeps
+  dropping its oldest message at seven days or 1 GiB, and three things make that safe to run:
+  Knowledge acknowledges every deletion fact on `evt.knowledge.deletion.acknowledged.v1`, read by the
+  five producers through their own `ratatoskr_{chatgpt,claude,x,instagram,threads}_deletion_acks`
+  durables (Edge provisions them; reload NATS and restart Edge before the services); ChatGPT and
+  Claude can ask Edge to erase the stream messages they published for a deleted owner by sending
+  `cmd.platform.stream_erasure.requested.v1`, which Edge's `platform_stream_erasure` consumer honours
+  only for a message that carries the requesting producer's name and the named owner and is not a
+  tombstone (it writes one content-free row per command to `operations.stream_erasure_audit` and
+  counts `platform_stream_erasure_total{outcome}`); and Edge's observer exports the lag of every
+  durable and the state of both streams, which the alert rules in
+  `deploy/monitoring/ratatoskr-bus-alerts.rules.yml` watch. The durable table and the ACL are in
+  `deploy/nats/README.md`.
 - AI archive staging is reaped. When an archive receiver is configured, `ratatoskr-edge` runs a
   reaper every `RATATOSKR__ARCHIVE_STAGING__SWEEP_INTERVAL_SECONDS` (rule V23, 30 to 3600, default
   300). A sweep handles at most 200 transfer sessions and 200 orphans, oldest first. It removes the
@@ -324,13 +337,22 @@ Every row of `ARCHITECTURE.md` S16 has a publication point, and
 | `platform_operations_oldest_unterminated_age_seconds` | an operation nobody finished. The reaper (ADR-0014) terminates the ones past their window; a value persistently above the window means the reaper is not running or the window is wrong for how long work here actually takes |
 | `platform_scheduler_occurrences_total{outcome="skipped"}` | the scheduler is not keeping up with its own schedules |
 | `platform_capability_available` | a capability the deployment is advertising as unavailable |
+| `platform_bus_consumer_oldest_unacked_age_seconds{stream,durable}` | a consumer is behind: the age of the first message after its acknowledgement floor, 0 when it has caught up. `ratatoskr_events` drops its oldest messages after seven days, so a value in days is facts about to be lost. Sampled by Edge's observer every 15 s, with `platform_bus_consumer_pending`, `platform_bus_consumer_ack_pending` and `platform_bus_consumer_redelivered` |
+| `platform_bus_stream_bytes{stream}` against `platform_bus_stream_max_bytes{stream}` | a stream near its 1 GiB cap; the events stream then drops its oldest messages early. `platform_bus_stream_messages` and `platform_bus_stream_oldest_message_age_seconds` complete the picture |
 
 ## What is still missing
 
 Named here rather than left to be discovered:
 
-- **Alert rules.** Alertmanager on this host reaches a person, and no rule watches any of the series
-  above. The metrics exist; the rules do not.
+- **A running alert engine.** Alertmanager on this host reaches a person, and the rules now exist:
+  `deploy/monitoring/ratatoskr-bus-alerts.rules.yml` holds the six bus alerts (Knowledge consumer lag
+  at one hour and at two days, Knowledge backlog, the events stream near its byte cap, a redelivery
+  storm, and a deletion fact that Knowledge has not acknowledged for a day), with the thresholds and
+  the reasoning for them written beside each. The owner chooses the engine; vmalert and Prometheus
+  both load this file. Nothing in this repository starts one, so the rules watch nothing until the
+  engine is pointed at the file. `RatatoskrUnacknowledgedTombstones` also needs the five deletion
+  producers' operator ports as scrape targets, which stay host-only until the owner opens them to the
+  monitoring bridge; the targets are in `promscrape.ratatoskr.yml`, commented out.
 - **A `ratatoskr.target`.** The three units are enabled individually; there is no single unit to
   stop the deployment with.
 - **Operation history retention.** The sweep deliberately does not touch `operations.operations`:

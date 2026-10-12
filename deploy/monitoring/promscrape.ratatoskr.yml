@@ -54,3 +54,22 @@
         labels:
           site: terrace
           system: ratatoskr
+
+  # The deletion producers' operator ports, for `RatatoskrUnacknowledgedTombstones` in
+  # `ratatoskr-bus-alerts.rules.yml` (XR-021 R5-11 and R5-13). Commented out because the ports are
+  # host-only until the owner opens them to the monitoring bridge (`deploy/README.md`); enable them
+  # together with that firewall rule, and never before the services are running.
+  #
+  # - job_name: ratatoskr-deletion-producers
+  #   scrape_interval: 15s
+  #   scrape_timeout: 5s
+  #   static_configs:
+  #     - targets:
+  #         - "host.docker.internal:9085"   # ratatoskr-chatgpt
+  #         - "host.docker.internal:9086"   # ratatoskr-claude
+  #         - "host.docker.internal:9087"   # ratatoskr-x
+  #         - "host.docker.internal:9082"   # ratatoskr-instagram
+  #         - "host.docker.internal:9084"   # ratatoskr-threads
+  #       labels:
+  #         site: terrace
+  #         system: ratatoskr

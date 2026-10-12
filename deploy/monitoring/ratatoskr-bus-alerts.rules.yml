@@ -1,0 +1,106 @@
+# Alert rules for the Ratatoskr bus (XR-021 CONTRACTS.md R5-13), in the Prometheus rule-file format.
+#
+# vmalert and Prometheus both load this file. Which engine evaluates it on the host is the owner's
+# choice; nothing in this repository starts one. Point the engine at this file, at the same store the
+# `ratatoskr` scrape job in `promscrape.ratatoskr.yml` writes to, and at the Alertmanager that
+# reaches a person.
+#
+# THE RETENTION THESE THRESHOLDS ARE MEASURED AGAINST. `ratatoskr_events` keeps a message for seven
+# days or until the stream holds 1 GiB, and drops the OLDEST message first when full. A consumer that
+# falls behind therefore loses its unread facts silently, and the producer has already been told
+# they were published. That is the owner's accepted policy; these rules exist so that the loss is
+# never a surprise, because lag is visible days before anything is dropped.
+#
+# THE ACK WAIT. The Knowledge ingest durables (`ratatoskr_knowledge_*`) wait 120 seconds for each
+# acknowledgement because an LLM call sits between delivery and acknowledgement, and every other
+# durable waits 30 seconds. So a healthy Knowledge consumer holds a message for up to two minutes,
+# and one hour of lag is thirty such messages in a row: a slow day, not a fault, which is why the
+# first alert is a warning with a quarter of an hour to clear.
+#
+# THE SERIES. Every series below except the last alert's is exported by `ratatoskr-edge` on its
+# operator port (9464), which the `ratatoskr` scrape job already reaches. They are defined in
+# `crates/telemetry/src/metrics.rs`, and `crates/eventing/tests/bus_alert_rules.rs` fails when a name
+# here stops being one of them.
+#
+# PRODUCER-SIDE NAMES (the allow-list of that test): `*_oldest_unacknowledged_tombstone_age_seconds`.
+# They are gauges the five deletion producers (chatgpt, claude, x, instagram, threads) export about
+# their own deletion facts that Knowledge has not acknowledged yet (R5-11). Their operator ports stay
+# host-only until the owner opens them to the monitoring bridge, so the targets in
+# `promscrape.ratatoskr.yml` are commented out, and `RatatoskrUnacknowledgedTombstones` stays silent
+# (no data) until they are enabled.
+
+groups:
+  - name: ratatoskr-bus
+    interval: 30s
+    rules:
+      # A Knowledge consumer whose oldest unacknowledged message is more than an hour old. Fifteen
+      # minutes to clear, because the 120 second ack wait makes a burst of slow messages look the
+      # same for a while.
+      - alert: RatatoskrKnowledgeConsumerLag
+        expr: max by (durable) (platform_bus_consumer_oldest_unacked_age_seconds{durable=~"ratatoskr_knowledge_.*"}) > 3600
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Knowledge consumer {{ $labels.durable }} is more than an hour behind"
+          description: "The oldest message {{ $labels.durable }} has not acknowledged is {{ $value | humanizeDuration }} old. The events stream drops its oldest messages after seven days."
+
+      # Two of the seven days. By then more than a quarter of the retention has gone, and the next
+      # step is a message dropped unread, so this one reaches a person quickly.
+      - alert: RatatoskrKnowledgeConsumerNearRetention
+        expr: max by (durable) (platform_bus_consumer_oldest_unacked_age_seconds{durable=~"ratatoskr_knowledge_.*"}) > 172800
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Knowledge consumer {{ $labels.durable }} is two days behind"
+          description: "The oldest unacknowledged message of {{ $labels.durable }} is {{ $value | humanizeDuration }} old, against a seven day retention. Facts will be dropped unread."
+
+      # A depth, not an age: a burst that Knowledge is working through is fine, a thousand messages
+      # that stay for half an hour are not.
+      - alert: RatatoskrKnowledgeConsumerBacklog
+        expr: max by (durable) (platform_bus_consumer_pending{durable=~"ratatoskr_knowledge_.*"}) > 1000
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Knowledge consumer {{ $labels.durable }} has more than a thousand messages waiting"
+          description: "{{ $labels.durable }} has {{ $value }} messages not yet delivered."
+
+      # Eighty percent of the 1 GiB byte cap. Past it the stream drops its oldest messages before
+      # their seven days are up.
+      - alert: RatatoskrEventsStreamNearCapacity
+        expr: platform_bus_stream_bytes{stream="ratatoskr_events"} / platform_bus_stream_max_bytes{stream="ratatoskr_events"} > 0.8
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "The events stream is above 80 percent of its byte cap"
+          description: "ratatoskr_events holds {{ $value | humanizePercentage }} of its maximum size and drops its oldest messages when full."
+
+      # More than a hundred redeliveries in a quarter of an hour on one consumer: a handler that
+      # keeps failing, or an ack wait shorter than the work. `for: 0m` because the window is already
+      # fifteen minutes long.
+      - alert: RatatoskrConsumerRedeliveryStorm
+        expr: increase(platform_bus_consumer_redelivered[15m]) > 100
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Consumer {{ $labels.durable }} is redelivering messages in a storm"
+          description: "{{ $labels.durable }} on {{ $labels.stream }} redelivered {{ $value }} messages in fifteen minutes."
+
+      # R5-11. A deletion fact that Knowledge has not acknowledged for a day: either Knowledge is
+      # down or the fact was dropped from the stream, and the producer keeps re-sending. The data
+      # stays in Knowledge until the acknowledgement arrives, so a person has to look.
+      #
+      # NEEDS THE PRODUCERS' OPERATOR PORTS AS SCRAPE TARGETS, which stay host-only until the owner
+      # opens them. See the commented targets in `promscrape.ratatoskr.yml`.
+      - alert: RatatoskrUnacknowledgedTombstones
+        expr: max by (job) ({__name__=~".*_oldest_unacknowledged_tombstone_age_seconds"}) > 86400
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: "A deletion fact has gone a day without Knowledge's acknowledgement"
+          description: "The oldest unacknowledged deletion fact of {{ $labels.job }} is {{ $value | humanizeDuration }} old. Knowledge may be down; the deleted data is still held there."

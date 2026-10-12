@@ -105,6 +105,17 @@ must do for each:
   rejected and audited, and no schedule is stored.
 - The bus. `deploy/nats/README.md` is the operator guide for the thirteen identities and the fixed
   durables Edge provisions at startup: reload NATS, restart Edge, then start the services.
+- Staging hygiene. `ratatoskr-edge` runs a bounded reaper over the archive staging root every
+  `RATATOSKR__ARCHIVE_STAGING__SWEEP_INTERVAL_SECONDS` (rule V23, default 300) and re-checks the root
+  and the volume's free space each time, so abandoned uploads are removed and a full volume turns
+  the staging readiness false. Opening an upload again after a digest mismatch, a permanent refusal
+  or an expiry returns a new token. `deploy/README.md` lists what a sweep removes and the three series.
+- Stream policy (XR-021 round 5). `ratatoskr_events` still drops its oldest message at seven days or
+  1 GiB. Edge provisions five more durables for Knowledge's deletion acknowledgements, erases
+  single stream messages at the request of ChatGPT and Claude
+  (`cmd.platform.stream_erasure.requested.v1`, audited in `operations.stream_erasure_audit`), and
+  exports `platform_bus_consumer_*` and `platform_bus_stream_*` series that the rules in
+  `deploy/monitoring/ratatoskr-bus-alerts.rules.yml` watch.
 
 Present since milestone 6: the outbox publisher and the operation-event consumer run inside
 `ratatoskr-edge`, and `GET /v1/operations/{id}/events` streams progress as Server-Sent Events with
