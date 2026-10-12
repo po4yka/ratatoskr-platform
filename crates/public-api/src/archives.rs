@@ -5,6 +5,8 @@
 
 mod docs;
 mod finalize;
+pub mod reaper;
+pub mod staging;
 
 use std::sync::Arc;
 

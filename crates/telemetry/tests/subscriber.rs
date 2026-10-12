@@ -101,7 +101,10 @@ fn the_metric_name_set_is_exactly_the_documented_set() {
             "platform_outbox_publications_total",
             "platform_idempotency_outcomes_total",
             "platform_sse_connections",
-            "platform_sse_delivery_lag_seconds"
+            "platform_sse_delivery_lag_seconds",
+            "platform_archive_staging_removed_total",
+            "platform_archive_staging_oldest_directory_age_seconds",
+            "platform_archive_staging_directories"
         ],
     );
 

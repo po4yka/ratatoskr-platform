@@ -77,6 +77,11 @@ sqlx = { version = "0.8.6", default-features = false, features = [
     "runtime-tokio", "tls-rustls-ring", "postgres", "uuid", "time", "macros",
 ] }
 
+# ---- filesystem ----
+# Free space of the staging volume (XR-021 R5-04): one safe call on rustix, instead of hand-written
+# statvfs FFI in a workspace that forbids unsafe code.
+fs4 = { version = "1.1.0", default-features = false, features = ["sync"] }
+
 # ---- async runtime and HTTP ----
 tokio      = { version = "1.53.1", features = ["rt-multi-thread", "macros", "signal", "net", "time", "sync"] }
 axum       = { version = "0.8.9", default-features = false, features = ["http1", "json", "matched-path", "query", "tokio", "tracing"] }

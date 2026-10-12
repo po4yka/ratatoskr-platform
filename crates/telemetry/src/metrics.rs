@@ -169,6 +169,25 @@ pub const PLATFORM_SSE_CONNECTIONS: &str = "platform_sse_connections";
 /// interval and is the number that says whether that interval is too long.
 pub const PLATFORM_SSE_DELIVERY_LAG_SECONDS: &str = "platform_sse_delivery_lag_seconds";
 
+/// `platform_archive_staging_removed_total{reason}` — counter (XR-021 R5-04).
+///
+/// What the staging reaper removed. `reason` is `expired`, `failed`, `finalized`, `terminal` or
+/// `orphan`, a closed set of five. A counter that never moves while the directories gauge climbs is
+/// a reaper that is not running.
+pub const PLATFORM_ARCHIVE_STAGING_REMOVED_TOTAL: &str = "platform_archive_staging_removed_total";
+
+/// `platform_archive_staging_oldest_directory_age_seconds` — gauge (XR-021 R5-04).
+///
+/// The age of the oldest `rst_*` directory under the staging root after the last sweep. An upload
+/// session lives 24 hours at most, so a value far beyond that is staging nothing is reaping.
+pub const PLATFORM_ARCHIVE_STAGING_OLDEST_DIRECTORY_AGE_SECONDS: &str =
+    "platform_archive_staging_oldest_directory_age_seconds";
+
+/// `platform_archive_staging_directories` — gauge (XR-021 R5-04).
+///
+/// How many `rst_*` directories remain under the staging root after the last sweep.
+pub const PLATFORM_ARCHIVE_STAGING_DIRECTORIES: &str = "platform_archive_staging_directories";
+
 /// The `route` label of a request that matched no route template.
 ///
 /// A constant, never the request URI: this is what closes the 404-scanning cardinality bomb.
@@ -188,7 +207,7 @@ pub const DURATION_BUCKETS: [f64; 11] = [
 
 /// Every metric name this workspace emits. A rename silently breaks every dashboard and every
 /// alert, so it must break test T-4 first.
-pub const ALL: [&str; 20] = [
+pub const ALL: [&str; 23] = [
     HTTP_SERVER_REQUEST_DURATION_SECONDS,
     PLATFORM_READINESS,
     PLATFORM_BUILD_INFO,
@@ -209,4 +228,7 @@ pub const ALL: [&str; 20] = [
     PLATFORM_IDEMPOTENCY_OUTCOMES_TOTAL,
     PLATFORM_SSE_CONNECTIONS,
     PLATFORM_SSE_DELIVERY_LAG_SECONDS,
+    PLATFORM_ARCHIVE_STAGING_REMOVED_TOTAL,
+    PLATFORM_ARCHIVE_STAGING_OLDEST_DIRECTORY_AGE_SECONDS,
+    PLATFORM_ARCHIVE_STAGING_DIRECTORIES,
 ];
