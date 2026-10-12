@@ -278,7 +278,7 @@ pub async fn open_transfer(
     let now = jiff::Timestamp::now();
     let existing = sqlx::query(
         "select resumption_token, declared_size_bytes, media_type, digest_sha256,
-                chunk_size_bytes, expires_at
+                chunk_size_bytes, expires_at, session_state
            from operations.ai_archive_transfers where operation_id = $1",
     )
     .bind(operation_id)
@@ -292,27 +292,39 @@ pub async fn open_transfer(
         }
     };
     if let Some(row) = existing {
-        let matches = row.try_get::<i64, _>("declared_size_bytes").ok()
-            == i64::try_from(request.declared_size_bytes).ok()
-            && row.try_get::<String, _>("media_type").ok().as_deref()
-                == Some(request.media_type.as_str())
-            && row.try_get::<String, _>("digest_sha256").ok().as_deref()
-                == Some(request.digest.hex.as_str())
-            && row.try_get::<i32, _>("chunk_size_bytes").ok()
-                == i32::try_from(request.chunk_size_bytes).ok();
-        if !matches {
-            return platform_http::reject(FailureKind::IdempotencyConflict);
-        }
-        let expires = row
+        // XR-021 R5-04 rule 5: only a live session is replayed. An `open` session that has not
+        // expired is resumed and a `finalized` one hands back its token (finalize then returns the
+        // stored completion). A `failed` or expired session is dead, and replaying its token would
+        // answer 404 on every call that follows, so it is replaced by a new one.
+        let session_state = row
+            .try_get::<String, _>("session_state")
+            .unwrap_or_default();
+        let expires_at = row
             .try_get::<time::OffsetDateTime, _>("expires_at")
             .ok()
             .map(from_offset);
-        if let Some(expires_at) = expires.filter(|expires_at| *expires_at > now) {
+        let live = match session_state.as_str() {
+            "finalized" => true,
+            "open" => expires_at.is_some_and(|expires_at| expires_at > now),
+            _ => false,
+        };
+        if live {
+            let matches = row.try_get::<i64, _>("declared_size_bytes").ok()
+                == i64::try_from(request.declared_size_bytes).ok()
+                && row.try_get::<String, _>("media_type").ok().as_deref()
+                    == Some(request.media_type.as_str())
+                && row.try_get::<String, _>("digest_sha256").ok().as_deref()
+                    == Some(request.digest.hex.as_str())
+                && row.try_get::<i32, _>("chunk_size_bytes").ok()
+                    == i32::try_from(request.chunk_size_bytes).ok();
+            if !matches {
+                return platform_http::reject(FailureKind::IdempotencyConflict);
+            }
             let token = row
                 .try_get::<String, _>("resumption_token")
                 .ok()
                 .and_then(|value| UploadResumptionToken::parse(&value).ok());
-            if let Some(token) = token {
+            if let (Some(token), Some(expires_at)) = (token, expires_at) {
                 return opened(token, request.chunk_size_bytes, expires_at);
             }
         }

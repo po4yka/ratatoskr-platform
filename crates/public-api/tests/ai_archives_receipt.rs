@@ -344,6 +344,37 @@ async fn a_413_from_the_receiver_ends_the_operation() {
     upload.finish().await;
 }
 
+/// R5-04 rule 5. After a permanent refusal the session is dead, and opening the same operation again
+/// mints a new one instead of replaying the token that now answers 404.
+#[tokio::test]
+async fn a_reopen_after_a_permanent_refusal_mints_a_new_session() {
+    let upload = Upload::start(403).await;
+    let (status, refusal) = upload.finalize().await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{refusal}");
+    let archive = multi_chunk_archive();
+
+    let (status, reopened) = support::open_session(
+        &upload.api,
+        &upload.credential,
+        &upload.uploads_path,
+        &sha256_hex(&archive),
+        archive.len(),
+        65_536,
+        ARCHIVE_MEDIA_TYPE,
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::CREATED, "{reopened}");
+    let new = reopened["resumption_token"].as_str().expect("a token");
+    assert_ne!(
+        new, upload.token,
+        "a failed session is replaced, not replayed"
+    );
+    assert!(upload.staging.join(new).is_dir());
+    assert!(!upload.staged(), "the old directory is gone");
+    upload.finish().await;
+}
+
 /// R3-03. A receiver that is merely unavailable does not end anything: the client retries finalize.
 #[tokio::test]
 async fn a_503_from_the_receiver_leaves_the_operation_open() {
