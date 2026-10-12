@@ -23,4 +23,4 @@
 
 ## 6. Gate
 
-- [ ] 6.1 Run the repository gate and `check-config` with the new key set and unset
+- [x] 6.1 Run the repository gate and `check-config` with the new key set and unset
