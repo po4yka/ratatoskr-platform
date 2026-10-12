@@ -69,7 +69,14 @@ or a filter here stops matching them.
 | `ratatoskr_x_extractor_reports` | `ratatoskr_events` | `evt.platform.operation.reported.v1` | 30 s | -1 | `X` |
 | `ratatoskr_channel_digest_recap_completed` | `ratatoskr_events` | `evt.knowledge.channel_digest_recap.completed.v1` | 30 s | -1 | `CHANNEL_DIGESTS` |
 | `ratatoskr_channel_digest_recap_failed` | `ratatoskr_events` | `evt.knowledge.channel_digest_recap.failed.v1` | 30 s | -1 | `CHANNEL_DIGESTS` |
+| `ratatoskr_chatgpt_deletion_acks` | `ratatoskr_events` | `evt.knowledge.deletion.acknowledged.v1` | 30 s | -1 | `CHATGPT` |
+| `ratatoskr_claude_deletion_acks` | `ratatoskr_events` | `evt.knowledge.deletion.acknowledged.v1` | 30 s | -1 | `CLAUDE` |
+| `ratatoskr_x_deletion_acks` | `ratatoskr_events` | `evt.knowledge.deletion.acknowledged.v1` | 30 s | -1 | `X` |
+| `ratatoskr_instagram_deletion_acks` | `ratatoskr_events` | `evt.knowledge.deletion.acknowledged.v1` | 30 s | -1 | `INSTAGRAM` |
+| `ratatoskr_threads_deletion_acks` | `ratatoskr_events` | `evt.knowledge.deletion.acknowledged.v1` | 30 s | -1 | `THREADS` |
 | `ratatoskr_extractor_render_awaits` | `ratatoskr_events` | `evt.content.render.>` | 30 s, no acks, deliver new | -1 | `EXTRACTOR` |
+
+The five `*_deletion_acks` durables (XR-021 R5-11) carry Knowledge's acknowledgement of a deletion fact. `ratatoskr_events` drops its oldest message at 7 days or 1 GiB, so a tombstone that Knowledge did not consume in time would be lost silently, and the producer marks it published at the PubAck. Knowledge therefore publishes `evt.knowledge.deletion.acknowledged.v1` (only `KNOWLEDGE` may), each of the five producers reads it on a cursor of its own and re-sends its deletion fact until the acknowledgement for it arrives. Every producer sees every acknowledgement: event ids, tenant references and a subject reference, no content. An acknowledgement that names no row of the reader is acknowledged and ignored.
 
 The durable `ratatoskr_telegram_notifications` is provisioned by Edge and consumed by the Telegram dispatcher, but no identity in `ratatoskr.conf` is allowed to publish `evt.platform.notification.raised.v1` today and nothing in the fleet raises a notification, so the dispatcher is expected to stay ready and idle with zero pending messages on that durable. Seeing it ready and idle is the healthy state, not a fault. Raising a notification is a future capability that needs a publisher stanza in `ratatoskr.conf`, a spec and a harness expectation.
 
@@ -149,6 +156,8 @@ delete a provisioned durable to roll back: its cursor is the delivery state.
 `THREADS` and `CHANNEL_DIGESTS`) can forge a report for each other, and `X` can read every
 tenant's operation-report metadata through `ratatoskr_x_extractor_reports`. Per-producer report
 subjects would need a contract change.
+
+Every producer of a deletion fact (`CHATGPT`, `CLAUDE`, `X`, `INSTAGRAM` and `THREADS`) reads every tenant's deletion acknowledgement through its `*_deletion_acks` durable: event ids, tenant references and a subject reference, no content (XR-021 R5-11).
 
 ## A refusal is silent
 

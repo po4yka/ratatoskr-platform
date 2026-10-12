@@ -61,9 +61,23 @@ const fn event(durable: &'static str, filter: &'static str, ack_wait_seconds: u6
     }
 }
 
+/// R5-11 rule 3: one acknowledgement durable per deletion producer, all on the same filter.
+fn deletion_ack_rows() -> Vec<Expected> {
+    [
+        "ratatoskr_chatgpt_deletion_acks",
+        "ratatoskr_claude_deletion_acks",
+        "ratatoskr_x_deletion_acks",
+        "ratatoskr_instagram_deletion_acks",
+        "ratatoskr_threads_deletion_acks",
+    ]
+    .into_iter()
+    .map(|durable| event(durable, "evt.knowledge.deletion.acknowledged.v1", 30))
+    .collect()
+}
+
 /// S04, command stream then event stream.
 fn table() -> Vec<Expected> {
-    vec![
+    let mut rows = vec![
         command(
             "ratatoskr_extractor_capture",
             "cmd.content.capture.requested.v1",
@@ -152,16 +166,23 @@ fn table() -> Vec<Expected> {
             "evt.knowledge.channel_digest_recap.failed.v1",
             30,
         ),
-        Expected {
-            stream: "ratatoskr_events",
-            durable: "ratatoskr_extractor_render_awaits",
-            filter: "evt.content.render.>",
-            ack: AckPolicy::None,
-            deliver: DeliverPolicy::New,
-            ack_wait_seconds: 30,
-            max_deliver: -1,
-        },
-    ]
+    ];
+    rows.push(render_awaits_row());
+    rows.extend(deletion_ack_rows());
+    rows
+}
+
+/// The one durable that takes no acknowledgements and starts at the end of the stream.
+const fn render_awaits_row() -> Expected {
+    Expected {
+        stream: "ratatoskr_events",
+        durable: "ratatoskr_extractor_render_awaits",
+        filter: "evt.content.render.>",
+        ack: AckPolicy::None,
+        deliver: DeliverPolicy::New,
+        ack_wait_seconds: 30,
+        max_deliver: -1,
+    }
 }
 
 /// The broker the suite talks to. Matches `compose.yaml`.
@@ -193,6 +214,17 @@ async fn ensure_domain_topology_creates_every_fixed_consumer_and_the_kv_bucket()
     ensure_domain_topology(&context)
         .await
         .expect("the first call provisions the topology");
+
+    assert_eq!(
+        platform_eventing::DOMAIN_CONSUMERS.len(),
+        table().len(),
+        "the code and the written-out contract hold the same number of durables"
+    );
+    assert_eq!(
+        table().len(),
+        23,
+        "R5-11 rule 3 takes the table from 18 to 23"
+    );
 
     for row in table() {
         let stream = context

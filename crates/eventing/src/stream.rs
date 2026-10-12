@@ -249,12 +249,16 @@ pub const TELEGRAM_NOTIFICATION_CONSUMERS: [FixedConsumerSpec; 1] = [FixedConsum
     TELEGRAM_NOTIFICATION_SUBJECT,
 )];
 
+/// The subject Knowledge publishes when it has applied, or refused, a deletion fact
+/// (XR-021 CONTRACTS.md R5-11).
+const DELETION_ACKNOWLEDGED_SUBJECT: &str = "evt.knowledge.deletion.acknowledged.v1";
+
 /// The durables of every other service (XR-021 CONTRACTS.md section S04), in the order of the
 /// contract: the command stream first, then the event stream.
 ///
 /// Each service hard-codes the same name and filter and verifies them at startup; none creates one.
 /// Ingest durables wait 120 seconds because an LLM call sits between delivery and acknowledgement.
-pub const DOMAIN_CONSUMERS: [FixedConsumerSpec; 18] = [
+pub const DOMAIN_CONSUMERS: [FixedConsumerSpec; 23] = [
     FixedConsumerSpec::standard(
         COMMAND_STREAM,
         "ratatoskr_extractor_capture",
@@ -346,6 +350,34 @@ pub const DOMAIN_CONSUMERS: [FixedConsumerSpec; 18] = [
         EVENT_STREAM,
         "ratatoskr_channel_digest_recap_failed",
         "evt.knowledge.channel_digest_recap.failed.v1",
+    ),
+    // R5-11 rule 3: Knowledge acknowledges every deletion fact, and each producer reads the
+    // acknowledgement on a cursor of its own, so one producer's ack never consumes the message
+    // another still needs.
+    FixedConsumerSpec::standard(
+        EVENT_STREAM,
+        "ratatoskr_chatgpt_deletion_acks",
+        DELETION_ACKNOWLEDGED_SUBJECT,
+    ),
+    FixedConsumerSpec::standard(
+        EVENT_STREAM,
+        "ratatoskr_claude_deletion_acks",
+        DELETION_ACKNOWLEDGED_SUBJECT,
+    ),
+    FixedConsumerSpec::standard(
+        EVENT_STREAM,
+        "ratatoskr_x_deletion_acks",
+        DELETION_ACKNOWLEDGED_SUBJECT,
+    ),
+    FixedConsumerSpec::standard(
+        EVENT_STREAM,
+        "ratatoskr_instagram_deletion_acks",
+        DELETION_ACKNOWLEDGED_SUBJECT,
+    ),
+    FixedConsumerSpec::standard(
+        EVENT_STREAM,
+        "ratatoskr_threads_deletion_acks",
+        DELETION_ACKNOWLEDGED_SUBJECT,
     ),
     FixedConsumerSpec {
         stream: EVENT_STREAM,

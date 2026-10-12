@@ -38,7 +38,7 @@ const EVT: &str = "ratatoskr_events";
 
 /// Every durable, the identity that owns it and the stream it lives on. EDGE owns the three that
 /// Platform consumes itself, listed separately because no other identity may even describe them.
-const OWNERS: [(&str, &str, &str); 24] = [
+const OWNERS: [(&str, &str, &str); 29] = [
     ("TELEGRAM", EVT, "ratatoskr_telegram_notifications"),
     ("X", CMD, "ratatoskr_x_browser_capture"),
     ("X", EVT, "ratatoskr_x_extractor_reports"),
@@ -77,6 +77,11 @@ const OWNERS: [(&str, &str, &str); 24] = [
         EVT,
         "ratatoskr_channel_digest_recap_failed",
     ),
+    ("CHATGPT", EVT, "ratatoskr_chatgpt_deletion_acks"),
+    ("CLAUDE", EVT, "ratatoskr_claude_deletion_acks"),
+    ("X", EVT, "ratatoskr_x_deletion_acks"),
+    ("INSTAGRAM", EVT, "ratatoskr_instagram_deletion_acks"),
+    ("THREADS", EVT, "ratatoskr_threads_deletion_acks"),
     ("EDGE", EVT, "platform_ai_archive_chatgpt_projection"),
     ("EDGE", EVT, "platform_ai_archive_claude_projection"),
 ];
@@ -133,6 +138,13 @@ fn source_of(durable: &str) -> (&'static str, &'static str) {
         ),
         "ratatoskr_channel_digest_recap_failed" => {
             ("KNOWLEDGE", "evt.knowledge.channel_digest_recap.failed.v1")
+        }
+        "ratatoskr_chatgpt_deletion_acks"
+        | "ratatoskr_claude_deletion_acks"
+        | "ratatoskr_x_deletion_acks"
+        | "ratatoskr_instagram_deletion_acks"
+        | "ratatoskr_threads_deletion_acks" => {
+            ("KNOWLEDGE", "evt.knowledge.deletion.acknowledged.v1")
         }
         other => panic!("no message source is defined for {other}"),
     }
@@ -520,9 +532,54 @@ async fn knowledge_identity_matrix() {
             "evt.knowledge.repository_analysis.failed.v1",
             "evt.knowledge.channel_digest_recap.completed.v1",
             "evt.knowledge.channel_digest_recap.failed.v1",
+            "evt.knowledge.deletion.acknowledged.v1",
         ],
     )
     .await;
+}
+
+/// R5-11 rule 3: only KNOWLEDGE may publish the acknowledgement, and every producer that owns an
+/// acknowledgement durable reads the same message from its own.
+#[tokio::test]
+async fn only_knowledge_publishes_the_deletion_acknowledgement() {
+    let broker = Deployed::start();
+    broker.provision().await;
+    for identity in [
+        "CHATGPT",
+        "CLAUDE",
+        "X",
+        "INSTAGRAM",
+        "THREADS",
+        "EXTRACTOR",
+        "GITHUB",
+        "VAULT",
+        "CHANNEL_DIGESTS",
+        "EDGE",
+    ] {
+        let client = broker.client(identity).await;
+        assert!(
+            publish_acked(&client, "evt.knowledge.deletion.acknowledged.v1")
+                .await
+                .is_err(),
+            "{identity} published a deletion acknowledgement"
+        );
+    }
+    let knowledge = broker.client("KNOWLEDGE").await;
+    publish_acked(&knowledge, "evt.knowledge.deletion.acknowledged.v1")
+        .await
+        .expect("KNOWLEDGE publishes the acknowledgement");
+    for (identity, durable) in [
+        ("CHATGPT", "ratatoskr_chatgpt_deletion_acks"),
+        ("CLAUDE", "ratatoskr_claude_deletion_acks"),
+        ("X", "ratatoskr_x_deletion_acks"),
+        ("INSTAGRAM", "ratatoskr_instagram_deletion_acks"),
+        ("THREADS", "ratatoskr_threads_deletion_acks"),
+    ] {
+        let client = broker.client(identity).await;
+        fetch_and_ack(&client, EVT, durable)
+            .await
+            .unwrap_or_else(|error| panic!("{identity} could not read {durable}: {error}"));
+    }
 }
 
 #[tokio::test]

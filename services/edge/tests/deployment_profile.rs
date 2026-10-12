@@ -552,6 +552,12 @@ fn every_fixed_consumer_has_exactly_one_owner_identity() {
             EVT,
             "ratatoskr_channel_digest_recap_failed",
         ),
+        // R5-11 rule 3: one acknowledgement durable per deletion producer.
+        ("CHATGPT", EVT, "ratatoskr_chatgpt_deletion_acks"),
+        ("CLAUDE", EVT, "ratatoskr_claude_deletion_acks"),
+        ("X", EVT, "ratatoskr_x_deletion_acks"),
+        ("INSTAGRAM", EVT, "ratatoskr_instagram_deletion_acks"),
+        ("THREADS", EVT, "ratatoskr_threads_deletion_acks"),
     ];
     let identities = deployed_identities();
     for (owner, stream, durable) in &owners {
@@ -587,8 +593,9 @@ fn every_fixed_consumer_has_exactly_one_owner_identity() {
     }
     assert_eq!(
         platform_eventing::DOMAIN_CONSUMERS.len(),
-        18,
-        "S04 has seven command durables and eleven event durables"
+        23,
+        "S04 has seven command durables and sixteen event durables (eleven plus the five \
+         deletion-acknowledgement durables of R5-11)"
     );
 }
 

@@ -27,7 +27,7 @@ fn subjects(list: &[&str]) -> Vec<String> {
     list.iter().map(|subject| (*subject).to_owned()).collect()
 }
 
-fn ai_archive(report: &str) -> Vec<String> {
+fn ai_archive(report: &str, acks: &str) -> Vec<String> {
     let mut allow = subjects(&[
         report,
         "evt.ai_archive.archive.imported.v1",
@@ -39,6 +39,8 @@ fn ai_archive(report: &str) -> Vec<String> {
         "evt.ai_archive.artifact.updated.v1",
         "evt.ai_archive.subject.tombstoned.v1",
     ]);
+    // R5-11 rule 3: the trio of the producer's own deletion-acknowledgement durable.
+    allow.extend(trio(EVT, acks));
     allow.sort();
     allow
 }
@@ -71,17 +73,24 @@ fn expected_platform_and_social() -> Vec<(&'static str, Vec<String>)> {
         ),
         (
             "CHATGPT",
-            ai_archive("evt.ai-archive.chatgpt.operation.reported.v1"),
+            ai_archive(
+                "evt.ai-archive.chatgpt.operation.reported.v1",
+                "ratatoskr_chatgpt_deletion_acks",
+            ),
         ),
         (
             "CLAUDE",
-            ai_archive("evt.ai-archive.claude.operation.reported.v1"),
+            ai_archive(
+                "evt.ai-archive.claude.operation.reported.v1",
+                "ratatoskr_claude_deletion_acks",
+            ),
         ),
         (
             "X",
             join(vec![
                 trio(CMD, "ratatoskr_x_browser_capture"),
                 trio(EVT, "ratatoskr_x_extractor_reports"),
+                trio(EVT, "ratatoskr_x_deletion_acks"),
                 subjects(&social_facts()),
                 subjects(&["cmd.content.capture.requested.v1"]),
             ]),
@@ -90,6 +99,7 @@ fn expected_platform_and_social() -> Vec<(&'static str, Vec<String>)> {
             "INSTAGRAM",
             join(vec![
                 trio(CMD, "ratatoskr_instagram_browser_capture"),
+                trio(EVT, "ratatoskr_instagram_deletion_acks"),
                 subjects(&social_facts()),
             ]),
         ),
@@ -97,6 +107,7 @@ fn expected_platform_and_social() -> Vec<(&'static str, Vec<String>)> {
             "THREADS",
             join(vec![
                 trio(CMD, "threads_browser_capture"),
+                trio(EVT, "ratatoskr_threads_deletion_acks"),
                 subjects(&social_facts()),
             ]),
         ),
@@ -146,6 +157,7 @@ fn expected_domain_services() -> Vec<(&'static str, Vec<String>)> {
                     "evt.knowledge.repository_analysis.failed.v1",
                     "evt.knowledge.channel_digest_recap.completed.v1",
                     "evt.knowledge.channel_digest_recap.failed.v1",
+                    "evt.knowledge.deletion.acknowledged.v1",
                 ]),
                 trio(CMD, "ratatoskr_knowledge_channel_recap"),
                 trio(EVT, "ratatoskr_knowledge_documents"),

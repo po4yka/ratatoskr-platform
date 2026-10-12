@@ -153,43 +153,50 @@ fn edge_preprovisions_the_telegram_notification_consumer() {
         .expect("the fixture database must drop");
 }
 
+/// Every durable of the domain table (S04 and R5-11), by stream.
+const DOMAIN_DURABLES: [(&str, &str); 23] = [
+    ("ratatoskr_commands", "ratatoskr_extractor_capture"),
+    ("ratatoskr_commands", "ratatoskr_browser_worker"),
+    ("ratatoskr_commands", "ratatoskr_knowledge_channel_recap"),
+    (
+        "ratatoskr_commands",
+        "ratatoskr_channel_digest_subscriptions",
+    ),
+    ("ratatoskr_commands", "ratatoskr_channel_digest_runs"),
+    (
+        "ratatoskr_commands",
+        "ratatoskr_channel_digest_schedule_occurrences",
+    ),
+    ("ratatoskr_commands", "ratatoskr_vault_backup_policy"),
+    ("ratatoskr_events", "ratatoskr_knowledge_documents"),
+    ("ratatoskr_events", "ratatoskr_knowledge_social_sources"),
+    ("ratatoskr_events", "ratatoskr_knowledge_ai_archive"),
+    (
+        "ratatoskr_events",
+        "ratatoskr_knowledge_repository_requests",
+    ),
+    ("ratatoskr_events", "ratatoskr_github_analysis_completed"),
+    ("ratatoskr_events", "ratatoskr_github_analysis_failed"),
+    ("ratatoskr_events", "ratatoskr_github_policy_acknowledged"),
+    ("ratatoskr_events", "ratatoskr_x_extractor_reports"),
+    (
+        "ratatoskr_events",
+        "ratatoskr_channel_digest_recap_completed",
+    ),
+    ("ratatoskr_events", "ratatoskr_channel_digest_recap_failed"),
+    ("ratatoskr_events", "ratatoskr_extractor_render_awaits"),
+    ("ratatoskr_events", "ratatoskr_chatgpt_deletion_acks"),
+    ("ratatoskr_events", "ratatoskr_claude_deletion_acks"),
+    ("ratatoskr_events", "ratatoskr_x_deletion_acks"),
+    ("ratatoskr_events", "ratatoskr_instagram_deletion_acks"),
+    ("ratatoskr_events", "ratatoskr_threads_deletion_acks"),
+];
+
 /// B-12. Edge owns every fixed durable and the completion bucket of the other services (XR-021
 /// CONTRACTS.md section S04). A service verifies its durable at startup and never creates it, so a
 /// durable Edge did not provision is a service that never becomes ready.
 #[test]
 fn edge_preprovisions_every_domain_durable_and_the_completion_bucket() {
-    const DOMAIN_DURABLES: [(&str, &str); 18] = [
-        ("ratatoskr_commands", "ratatoskr_extractor_capture"),
-        ("ratatoskr_commands", "ratatoskr_browser_worker"),
-        ("ratatoskr_commands", "ratatoskr_knowledge_channel_recap"),
-        (
-            "ratatoskr_commands",
-            "ratatoskr_channel_digest_subscriptions",
-        ),
-        ("ratatoskr_commands", "ratatoskr_channel_digest_runs"),
-        (
-            "ratatoskr_commands",
-            "ratatoskr_channel_digest_schedule_occurrences",
-        ),
-        ("ratatoskr_commands", "ratatoskr_vault_backup_policy"),
-        ("ratatoskr_events", "ratatoskr_knowledge_documents"),
-        ("ratatoskr_events", "ratatoskr_knowledge_social_sources"),
-        ("ratatoskr_events", "ratatoskr_knowledge_ai_archive"),
-        (
-            "ratatoskr_events",
-            "ratatoskr_knowledge_repository_requests",
-        ),
-        ("ratatoskr_events", "ratatoskr_github_analysis_completed"),
-        ("ratatoskr_events", "ratatoskr_github_analysis_failed"),
-        ("ratatoskr_events", "ratatoskr_github_policy_acknowledged"),
-        ("ratatoskr_events", "ratatoskr_x_extractor_reports"),
-        (
-            "ratatoskr_events",
-            "ratatoskr_channel_digest_recap_completed",
-        ),
-        ("ratatoskr_events", "ratatoskr_channel_digest_recap_failed"),
-        ("ratatoskr_events", "ratatoskr_extractor_render_awaits"),
-    ];
     let _edge_boot = EDGE_BOOT_LOCK.lock().expect("the edge boot lock");
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
