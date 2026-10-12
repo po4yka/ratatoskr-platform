@@ -196,7 +196,9 @@ fn is_permanent_refusal(status: http::StatusCode) -> bool {
 /// session becomes `failed` (its token is dead from then on), the operation fails with
 /// `platform.ai_archive.delivery_failed`, and the staged bytes are removed. Each step is best
 /// effort and logged on failure, because the client already has the receiver's refusal to act on;
-/// a step that did not land is picked up by the stale-operation reaper and the staging sweep.
+/// a step that did not land is picked up by the stale-operation reaper and, for the directory, by the
+/// staging reaper (`archives::reaper`, XR-021 R5-04), which removes the directory of every `failed`
+/// session on its next sweep.
 async fn end_delivery(
     state: &ApiState,
     binding: &TransferBinding,

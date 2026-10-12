@@ -292,6 +292,24 @@ something is republishing an occurrence that already happened.
   on the compiled 1 MiB default still cannot take chunks above 1 MiB). The archive ceiling is
   `RATATOSKR__ARCHIVE_STAGING__MAX_ARCHIVE_BYTES` (default 2 GiB); staging needs about twice that
   in free space on the staging mount per in-flight archive.
+- AI archive staging is reaped. When an archive receiver is configured, `ratatoskr-edge` runs a
+  reaper every `RATATOSKR__ARCHIVE_STAGING__SWEEP_INTERVAL_SECONDS` (rule V23, 30 to 3600, default
+  300). A sweep handles at most 200 transfer sessions and 200 orphans, oldest first. It removes the
+  directory of a transfer and then deletes its row when the session `failed` or `finalized`, when it
+  expired, or when its operation has been terminal for more than ten minutes, so a removal that
+  fails leaves the row for the next sweep. It also removes a directory named `rst_*` that no row
+  owns and `.readiness-*` files, once they are older than an hour. It never follows a symbolic link
+  and never touches a name outside the token grammar. The same loop re-checks that the root is
+  writable and that the volume has at least twice `MAX_ARCHIVE_BYTES` free, and Edge's
+  `ArchiveStaging` readiness follows the answer, so a full or unmounted volume refuses new archives
+  within one interval instead of at the next restart. Opening an upload again after a digest
+  mismatch, a permanent refusal by the receiver or an expiry returns a new token (`201`); an
+  `open` session that has not expired and a `finalized` one return their own. The series are
+  `platform_archive_staging_removed_total{reason}` (`expired`, `failed`, `finalized`, `terminal`,
+  `orphan`), `platform_archive_staging_directories` and
+  `platform_archive_staging_oldest_directory_age_seconds`. `deploy/tmpfiles.d/ratatoskr-platform.conf`
+  keeps the age field `-` on purpose: the reaper owns removal, and a systemd age sweep would delete
+  the directory of a session that is still being resumed.
 
 ## What the services now report
 
