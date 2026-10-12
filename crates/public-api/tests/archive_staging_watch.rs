@@ -133,7 +133,8 @@ async fn the_loop_removes_an_expired_fixture_within_two_intervals() {
     let operation_id = Uuid::now_v7();
     let owner = Uuid::now_v7();
     let token = format!("rst_{}", Uuid::now_v7().simple());
-    let accepted = time::OffsetDateTime::now_utc() - time::Duration::days(3);
+    // A fixed instant years in the past is expired under any retention the loop applies.
+    let accepted = time::OffsetDateTime::from_unix_timestamp(1_577_836_800).expect("2020-01-01");
     for statement in [
         "insert into operations.operations
              (operation_id, owner_user_id, kind, status, correlation_id, accepted_at, status_changed_at)
