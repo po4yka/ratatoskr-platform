@@ -85,17 +85,18 @@ sudo install -d -m 0770 -o root -g ratatoskr /mnt/nvme/ratatoskr/logs
 sudo install -d -m 0700 -o ratatoskr-nats -g ratatoskr-nats /mnt/nvme/ratatoskr/nats
 sudo install -d -m 0700 /mnt/nvme/backups/ratatoskr
 
-# 2. The binaries. Built for linux/arm64 from this repository's Dockerfile and copied out of the
-#    image; milestone 10 is where that path is exercised on the target end to end.
-docker buildx build --platform linux/arm64 \
-  --build-arg RATATOSKR_GIT_SHA="$(git rev-parse HEAD)" -t ratatoskr-platform:deploy .
-id=$(docker create ratatoskr-platform:deploy)
-for role in edge ingest scheduler; do
-  docker cp "$id:/usr/local/bin/ratatoskr-$role" - | sudo tar -x -C /usr/local/bin
-done
-docker rm "$id"
-sudo chown root:root /usr/local/bin/ratatoskr-*
-sudo chmod 0755 /usr/local/bin/ratatoskr-*
+# 2. The binaries. Every commit on main publishes them, after the gate and the arm64 smoke test, as
+#    ghcr.io/po4yka/ratatoskr-platform:sha-<commit> with SHA256SUMS and a provenance attestation,
+#    and ratatoskr-workspace's deploy/ansible playbook installs exactly that. By hand, verify on a
+#    machine with `oras` and `gh` and copy the three files over; never build on the host:
+#      oras pull "ghcr.io/po4yka/ratatoskr-platform:sha-$COMMIT" -o out
+#      gh attestation verify "oci://ghcr.io/po4yka/ratatoskr-platform:sha-$COMMIT" --repo po4yka/ratatoskr-platform
+#      (cd out && sha256sum -c SHA256SUMS)
+#    The fallback is the same export stage built locally:
+#      docker buildx build --platform linux/arm64 --target export \
+#        --build-arg RATATOSKR_GIT_SHA="$(git rev-parse HEAD)" --output type=local,dest=out .
+sudo install -o root -g root -m 0755 out/ratatoskr-edge out/ratatoskr-ingest out/ratatoskr-scheduler \
+  /usr/local/bin/
 
 # 3. The database and the roles, then the passwords. PostgreSQL is a CONTAINER on this host
 #    (`shared-postgres`), so every psql below enters it; there is no `postgres` user on the host and

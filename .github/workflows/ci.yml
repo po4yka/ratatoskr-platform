@@ -217,6 +217,25 @@ jobs:
             --build-arg RATATOSKR_GIT_SHA="$GITHUB_SHA" \
             --tag ratatoskr-platform:ci .
 
+      # The deployable set, exactly. `export` is the stage `ratatoskr-workspace`'s
+      # reusable-release-artifact workflow publishes for this commit, and its check refuses a binary
+      # no unit starts as firmly as a missing one; this asserts the same set here, where a stage that
+      # leaks the build tree or drops a role is found before the publish job runs.
+      - name: The export stage holds exactly the three deployables
+        run: |
+          set -euo pipefail
+          docker buildx build \
+            --target export \
+            --build-arg RATATOSKR_GIT_SHA="$GITHUB_SHA" \
+            --output "type=local,dest=$RUNNER_TEMP/export" .
+          actual=$(python3 -c 'import os, sys; print(" ".join(sorted(os.listdir(sys.argv[1]))))' "$RUNNER_TEMP/export")
+          expected="ratatoskr-edge ratatoskr-ingest ratatoskr-scheduler"
+          if [ "$actual" != "$expected" ]; then
+            echo "::error::the export stage holds '$actual', expected '$expected'"
+            exit 1
+          fi
+          echo "export: $actual"
+
       # Every deployable, because the `check-config` branch is wired into each `main` separately and
       # a binary that cannot load its configuration cannot start. Ingest is expected to REFUSE: it
       # carries no compiled public port, so 78 is its correct answer here and 0 would be the defect.
@@ -303,3 +322,18 @@ jobs:
           docker stop -t 40 smoke
           test "$(docker inspect -f '{{.State.ExitCode}}' smoke)" = "0"
           docker rm -f smoke smoke-db smoke-bus
+
+  # The artifact of this commit, published only after the gate and the arm64 smoke test above have
+  # passed on it: `ghcr.io/po4yka/ratatoskr-platform:sha-<commit>`, the three binaries with
+  # SHA256SUMS, an SPDX SBOM and a build-provenance attestation. The steps live once, in
+  # ratatoskr-workspace (openspec `release-artifacts`); `deploy/ansible/` there installs nothing else.
+  # A tag that already exists is never moved, so a re-run of this job publishes nothing.
+  release-artifact:
+    needs: [gate, artifact]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      packages: write      # push to ghcr.io
+      id-token: write      # the OIDC token the attestation is signed with
+      attestations: write  # record the attestation against this repository
+    uses: po4yka/ratatoskr-workspace/.github/workflows/reusable-release-artifact.yml@b4c4b87e3f4cc527eb646c2a3786ea77cbdeb731 # main
