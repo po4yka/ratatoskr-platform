@@ -227,7 +227,10 @@ the process then died. It now opens the file.
   on that host reaches a person and every series exists.
 - `extra_hosts: host.docker.internal:host-gateway` on the metrics stack's own service, which is the
   one change outside this repository that the scrape configuration needs.
-- A `ratatoskr.target`, so the deployment can be stopped as one thing.
+- ~~A `ratatoskr.target`, so the deployment can be stopped as one thing.~~ **Closed by
+  `deploy/systemd/ratatoskr.target`:** every Ratatoskr unit, here and in the extractor and Telegram
+  repositories, carries `PartOf=` and `WantedBy=` that target, so `systemctl stop ratatoskr.target`
+  stops them all and leaves the PostgreSQL and NATS containers up.
 - ~~An off-host backup destination.~~ **Closed by the encrypted S3-compatible recovery set:** the Pi
   uploads age-encrypted dump, Borg-export and configuration objects, while a separate verifier host
   holds the private identity and performs the weekly restore drill. `/mnt/backup` remains a local

@@ -126,9 +126,11 @@ for role in edge ingest scheduler; do
 done
 # Edit each one: the CHANGE-ME passwords, edge's assertion key (see "The Telegram assertion key"
 # below) and its OAuth completion URL.
-sudo cp deploy/systemd/ratatoskr-*.service /etc/systemd/system/
+sudo cp deploy/systemd/ratatoskr-*.service deploy/systemd/ratatoskr.target /etc/systemd/system/
 sudo cp deploy/logrotate/ratatoskr /etc/logrotate.d/ratatoskr
 sudo systemctl daemon-reload
+# Every Ratatoskr unit is WantedBy=ratatoskr.target, so the target is what boot starts.
+sudo systemctl enable ratatoskr.target
 
 # 6. Edge first, because it applies `schema.sql`.
 sudo systemctl enable --now ratatoskr-edge
@@ -158,6 +160,11 @@ docker kill -s HUP victoriametrics
 
 Every step is re-runnable. `create database` reports that the database exists and is skipped; every
 other statement is a `grant`, an `alter role`, or an install.
+
+**The deployment stops and restarts as one thing.** `sudo systemctl stop ratatoskr.target` stops
+every Ratatoskr unit on the host, and `restart` restarts them; each unit, Platform's three and those
+of the extractor and Telegram, carries `PartOf=ratatoskr.target`. The containers are not members, so
+PostgreSQL and NATS stay up. A unit that fails does not stop the target or its siblings.
 
 **A schema change reaches this database only if the database is recreated.** `ratatoskr-edge`
 applies `schema.sql` when the `identity` schema is absent, and skips the apply when the schema is
@@ -355,7 +362,5 @@ Named here rather than left to be discovered:
   engine is pointed at the file. `RatatoskrUnacknowledgedTombstones` also needs the five deletion
   producers' operator ports as scrape targets, which stay host-only until the owner opens them to the
   monitoring bridge; the targets are in `promscrape.ratatoskr.yml`, commented out.
-- **A `ratatoskr.target`.** The three units are enabled individually; there is no single unit to
-  stop the deployment with.
 - **Operation history retention.** The sweep deliberately does not touch `operations.operations`:
   how long a user's history is kept is a product decision, and no milestone owns it.

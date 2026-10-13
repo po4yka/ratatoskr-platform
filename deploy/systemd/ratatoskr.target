@@ -1,0 +1,23 @@
+[Unit]
+Description=Ratatoskr — every service unit on this host, as one thing to start, stop and restart
+Documentation=https://github.com/po4yka/ratatoskr-platform/blob/main/deploy/README.md
+# Platform owns this target because Platform is installed first: it creates the database, the bus
+# credentials and the schema every other service needs. A unit joins it with two lines, and the
+# units of other repositories carry the same two:
+#
+#   [Unit]     PartOf=ratatoskr.target       stop and restart of the target reach the unit
+#   [Install]  WantedBy=ratatoskr.target     start of the target, and boot, reach the unit
+#
+# `PartOf=` and not `BindsTo=`: a unit that fails must not take the target down with it, and through
+# the target every other service. Only the operator's `systemctl stop ratatoskr.target` stops them all.
+#
+# Ordering between the services is NOT here. Each unit carries its own `After=` and `Wants=`
+# (ingest and scheduler after edge, the Telegram dispatcher after the webhook), and a target that
+# only groups units changes none of it.
+#
+# The containers are not members. PostgreSQL (`shared-postgres`) and NATS (`ratatoskr-nats`) run
+# under Docker, so stopping this target leaves the database and the bus up, and the outbox keeps
+# everything accepted before the stop.
+
+[Install]
+WantedBy=multi-user.target

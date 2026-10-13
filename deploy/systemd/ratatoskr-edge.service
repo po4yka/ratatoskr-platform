@@ -19,6 +19,8 @@ Wants=network-online.target
 # would latch the unit into `failed` with nothing to retry it, which
 # `ratatoskr-workspace/docs/DEPLOYMENT_TARGET.md` names as a live failure on this host.
 StartLimitIntervalSec=0
+# Stopped and restarted with the rest of the deployment; see ratatoskr.target beside this file.
+PartOf=ratatoskr.target
 
 [Service]
 Type=exec
@@ -106,4 +108,4 @@ UMask=0077
 # away. The port this role binds is 8080 public, 9464 operator.
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=ratatoskr.target
