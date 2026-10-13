@@ -239,9 +239,24 @@ A provider integration maps an external identity to an internal user but does no
 - registered mobile or extension device token;
 - short-lived Telegram Mini App session;
 - service-to-service identity;
-- optional personal API token.
+- optional personal API token;
+- site owner session (`site_owner`, planned in changeset SITE-027 of `ratatoskr-workspace`).
 
 Each type has separate audience, lifetime, rotation, and revocation semantics.
+
+The site owner session is planned, not implemented. Its rules:
+
+- Audience `site:<site id>`. Edge accepts it only on a site-origin route or on the release route
+  of that same site, and only from the cookie `__Host-ratatoskr-site`. Edge reads that cookie on no
+  other route.
+- The owner gets it through an authorization code with PKCE, which the owner's primary session
+  approves. The code is single-use and lives 60 seconds.
+- Absolute lifetime 12 hours, idle timeout 1 hour, and no refresh token. Each sign-in makes a new
+  session.
+- It carries only the capabilities of the site's approved manifest that the active manifest still
+  declares.
+- The owner can list and revoke these sessions per site. Withdrawing the site's approval revokes
+  all of them in the same transaction.
 
 ### 6.3. Telegram identity assertion
 
