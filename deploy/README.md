@@ -90,7 +90,9 @@ sudo install -d -m 0700 /mnt/nvme/backups/ratatoskr
 #    and ratatoskr-workspace's deploy/ansible playbook installs exactly that. By hand, verify on a
 #    machine with `oras` and `gh` and copy the three files over; never build on the host:
 #      oras pull "ghcr.io/po4yka/ratatoskr-platform:sha-$COMMIT" -o out
-#      gh attestation verify "oci://ghcr.io/po4yka/ratatoskr-platform:sha-$COMMIT" --repo po4yka/ratatoskr-platform
+#      gh attestation verify "oci://ghcr.io/po4yka/ratatoskr-platform:sha-$COMMIT" \
+#        --repo po4yka/ratatoskr-platform --source-digest "$COMMIT" \
+#        --signer-workflow po4yka/ratatoskr-workspace/.github/workflows/reusable-release-artifact.yml
 #      (cd out && sha256sum -c SHA256SUMS)
 #    The fallback is the same export stage built locally:
 #      docker buildx build --platform linux/arm64 --target export \
