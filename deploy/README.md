@@ -19,7 +19,7 @@ which is host state no repository owns and which a reflash resets to the boot de
 
 | Purpose | Path | Owner |
 |---|---|---|
-| PostgreSQL data | `/mnt/nvme/ratatoskr/postgres` | the cluster, not Platform |
+| PostgreSQL data | `/mnt/nvme/shared-postgres/data` | the `shared-postgres` container, not Platform |
 | `JetStream` store | `/mnt/nvme/ratatoskr/nats` | `deploy/nats/ratatoskr.conf` |
 | Service logs | `/mnt/nvme/ratatoskr/logs` | the units, rotated by `deploy/logrotate/ratatoskr` |
 | Database dumps | `/mnt/nvme/backups/ratatoskr` | daily local custom dumps and transient off-host staging |
@@ -138,9 +138,11 @@ sudo systemctl enable --now ratatoskr-ingest ratatoskr-scheduler
 # 7. The firewall. This host runs ufw with `INPUT policy DROP`, so the operator listeners are
 #    reachable from the metrics stack only with an explicit rule — without it the scrape times out
 #    rather than being refused, which reads like a service that is down. Narrow: the monitoring
-#    bridge and those three ports, nothing else. Check the subnet first, it is per-installation:
+#    bridge and the five operator ports of ratatoskr-workspace/docs/DEPLOYMENT_TARGET.md, which
+#    are these three and Telegram's 9467 and 9468, nothing else. This is the same rule as that
+#    document's; change both together. Check the subnet first, it is per-installation:
 #    `docker network inspect monitoring_default --format '{{range .IPAM.Config}}{{.Subnet}}{{end}}'`
-sudo ufw allow proto tcp from 172.19.0.0/16 to any port 9464:9466 \
+sudo ufw allow proto tcp from 172.19.0.0/16 to any port 9464:9468 \
   comment 'ratatoskr operator listeners, from the monitoring bridge'
 
 # 8. Metrics, only once the services are actually running: a scrape target for a service that is not
