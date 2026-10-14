@@ -45,6 +45,9 @@ const CAPTURE_PRODUCERS: &[&str] = &[
 /// The one producer of every channel-digest operation.
 const CHANNEL_DIGEST_PRODUCERS: &[&str] = &["ratatoskr-channel-digests"];
 
+/// The one producer of a vault connect (workspace change `add-notes-vault-connections`).
+const NOTES_PRODUCERS: &[&str] = &["ratatoskr-notes"];
+
 /// Every operation kind Platform mints, and who may report for it.
 ///
 /// `channel_digest.schedule.occurrence` is the `operation_kind` that channel-digests registers with
@@ -66,6 +69,10 @@ pub const AUTHORITY: &[(&str, Producers)] = &[
     (
         "channel_digest.schedule.occurrence",
         Producers::Listed(CHANNEL_DIGEST_PRODUCERS),
+    ),
+    (
+        "notes.connection.connect",
+        Producers::Listed(NOTES_PRODUCERS),
     ),
 ];
 

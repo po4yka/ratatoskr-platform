@@ -2,9 +2,10 @@
 //!
 //! Every other `/v1/notes` request goes through the generic proxy. The connect call is an Edge
 //! handler because its body holds the Obsidian password, the MFA code and the end-to-end password
-//! (workspace change `add-notes-vault-connections`, design D4 and D10). Edge mints the operation id,
+//! (workspace change `add-notes-vault-connections`, design D4 and D10). Edge mints the operation,
 //! streams the body to the notes listener unchanged, and keeps no part of it: the body is not read,
-//! not buffered, not logged, and no idempotency or audit record is made from it.
+//! not buffered and not logged. The operation has no idempotency key, because the ledger would keep
+//! a digest of the body, and its audit record names only the operation.
 
 use std::sync::Arc;
 
@@ -14,6 +15,7 @@ use axum::extract::{Extension, Request, State};
 use axum::response::{IntoResponse as _, Response};
 use http::StatusCode;
 use platform_core::FailureKind;
+use platform_identity::audit::{self, AuditEvent, AuditOutcome};
 use uuid::Uuid;
 
 use crate::gateway::{self, Claims};
@@ -21,6 +23,12 @@ use crate::{ApiState, Principal};
 
 /// The fixed label of the notes route in a log line.
 const ROUTE: &str = "/v1/notes";
+
+/// The kind of the operation a connect mints.
+const OPERATION_KIND: &str = "notes.connection.connect";
+
+/// The one service that reports on a connect operation (XR-021 R3-02).
+const NOTES_PRODUCER: &str = "ratatoskr-notes";
 
 /// The largest success answer of the notes service that Edge reads. A connect answer holds an id,
 /// a channel and a state.
@@ -51,8 +59,11 @@ pub async fn connect(
         Ok(kind) => kind,
         Err(rejection) => return rejection,
     };
-    let operation_id = Uuid::now_v7();
     let correlation_id = context.correlation_id.to_string();
+    let operation_id = match mint(&state, principal, &correlation_id).await {
+        Ok(operation_id) => operation_id,
+        Err(rejection) => return rejection,
+    };
     let claims = Claims {
         principal,
         device_kind,
@@ -95,4 +106,54 @@ pub async fn connect(
         }),
     )
         .into_response()
+}
+
+/// Record the operation and its audit event in one transaction, before the notes service can report
+/// on the operation.
+async fn mint(
+    state: &ApiState,
+    principal: Principal,
+    correlation_id: &str,
+) -> Result<Uuid, Response> {
+    let refused = || platform_http::reject(FailureKind::RequestTimeout);
+    let now = jiff::Timestamp::now();
+    let mut transaction = state.database.pool().begin().await.map_err(|error| {
+        tracing::error!(%error, "a connect transaction could not be started");
+        refused()
+    })?;
+    let operation = platform_operations::accept(
+        &mut *transaction,
+        principal.user_id,
+        OPERATION_KIND,
+        correlation_id,
+        None,
+        Some(NOTES_PRODUCER),
+        now,
+    )
+    .await
+    .map_err(|error| {
+        tracing::error!(%error, "a connect operation could not be accepted");
+        refused()
+    })?;
+    let event = AuditEvent {
+        audit_event_id: Uuid::now_v7(),
+        actor_user_id: Some(principal.user_id),
+        actor_session_id: Some(principal.session_id),
+        action: OPERATION_KIND,
+        target_kind: "operation",
+        target_id: Some(operation.operation_id),
+        outcome: AuditOutcome::Allowed,
+        correlation_id: correlation_id.to_owned(),
+    };
+    audit::record(&mut *transaction, &event, now)
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, "a connect could not be audited");
+            refused()
+        })?;
+    transaction.commit().await.map_err(|error| {
+        tracing::error!(%error, "a connect transaction could not be committed");
+        refused()
+    })?;
+    Ok(operation.operation_id)
 }
