@@ -83,7 +83,8 @@ pub(crate) fn app(harness: &TestDatabase, gateway: &GatewayConfig) -> Router {
     let config = PublicConfig {
         bind: "127.0.0.1:0".parse().expect("a socket address"),
         request_timeout_seconds: 15,
-        max_body_bytes: 4 * 1_048_576,
+        // At least the transfer budget, as the configuration validation requires.
+        max_body_bytes: gateway.budgets.transfer.max_body_bytes.max(4 * 1_048_576),
         max_concurrent_requests: 64,
         actor_requests_per_minute: 120,
     };
@@ -247,4 +248,119 @@ pub(crate) async fn assert_connect_fails(
     assert_eq!(status, answer, "{body}");
     assert_failed_with(harness.pool(), owner, code).await;
     harness.cleanup().await.expect("cleanup");
+}
+
+/// The secret of every plugin device that a test registers.
+pub(crate) const DEVICE_SECRET: &str = "notes-plugin-device-secret";
+
+/// What the stub saw of one request.
+pub(crate) struct Seen {
+    pub(crate) method: http::Method,
+    pub(crate) path: String,
+    pub(crate) query: Option<String>,
+    pub(crate) headers: http::HeaderMap,
+    pub(crate) body: axum::body::Bytes,
+}
+
+/// A notes stub that records every request. It answers a connect with the `202` of the notes
+/// service and every other request with `200 {}`.
+pub(crate) async fn stub() -> (
+    std::net::SocketAddr,
+    tokio::sync::mpsc::Receiver<Seen>,
+    tokio::task::JoinHandle<()>,
+) {
+    let (seen_tx, seen_rx) = tokio::sync::mpsc::channel::<Seen>(8);
+    let router = Router::new().fallback(move |request: axum::extract::Request| {
+        let seen_tx = seen_tx.clone();
+        async move {
+            let (parts, body) = request.into_parts();
+            let body = axum::body::to_bytes(body, usize::MAX)
+                .await
+                .expect("the forwarded body");
+            let connect =
+                parts.method == http::Method::POST && parts.uri.path() == "/v1/notes/connections";
+            seen_tx
+                .send(Seen {
+                    method: parts.method,
+                    path: parts.uri.path().to_owned(),
+                    query: parts.uri.query().map(str::to_owned),
+                    headers: parts.headers,
+                    body,
+                })
+                .await
+                .expect("record the upstream request");
+            if connect {
+                (
+                    StatusCode::ACCEPTED,
+                    axum::Json(serde_json::json!({
+                        "connection_id": "018f0000-0000-7000-8000-0000000000c1",
+                        "channel": "sync",
+                        "state": "connecting",
+                    })),
+                )
+            } else {
+                (StatusCode::OK, axum::Json(serde_json::json!({})))
+            }
+        }
+    });
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("a loopback listener");
+    let address = listener.local_addr().expect("a listener address");
+    let task = tokio::spawn(async move {
+        axum::serve(listener, router)
+            .await
+            .expect("the notes stub serves");
+    });
+    (address, seen_rx, task)
+}
+
+/// A user with a registered `obsidian_plugin` device whose secret is [`DEVICE_SECRET`]: the owner
+/// and the device.
+pub(crate) async fn seed_plugin(pool: &sqlx::PgPool) -> (Uuid, Uuid) {
+    let owner = platform_identity::user::create_user(pool, now())
+        .await
+        .expect("a user")
+        .user_id;
+    let kind = platform_identity::DeviceKind::from_str_opt("obsidian_plugin")
+        .expect("obsidian_plugin is a registered device kind");
+    let device = platform_identity::device::register_device(
+        pool,
+        owner,
+        kind,
+        None,
+        platform_identity::SecretDigest::of(DEVICE_SECRET),
+        now(),
+    )
+    .await
+    .expect("a plugin device")
+    .device_id;
+    (owner, device)
+}
+
+/// Open a device session through the public route, as a paired client does.
+pub(crate) async fn device_credential(app: &Router, device_id: Uuid) -> String {
+    let request = Request::builder()
+        .method("POST")
+        .uri("/v1/sessions/device")
+        .header("content-type", "application/json")
+        .body(Body::from(format!(
+            r#"{{"device_id":"{device_id}","device_secret":"{DEVICE_SECRET}"}}"#
+        )))
+        .expect("a request");
+    let (status, body) = send(app, request).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    body["credential"]
+        .as_str()
+        .expect("a device credential")
+        .to_owned()
+}
+
+/// Every value of `name` that the stub received.
+pub(crate) fn values(headers: &http::HeaderMap, name: &str) -> Vec<String> {
+    headers
+        .get_all(name)
+        .iter()
+        .map(|value| value.to_str().expect("an ASCII header").to_owned())
+        .collect()
 }

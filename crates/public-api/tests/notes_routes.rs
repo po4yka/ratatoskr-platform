@@ -19,23 +19,19 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use axum::Router;
 use axum::body::{Body, Bytes};
-use http::{HeaderMap, Method, Request, StatusCode};
+use http::{Method, Request, StatusCode};
 use notes_support::{
-    OWNER_CREDENTIAL, answering, app, assert_connect_fails, notes_route, now, owner_connect,
-    seed_owner, send,
+    DEVICE_SECRET, OWNER_CREDENTIAL, answering, app, assert_connect_fails, device_credential,
+    notes_route, now, owner_connect, seed_owner, seed_plugin, send, stub, values,
 };
 use platform_identity::{DeviceKind, SecretDigest};
 use platform_persistence::test_support::TestDatabase;
 use tokio::net::TcpListener;
-use tokio::sync::mpsc;
 use tracing::field::{Field, Visit};
 use tracing::span::{Attributes, Id, Record};
 use tracing::{Event, Metadata, Subscriber};
 use uuid::Uuid;
-
-const DEVICE_SECRET: &str = "notes-plugin-device-secret";
 
 /// The values of the connect body that must stay inside the request.
 const MARKERS: [&str; 4] = [
@@ -44,93 +40,6 @@ const MARKERS: [&str; 4] = [
     "MARKER-MFA-4b2d",
     "MARKER-E2E-6d8f",
 ];
-
-/// What the stub saw of one request.
-struct Seen {
-    method: Method,
-    path: String,
-    headers: HeaderMap,
-    body: Bytes,
-}
-
-/// A notes stub that records every request. It answers a connect with the `202` of the notes
-/// service and every other request with `200 {}`.
-async fn stub() -> (
-    std::net::SocketAddr,
-    mpsc::Receiver<Seen>,
-    tokio::task::JoinHandle<()>,
-) {
-    let (seen_tx, seen_rx) = mpsc::channel::<Seen>(8);
-    let router = Router::new().fallback(move |request: axum::extract::Request| {
-        let seen_tx = seen_tx.clone();
-        async move {
-            let (parts, body) = request.into_parts();
-            let body = axum::body::to_bytes(body, usize::MAX)
-                .await
-                .expect("the forwarded body");
-            let connect =
-                parts.method == Method::POST && parts.uri.path() == "/v1/notes/connections";
-            seen_tx
-                .send(Seen {
-                    method: parts.method,
-                    path: parts.uri.path().to_owned(),
-                    headers: parts.headers,
-                    body,
-                })
-                .await
-                .expect("record the upstream request");
-            if connect {
-                (
-                    StatusCode::ACCEPTED,
-                    axum::Json(serde_json::json!({
-                        "connection_id": "018f0000-0000-7000-8000-0000000000c1",
-                        "channel": "sync",
-                        "state": "connecting",
-                    })),
-                )
-            } else {
-                (StatusCode::OK, axum::Json(serde_json::json!({})))
-            }
-        }
-    });
-    let listener = TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("a loopback listener");
-    let address = listener.local_addr().expect("a listener address");
-    let task = tokio::spawn(async move {
-        axum::serve(listener, router)
-            .await
-            .expect("the notes stub serves");
-    });
-    (address, seen_rx, task)
-}
-
-/// Open a device session through the public route, as a paired client does.
-async fn device_credential(app: &Router, device_id: Uuid) -> String {
-    let request = Request::builder()
-        .method("POST")
-        .uri("/v1/sessions/device")
-        .header("content-type", "application/json")
-        .body(Body::from(format!(
-            r#"{{"device_id":"{device_id}","device_secret":"{DEVICE_SECRET}"}}"#
-        )))
-        .expect("a request");
-    let (status, body) = send(app, request).await;
-    assert_eq!(status, StatusCode::CREATED, "{body}");
-    body["credential"]
-        .as_str()
-        .expect("a device credential")
-        .to_owned()
-}
-
-/// Every value of `name` that the stub received.
-fn values(headers: &HeaderMap, name: &str) -> Vec<String> {
-    headers
-        .get_all(name)
-        .iter()
-        .map(|value| value.to_str().expect("an ASCII header").to_owned())
-        .collect()
-}
 
 #[tokio::test]
 async fn device_claim_names_the_device_kind() {
@@ -299,34 +208,26 @@ async fn blob_upload_uses_the_transfer_budget() {
     let (address, mut seen, task) = stub().await;
     let gateway = notes_route(address);
     let harness = TestDatabase::create().await.expect("a test database");
-    seed_owner(harness.pool()).await;
+    let (_, device) = seed_plugin(harness.pool()).await;
     let app = app(&harness, &gateway);
+    let credential = device_credential(&app, device).await;
     let bytes = vec![b'x'; 2048];
-    let upload = |path: &str| {
+
+    let (status, body) = send(
+        &app,
         Request::builder()
             .method("PUT")
-            .uri(format!(
-                "/v1/notes/connections/018f0000-0000-7000-8000-0000000000c1/{path}"
-            ))
-            .header("authorization", format!("Bearer {OWNER_CREDENTIAL}"))
+            .uri("/v1/notes/connections/018f0000-0000-7000-8000-0000000000c1/blobs/session-1/chunks/0")
+            .header("authorization", format!("Bearer {credential}"))
             .header("content-length", bytes.len())
             .body(Body::from(bytes.clone()))
-            .expect("a request")
-    };
+            .expect("a request"),
+    )
+    .await;
 
-    let (status, body) = send(&app, upload("blobs/session-1/chunks/0")).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     let request = seen.recv().await.expect("the blob request");
     assert_eq!(request.body.len(), bytes.len());
-
-    let (status, body) = send(&app, upload("changes")).await;
-    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE, "{body}");
-    assert!(
-        tokio::time::timeout(Duration::from_millis(50), seen.recv())
-            .await
-            .is_err(),
-        "an oversized change batch reached the notes service"
-    );
     task.abort();
     harness.cleanup().await.expect("cleanup");
 }

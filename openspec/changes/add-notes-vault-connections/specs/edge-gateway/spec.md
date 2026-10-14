@@ -18,17 +18,31 @@ The system SHALL strip every inbound `x-ratatoskr-*` header and forward only the
 
 ### Requirement: Edge routes the notes service
 
-The shipped route table SHALL route `/v1/notes` to the loopback listener `127.0.0.1:8099` with the class `control`. Requests under `/v1/notes/connections/{id}/blobs` SHALL use the `transfer` budget.
+The shipped route table SHALL route `/v1/notes` to the loopback listener `127.0.0.1:8099` with the class `control`. Requests under `/v1/notes/connections/{id}/blobs`, and requests to `/v1/notes/connections/{id}/changes` and `/v1/notes/connections/{id}/manifest`, SHALL use the `transfer` budget.
 
 #### Scenario: A blob upload is larger than the control budget
 
-- **WHEN** an authenticated client sends a body above the control body budget to `/v1/notes/connections/{id}/blobs` and to `/v1/notes/connections/{id}/changes`
-- **THEN** the stub upstream receives the blob body unchanged, and Edge refuses the change batch with `413` before it reaches the stub, verified by `crates/public-api/tests/notes_routes.rs::blob_upload_uses_the_transfer_budget`
+- **WHEN** a paired plugin sends an upload chunk above the control body budget to `/v1/notes/connections/{id}/blobs/{token}/chunks/{index}`
+- **THEN** the stub upstream receives the chunk unchanged, verified by `crates/public-api/tests/notes_routes.rs::blob_upload_uses_the_transfer_budget`
+
+#### Scenario: Notes answers a change batch after the control timeout
+
+- **WHEN** the stub upstream answers a change batch and a manifest after two seconds, the `control` response budget is one second and the `transfer` response budget is ten seconds
+- **THEN** the paired plugin receives both answers, verified by `crates/public-api/tests/notes_device_routes.rs::change_batch_and_manifest_take_the_transfer_timeout`
 
 #### Scenario: A streamed blob upload is larger than the transfer budget
 
-- **WHEN** an authenticated client sends a blob body without `Content-Length` that streams more bytes than the transfer budget to `/v1/notes/connections/{id}/blobs`
+- **WHEN** a paired plugin sends an upload chunk without `Content-Length` that streams more bytes than the transfer budget to `/v1/notes/connections/{id}/blobs/{token}/chunks/{index}`
 - **THEN** Edge answers `413` with `platform.request.payload_too_large`, and not `503`, verified by `crates/public-api/tests/notes_connect.rs::oversized_streamed_blob_upload_is_refused_with_413`
+
+### Requirement: Edge bounds a notes device body by the limit of notes
+
+Edge SHALL forward a change batch up to 2 MiB, a manifest up to 32 MiB and an upload chunk at `/v1/notes/connections/{id}/blobs/{token}/chunks/{index}` up to 16 MiB, the chunk maximum of the shared transfer contract, and SHALL refuse a larger body with `413` before it reaches notes. A limit is never above the `transfer` budget.
+
+#### Scenario: A body of the largest size that notes takes
+
+- **WHEN** a paired plugin sends a change batch of 2 MiB, a manifest of 32 MiB and an upload chunk of 16 MiB, and then each of them with one byte more
+- **THEN** the stub upstream receives each body of the largest size unchanged, and Edge refuses each larger body with `413` (`platform.request.payload_too_large`) before it reaches the stub, verified by `crates/public-api/tests/notes_device_routes.rs::change_batch_admits_the_notes_maximum`, `manifest_admits_the_notes_maximum` and `chunk_admits_the_contract_maximum`
 
 ### Requirement: The connect proxy keeps no part of the body
 

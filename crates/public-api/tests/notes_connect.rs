@@ -19,7 +19,8 @@ use axum::body::{Body, Bytes};
 use http::{Request, StatusCode};
 use notes_support::{
     CONNECT_FAILED, OWNER_CREDENTIAL, answering, answering_with, app, assert_connect_fails,
-    assert_failed_with, connect_operation, notes_route, seed_owner, send, send_with_headers,
+    assert_failed_with, connect_operation, device_credential, notes_route, seed_owner, seed_plugin,
+    send, send_with_headers,
 };
 use platform_persistence::test_support::TestDatabase;
 use tokio::net::TcpListener;
@@ -241,14 +242,15 @@ async fn oversized_streamed_blob_upload_is_refused_with_413() {
     )
     .await;
     let harness = TestDatabase::create().await.expect("a test database");
-    seed_owner(harness.pool()).await;
+    let (_, device) = seed_plugin(harness.pool()).await;
     let app = app(&harness, &notes_route(address));
+    let credential = device_credential(&app, device).await;
     // No length is declared, so the transfer budget can stop the upload only while it streams.
     let chunks = (0..3).map(|_| Ok::<_, std::io::Error>(Bytes::from(vec![b'x'; 524_288])));
     let request = Request::builder()
         .method("PUT")
         .uri("/v1/notes/connections/018f0000-0000-7000-8000-0000000000c1/blobs/session-1/chunks/0")
-        .header("authorization", format!("Bearer {OWNER_CREDENTIAL}"))
+        .header("authorization", format!("Bearer {credential}"))
         .body(Body::from_stream(futures_util::stream::iter(chunks)))
         .expect("a request");
 
