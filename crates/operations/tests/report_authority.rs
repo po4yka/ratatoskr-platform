@@ -77,6 +77,7 @@ async fn accepted(pool: &sqlx::PgPool, kind: &str) -> Uuid {
         "channel_digest.subscription.set"
         | "channel_digest.run"
         | "channel_digest.schedule.occurrence" => Some("ratatoskr-channel-digests"),
+        "notes.connection.connect" => Some("ratatoskr-notes"),
         _ => None,
     };
     accepted_by(pool, kind, reporter).await
@@ -467,6 +468,37 @@ async fn an_import_report_without_a_tenant_or_an_acceptance_record_is_rejected()
     harness.cleanup().await.expect("cleanup");
 }
 
+/// Workspace OBS-023 task 9.3: Edge mints a connect operation for the notes lane, and only that lane
+/// reports on it.
+#[tokio::test]
+async fn notes_connect_accepts_only_the_notes_lane() {
+    let kinds = minted_kinds();
+    assert!(
+        kinds.iter().any(|kind| kind == "notes.connection.connect"),
+        "notes.connection.connect is not minted by Platform: {kinds:?}"
+    );
+    let harness = TestDatabase::create().await.expect("a test database");
+    let pool = harness.pool();
+    let operation = accepted(pool, "notes.connection.connect").await;
+
+    expect(
+        pool,
+        operation,
+        &message("ratatoskr-x", Some(OWNER), operation),
+        Outcome::Rejected,
+    )
+    .await;
+    expect(
+        pool,
+        operation,
+        &message("ratatoskr-notes", Some(OWNER), operation),
+        Outcome::Applied,
+    )
+    .await;
+
+    harness.cleanup().await.expect("cleanup");
+}
+
 /// The quoted value on the line after `marker`, or the first quoted value of the line holding it.
 fn literal_after(source: &str, marker: &str) -> Vec<String> {
     source
@@ -485,6 +517,7 @@ fn minted_kinds() -> Vec<String> {
         include_str!("../../public-api/src/captures.rs"),
         include_str!("../../public-api/src/archives.rs"),
         include_str!("../../public-api/src/channel_digests.rs"),
+        include_str!("../../public-api/src/notes.rs"),
     ] {
         for line in source.lines() {
             let line = line.trim();
@@ -511,6 +544,7 @@ fn every_minted_operation_kind_has_an_authority_row() {
         "ai_archive.import",
         "channel_digest.subscription.set",
         "channel_digest.run",
+        "notes.connection.connect",
     ] {
         assert!(
             kinds.iter().any(|kind| kind == expected),
@@ -579,6 +613,10 @@ fn every_mint_site_passes_a_lane_for_a_listed_kind() {
             include_str!("../../ingest/src/webhook.rs"),
         ),
         ("scheduler", include_str!("../../scheduling/src/lib.rs")),
+        (
+            "notes connect",
+            include_str!("../../public-api/src/notes.rs"),
+        ),
     ] {
         let calls = accept_calls(source);
         assert!(!calls.is_empty(), "{name} has no accept call to scan");

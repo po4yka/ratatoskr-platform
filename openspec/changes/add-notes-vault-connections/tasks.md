@@ -5,7 +5,7 @@
 
 ## 2. Report authority of the connect operation (workspace 9.3, 9.4)
 
-- [ ] 2.1 RED: `crates/operations/tests/report_authority.rs::notes_connect_accepts_only_the_notes_lane` asserts that a report from the X identity for a `notes.connection.connect` operation is rejected and the status is unchanged, and that the report of `ratatoskr-notes` is applied. Confirm that it fails because the kind is not minted.
+- [x] 2.1 RED: `crates/operations/tests/report_authority.rs::notes_connect_accepts_only_the_notes_lane` asserts that a report from the X identity for a `notes.connection.connect` operation is rejected and the status is unchanged, and that the report of `ratatoskr-notes` is applied. Confirm that it fails because the kind is not minted.
 - [ ] 2.2 GREEN: add the authority row and the mint site. Verify 2.1 and `every_minted_operation_kind_has_an_authority_row`.
 
 ## 3. NOTES identity and Knowledge durables (workspace 9.5, 9.6)
