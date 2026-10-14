@@ -18,6 +18,7 @@ use platform_api_doc::{Method, Payload, ResponseDoc, RouteDoc, Security};
 use platform_core::FailureKind;
 use platform_identity::audit::{self, AuditEvent, AuditOutcome};
 use ratatoskr_error_contracts::{ErrorCode, ErrorEnvelope};
+use tracing::Instrument as _;
 use uuid::Uuid;
 
 use crate::gateway::{self, Claims};
@@ -35,10 +36,6 @@ const NOTES_PRODUCER: &str = "ratatoskr-notes";
 /// The largest success answer of the notes service that Edge reads. A connect answer holds an id,
 /// a channel and a state.
 const MAX_ANSWER_BYTES: usize = 16_384;
-
-/// The largest error answer that Edge reads back to find its code. The generic proxy relays an
-/// error envelope only up to this size.
-const MAX_ERROR_BYTES: usize = 65_536;
 
 /// The path of the connect call.
 pub const CONNECT_ROUTE: &str = "/v1/notes/connections";
@@ -94,8 +91,10 @@ Edge serves this route only when the deployment routes the notes service. The bo
         },
         ResponseDoc {
             status: 400,
-            description: "The notes service refused the body. The `code` in the envelope is the \
-                          code of the notes service.",
+            description: "The notes service refused the body, and the `code` in the envelope is \
+                          the code of the notes service. Or the body failed while Edge sent it, \
+                          for example because the client stopped the upload \
+                          (`platform.request.invalid`). The operation is `failed`.",
             payload: Some(Payload::Json("ErrorEnvelope")),
         },
         ResponseDoc {
@@ -123,7 +122,9 @@ Edge serves this route only when the deployment routes the notes service. The bo
         ResponseDoc {
             status: 502,
             description: "The notes service gave an answer that Edge cannot use \
-                          (`edge.upstream_invalid_response`). The operation is `failed`.",
+                          (`edge.upstream_invalid_response`): a status other than `202` that is \
+                          not an error envelope, or a `202` that is not JSON. Edge does not relay \
+                          a redirect. The operation is `failed`.",
             payload: Some(Payload::Json("ErrorEnvelope")),
         },
         ResponseDoc {
@@ -143,11 +144,13 @@ Edge serves this route only when the deployment routes the notes service. The bo
 
 /// `POST /v1/notes/connections`.
 ///
-/// A notes error envelope is relayed as the generic proxy relays it. A success answer that is not
-/// JSON is an invalid upstream response. When the forward fails after the operation is minted, the
-/// operation is terminated as `failed` before Edge answers, so a client that polls it does not wait
-/// for the stale-operation reaper. The error envelope has no field for the operation id
-/// (contracts ADR-0008 keeps its `extensions` empty), so a failed connect does not name it.
+/// When the forward fails after the operation is minted, the operation is terminated as `failed`
+/// before Edge answers, so a client that polls it does not wait for the stale-operation reaper. The
+/// error envelope has no field for the operation id (contracts ADR-0008 keeps its `extensions`
+/// empty), so a failed connect does not name it.
+///
+/// The forward and the terminal write run in a task of their own. A client that disconnects drops
+/// this handler, and the task still ends the operation.
 pub async fn connect(
     State(state): State<Arc<ApiState>>,
     principal: Principal,
@@ -163,22 +166,56 @@ pub async fn connect(
         Ok(operation_id) => operation_id,
         Err(rejection) => return rejection,
     };
-    let claims = Claims {
-        principal,
-        device_kind,
-        correlation_id: &correlation_id,
+    let forward = async move {
+        let claims = Claims {
+            principal,
+            device_kind,
+            correlation_id: &correlation_id,
+        };
+        forward(&state, request, claims, operation_id).await
     };
+    match tokio::spawn(forward.in_current_span()).await {
+        Ok(response) => response,
+        Err(error) => match error.try_into_panic() {
+            Ok(panic) => std::panic::resume_unwind(panic),
+            // Only a runtime that shuts down cancels the task. The reaper ends the operation.
+            Err(_) => platform_http::reject(FailureKind::UpstreamUnavailable),
+        },
+    }
+}
+
+/// Send the connect to notes and answer what it answered.
+///
+/// A notes error envelope is relayed as the generic proxy relays it. Any other answer than `202`
+/// and an error is an invalid upstream response: a redirect is not relayed, because the client
+/// would send its secrets to the place it names. A `202` answer that is not JSON is an invalid
+/// upstream response too.
+async fn forward(
+    state: &ApiState,
+    request: Request,
+    claims: Claims<'_>,
+    operation_id: Uuid,
+) -> Response {
     let response = match state
         .gateway
         .send_notes_connect(request, claims, operation_id)
         .await
     {
         Ok(response) => response,
-        Err(kind) => return refuse(&state, operation_id, kind).await,
+        Err(kind) => return refuse(state, operation_id, kind).await,
     };
-    if !response.status().is_success() {
+    let status = response.status();
+    if status.is_client_error() || status.is_server_error() {
         let relayed = gateway::response_from_upstream(response, ROUTE).await;
-        return relay_refusal(&state, operation_id, relayed).await;
+        return relay_refusal(state, operation_id, relayed).await;
+    }
+    if status != StatusCode::ACCEPTED {
+        tracing::warn!(
+            route = ROUTE,
+            class = "unexpected_status",
+            "a connect answer had a status other than 202"
+        );
+        return refuse(state, operation_id, FailureKind::UpstreamInvalidResponse).await;
     }
     let Ok(answer) = axum::body::to_bytes(Body::new(response.into_body()), MAX_ANSWER_BYTES).await
     else {
@@ -187,7 +224,7 @@ pub async fn connect(
             class = "oversized_body",
             "a connect answer exceeded its bound"
         );
-        return refuse(&state, operation_id, FailureKind::UpstreamInvalidResponse).await;
+        return refuse(state, operation_id, FailureKind::UpstreamInvalidResponse).await;
     };
     let Ok(connection) = serde_json::from_slice::<serde_json::Value>(&answer) else {
         tracing::warn!(
@@ -195,7 +232,7 @@ pub async fn connect(
             class = "invalid_json",
             "a connect answer was not JSON"
         );
-        return refuse(&state, operation_id, FailureKind::UpstreamInvalidResponse).await;
+        return refuse(state, operation_id, FailureKind::UpstreamInvalidResponse).await;
     };
     (
         StatusCode::ACCEPTED,
@@ -221,7 +258,7 @@ async fn refuse(state: &ApiState, operation_id: Uuid, kind: FailureKind) -> Resp
 /// one, or an Edge fault with an empty body. The body is in memory already or bounded here.
 async fn relay_refusal(state: &ApiState, operation_id: Uuid, relayed: Response) -> Response {
     let (parts, body) = relayed.into_parts();
-    let bytes = axum::body::to_bytes(body, MAX_ERROR_BYTES)
+    let bytes = axum::body::to_bytes(body, gateway::MAX_ERROR_ENVELOPE_BYTES)
         .await
         .unwrap_or_default();
     let (code, retryable) = serde_json::from_slice::<ErrorEnvelope>(&bytes).map_or_else(

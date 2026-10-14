@@ -24,7 +24,7 @@ use ratatoskr_error_contracts::ErrorEnvelope;
 use crate::{ApiState, Principal};
 
 const RESERVED_PREFIX: &str = "x-ratatoskr-";
-const MAX_ERROR_ENVELOPE_BYTES: usize = 65_536;
+pub(crate) const MAX_ERROR_ENVELOPE_BYTES: usize = 65_536;
 
 /// The claim that names the stored kind of the authenticated device (`obsidian_plugin`,
 /// `export_agent`, ...). `ratatoskr-contracts` names no constant for it yet. It carries the
@@ -428,9 +428,13 @@ impl Gateway {
         .await
         {
             Ok(Ok(response)) => Ok(response),
-            Ok(Err(error)) if exceeds_body_limit(&error) => {
+            Ok(Err(error)) if caused_by::<http_body_util::LengthLimitError>(&error) => {
                 tracing::warn!("a connect body exceeded its budget while it streamed");
                 Err(FailureKind::PayloadTooLarge)
+            }
+            Ok(Err(error)) if caused_by::<axum::Error>(&error) => {
+                tracing::warn!("a connect body failed while it streamed");
+                Err(FailureKind::InvalidRequest)
             }
             Ok(Err(_)) => {
                 tracing::warn!("the notes service could not be reached for a connect");
@@ -561,12 +565,12 @@ pub(crate) async fn device_kind(
     }
 }
 
-/// Whether a forward failed because the request body grew above its body limit while it streamed.
-/// A body that declares its length is refused before the forward starts; one that does not is
-/// stopped by the limit only while it is sent.
-fn exceeds_body_limit(error: &(dyn std::error::Error + 'static)) -> bool {
-    std::iter::successors(Some(error), |error| error.source())
-        .any(<dyn std::error::Error>::is::<http_body_util::LengthLimitError>)
+/// Whether `E` is in the source chain of a failed forward. A failure of the request body is there:
+/// [`http_body_util::LengthLimitError`] when the body grew above its limit while it streamed (a body
+/// that declares its length is refused before the forward starts), and [`axum::Error`] when the
+/// body of the client failed, for example because the client stopped the upload.
+fn caused_by<E: std::error::Error + 'static>(error: &(dyn std::error::Error + 'static)) -> bool {
+    std::iter::successors(Some(error), |error| error.source()).any(<dyn std::error::Error>::is::<E>)
 }
 
 /// Whether `path` is `pattern` or a path below it. A `{name}` segment of the pattern matches one
@@ -635,6 +639,10 @@ pub async fn proxy(
     .await
     {
         Ok(Ok(response)) => response_from_upstream(response, &route.prefix).await,
+        Ok(Err(error)) if caused_by::<http_body_util::LengthLimitError>(&error) => {
+            tracing::warn!("a request body exceeded its budget while it streamed");
+            platform_http::reject(FailureKind::PayloadTooLarge)
+        }
         Ok(Err(_)) => {
             tracing::warn!("domain-service upstream could not be reached");
             platform_http::reject(FailureKind::UpstreamUnavailable)

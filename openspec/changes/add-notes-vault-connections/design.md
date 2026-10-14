@@ -30,6 +30,8 @@ as the budget of the route class.
 
 The connect path keeps its own rules. A connect body that declares no length and grows above the
 `control` budget is refused with `413` while it streams, not reported as an unreachable upstream.
+The generic proxy maps the same body-limit error to `413`, so a blob upload without a length that
+streams past the `transfer` budget is refused with `413` too.
 `POST /v1/notes/connections/` (a trailing slash) is refused at Edge with `404`; without that, it
 would reach notes through the generic proxy, which mints no operation and does not keep the body out
 of the logs. Other methods at that path go through the generic proxy.
@@ -43,14 +45,24 @@ of the logs. Other methods at that path go through the generic proxy.
 2. streams the request body to the notes listener unchanged, with the minted claims and
    `x-ratatoskr-operation-id`;
 3. answers `202` with `{ "operation_id", "status": "accepted", "connection": <notes answer> }` when
-   notes answers with a success, and relays a notes error envelope as the generic proxy does;
+   notes answers `202`, and relays a notes error envelope as the generic proxy does;
 4. terminates the operation as `failed` before it answers, through the one transition applier, when
    the forward fails: notes is not reachable (`edge.upstream_unavailable`), does not answer in time
    (`edge.upstream_timeout`), answers an error (the code of its envelope, or
-   `edge.upstream_invalid_response` when the answer is not an envelope), or answers a success that is
-   too large or not JSON (`edge.upstream_invalid_response`). The error keeps only the code and a
-   fixed message, never the notes message. The error envelope has no field for the operation id
-   (contracts ADR-0008 keeps `extensions` empty), so the failed answer does not name it.
+   `edge.upstream_invalid_response` when the answer is not an envelope), answers a status other than
+   `202` that is not an error, a redirect included, or a `202` that is too large or not JSON
+   (`edge.upstream_invalid_response`; Edge does not relay it, because a redirect would send the
+   client and its secrets to the place it names), or the request body fails while Edge sends it
+   (`platform.request.invalid`, not an unreachable upstream). The error and the progress entry keep
+   only the code and the fixed message `The connect did not complete.`, never the notes message. The
+   error envelope has no field for the operation id (contracts ADR-0008 keeps `extensions` empty), so
+   the failed answer does not name it.
+
+Steps 2 to 4 run in a task of their own, and the handler waits for it. A client that disconnects
+drops the handler, and the task still ends the operation, so the client does not wait for the
+stale-operation reaper. The task is bounded by the `control` response budget. Two writers of one
+operation, for example this task and a report of notes, classify under the row lock of the one
+transition applier, so the operation gets one terminal transition and one error.
 
 The body is never buffered, parsed or logged by Edge, and the idempotency ledger is not used for this
 route: its record would hold a digest of the body, and the notes service already refuses a second

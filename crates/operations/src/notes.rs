@@ -9,8 +9,9 @@ use crate::transition::Transition;
 use crate::{OperationError, record_error, record_status};
 
 /// What the progress history and the error record say. The answer of the notes service can name the
-/// vault or the account, so no part of it is kept: only its stable code.
-const MESSAGE: &str = "The notes service did not accept the connection.";
+/// vault or the account, so no part of it is kept: only its stable code. The message is neutral,
+/// because the failure can also be the client's body or Edge's own refusal.
+const MESSAGE: &str = "The connect did not complete.";
 
 /// Terminate a notes connect operation as `failed` when its forward to the notes service failed:
 /// the service was not reachable, did not answer in time, refused the connect, or gave an answer

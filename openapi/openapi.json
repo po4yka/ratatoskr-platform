@@ -4964,7 +4964,7 @@
                 }
               }
             },
-            "description": "The notes service refused the body. The `code` in the envelope is the code of the notes service."
+            "description": "The notes service refused the body, and the `code` in the envelope is the code of the notes service. Or the body failed while Edge sent it, for example because the client stopped the upload (`platform.request.invalid`). The operation is `failed`."
           },
           "401": {
             "content": {
@@ -5014,7 +5014,7 @@
                 }
               }
             },
-            "description": "The notes service gave an answer that Edge cannot use (`edge.upstream_invalid_response`). The operation is `failed`."
+            "description": "The notes service gave an answer that Edge cannot use (`edge.upstream_invalid_response`): a status other than `202` that is not an error envelope, or a `202` that is not JSON. Edge does not relay a redirect. The operation is `failed`."
           },
           "503": {
             "content": {
