@@ -578,6 +578,68 @@ async fn refused_connect_fails_the_operation_with_the_notes_code() {
     task.abort();
 }
 
+#[tokio::test]
+async fn oversized_streamed_connect_is_refused_with_413() {
+    let (address, task) = answering(
+        StatusCode::ACCEPTED,
+        serde_json::json!({}),
+        Duration::from_secs(2),
+    )
+    .await;
+    // No length is declared, so the body budget can stop it only while it streams.
+    let chunks = (0..2).map(|_| Ok::<_, std::io::Error>(Bytes::from(vec![b'x'; 800])));
+    let request = Request::builder()
+        .method("POST")
+        .uri("/v1/notes/connections")
+        .header("authorization", format!("Bearer {OWNER_CREDENTIAL}"))
+        .header("content-type", "application/json")
+        .body(Body::from_stream(futures_util::stream::iter(chunks)))
+        .expect("a request");
+
+    assert_connect_fails(
+        &notes_route(address),
+        request,
+        StatusCode::PAYLOAD_TOO_LARGE,
+        "platform.request.payload_too_large",
+    )
+    .await;
+    task.abort();
+}
+
+#[tokio::test]
+async fn connect_with_a_trailing_slash_is_refused_at_edge() {
+    let (address, mut seen, task) = stub().await;
+    let gateway = notes_route(address);
+    let harness = TestDatabase::create().await.expect("a test database");
+    seed_owner(harness.pool()).await;
+    let app = app(&harness, &gateway);
+    let request = |method: &str| {
+        Request::builder()
+            .method(method)
+            .uri("/v1/notes/connections/")
+            .header("authorization", format!("Bearer {OWNER_CREDENTIAL}"))
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"channel":"sync"}"#))
+            .expect("a request")
+    };
+
+    let (status, body) = send(&app, request("POST")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), seen.recv())
+            .await
+            .is_err(),
+        "a connect with a trailing slash reached the notes service"
+    );
+
+    let (status, body) = send(&app, request("GET")).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let forwarded = seen.recv().await.expect("the read is proxied");
+    assert_eq!(forwarded.path, "/v1/notes/connections/");
+    task.abort();
+    harness.cleanup().await.expect("cleanup");
+}
+
 /// Everything a subscriber was asked to record, one `field=value` per line.
 #[derive(Clone, Default)]
 struct Captured(Arc<Mutex<String>>);

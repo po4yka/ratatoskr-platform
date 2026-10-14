@@ -52,3 +52,30 @@ When the forward of `POST /v1/notes/connections` fails after Edge minted the ope
 
 - **WHEN** the stub notes upstream answers a connect with `409` and the error envelope `notes.connection.vault_already_connected`
 - **THEN** Edge relays the `409` and the operation is `failed` with `notes.connection.vault_already_connected`, verified by `crates/public-api/tests/notes_routes.rs::refused_connect_fails_the_operation_with_the_notes_code`
+
+### Requirement: The connect keeps its body budget while the body streams
+
+A connect body that declares no length and grows above the `control` body budget of the notes route SHALL be refused with `413` (`platform.request.payload_too_large`), and its operation SHALL be `failed` with that code.
+
+#### Scenario: A streamed connect body is too large
+
+- **WHEN** a connect body without `Content-Length` streams more bytes than the `control` budget through Edge
+- **THEN** Edge answers `413` and the operation is `failed` with `platform.request.payload_too_large`, verified by `crates/public-api/tests/notes_routes.rs::oversized_streamed_connect_is_refused_with_413`
+
+### Requirement: Edge refuses a connect at any other path
+
+Edge SHALL refuse `POST /v1/notes/connections/` with `404` and SHALL NOT forward it, so a connect cannot reach the notes service through the generic proxy, which keeps no operation and does not protect the body. Other methods at that path SHALL go through the generic proxy.
+
+#### Scenario: A connect with a trailing slash
+
+- **WHEN** an authenticated client sends `POST /v1/notes/connections/` and then `GET /v1/notes/connections/`
+- **THEN** Edge answers the `POST` with `404` and the stub notes upstream does not receive it, and the stub receives the `GET`, verified by `crates/public-api/tests/notes_routes.rs::connect_with_a_trailing_slash_is_refused_at_edge`
+
+### Requirement: The public limits hold every budget that a route can select
+
+The configuration SHALL be refused when `public.max_body_bytes` or `public.request_timeout_seconds` is below the budget of the class of a configured route, or below the `transfer` budget when that route has a sub-path that uses the `transfer` budget.
+
+#### Scenario: The notes route with public limits that hold only the control budget
+
+- **WHEN** Edge loads a configuration with the notes route (`control`) and public limits equal to the `control` budget
+- **THEN** the configuration is refused for `public.max_body_bytes` and `public.request_timeout_seconds`, and limits equal to the `transfer` budget are accepted, verified by `crates/core/tests/config_validation.rs::notes_blob_path_needs_the_public_transfer_limits`

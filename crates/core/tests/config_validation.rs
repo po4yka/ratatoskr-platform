@@ -107,6 +107,39 @@ fn gateway_accepts_configured_chatgpt_and_claude_transfer_receivers() {
     .expect("the configured archive receivers are a valid Edge route table");
 }
 
+/// The notes route is `control`, and its blob path takes the `transfer` budget, so the public
+/// limits must hold the transfer budget too.
+#[test]
+fn notes_blob_path_needs_the_public_transfer_limits() {
+    let load = |max_body_bytes, request_timeout_seconds| {
+        let mut configured = PlatformConfig::defaults(RuntimeRole::Edge);
+        let public = configured.public.as_mut().expect("a public listener");
+        public.max_body_bytes = max_body_bytes;
+        public.request_timeout_seconds = request_timeout_seconds;
+        configured.gateway.routes.insert(
+            "notes".to_owned(),
+            GatewayRouteConfig {
+                prefix: "/v1/notes".to_owned(),
+                listener: "127.0.0.1:8099".parse().unwrap(),
+                class: Some(GatewayRouteClass::Control),
+                capabilities_path: "/v1/capabilities".to_owned(),
+                archive_receipt_path: "/v1/ai-archives/receipt".to_owned(),
+            },
+        );
+        config::load_from(
+            RuntimeRole::Edge,
+            Figment::from(Serialized::defaults(configured)),
+        )
+    };
+
+    let Err(ConfigError::Invalid(found)) = load(1_048_576, 15) else {
+        panic!("public limits that hold only the control budget must be refused");
+    };
+    assert!(names(&found, "public.max_body_bytes"), "{found:?}");
+    assert!(names(&found, "public.request_timeout_seconds"), "{found:?}");
+    load(104_857_600, 300).expect("public limits that hold the transfer budget are valid");
+}
+
 #[test]
 fn gateway_requires_both_distinct_archive_receivers_when_archive_ingress_is_enabled() {
     let mut configured = PlatformConfig::defaults(RuntimeRole::Edge);
