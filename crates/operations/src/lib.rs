@@ -303,6 +303,9 @@ where
 /// The database trigger refuses the same backward and terminal moves, which is what protects the
 /// invariant from a writer that does not come through here.
 ///
+/// The row of the operation stays locked until the caller's transaction ends, so the caller must
+/// keep that transaction short.
+///
 /// # Errors
 ///
 /// [`OperationError::NotFound`] if there is no such operation,
@@ -317,6 +320,16 @@ pub async fn record_status(
     message: Option<&str>,
     now: jiff::Timestamp,
 ) -> Result<(Transition, Operation), OperationError> {
+    // The row lock makes the read and the write one step. A second writer of this operation waits
+    // here until this transaction ends, and then reads the status that this one wrote. Without it,
+    // two writers that both read `accepted` both advance, and each records a transition and an
+    // error.
+    sqlx::query("select 1 from operations.operations where operation_id = $1 for update")
+        .bind(operation_id)
+        .fetch_optional(&mut **transaction)
+        .await
+        .map_err(PersistenceError::Query)?
+        .ok_or(OperationError::NotFound)?;
     let current = find(&mut **transaction, operation_id)
         .await?
         .ok_or(OperationError::NotFound)?;
