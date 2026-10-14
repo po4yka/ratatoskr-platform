@@ -60,7 +60,9 @@ of the logs. Other methods at that path go through the generic proxy.
 
 Steps 2 to 4 run in a task of their own, and the handler waits for it. A client that disconnects
 drops the handler, and the task still ends the operation, so the client does not wait for the
-stale-operation reaper. The task is bounded by the `control` response budget. Two writers of one
+stale-operation reaper. The request timeout of the public listener does not stop the task, so the
+`control` response budget of the notes route bounds it, the read of the answer included; when it
+expires, the operation is `failed` with `edge.upstream_timeout`. Two writers of one
 operation, for example this task and a report of notes, classify under the row lock of the one
 transition applier, so the operation gets one terminal transition and one error.
 

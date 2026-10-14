@@ -8,6 +8,7 @@
 //! a digest of the body, and its audit record names only the operation.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::Json;
 use axum::body::Body;
@@ -150,7 +151,8 @@ Edge serves this route only when the deployment routes the notes service. The bo
 /// empty), so a failed connect does not name it.
 ///
 /// The forward and the terminal write run in a task of their own. A client that disconnects drops
-/// this handler, and the task still ends the operation.
+/// this handler, and the task still ends the operation. The `control` response budget of the notes
+/// route bounds the task.
 pub async fn connect(
     State(state): State<Arc<ApiState>>,
     principal: Principal,
@@ -166,13 +168,29 @@ pub async fn connect(
         Ok(operation_id) => operation_id,
         Err(rejection) => return rejection,
     };
+    // The request timeout of the public listener does not stop the task, so the response budget
+    // of the notes route bounds it: the forward and the read of the answer.
+    let budget = state
+        .gateway
+        .routes()
+        .get("notes")
+        .and_then(|route| state.gateway.budget(route))
+        .map_or(Duration::ZERO, |budget| {
+            Duration::from_secs(budget.response_timeout_seconds)
+        });
     let forward = async move {
         let claims = Claims {
             principal,
             device_kind,
             correlation_id: &correlation_id,
         };
-        forward(&state, request, claims, operation_id).await
+        let forward = forward(&state, request, claims, operation_id);
+        if let Ok(response) = tokio::time::timeout(budget, forward).await {
+            response
+        } else {
+            tracing::warn!("a connect did not complete within its budget");
+            refuse(&state, operation_id, FailureKind::UpstreamTimeout).await
+        }
     };
     match tokio::spawn(forward.in_current_span()).await {
         Ok(response) => response,
