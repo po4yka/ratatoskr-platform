@@ -258,7 +258,7 @@ const DELETION_ACKNOWLEDGED_SUBJECT: &str = "evt.knowledge.deletion.acknowledged
 ///
 /// Each service hard-codes the same name and filter and verifies them at startup; none creates one.
 /// Ingest durables wait 120 seconds because an LLM call sits between delivery and acknowledgement.
-pub const DOMAIN_CONSUMERS: [FixedConsumerSpec; 23] = [
+pub const DOMAIN_CONSUMERS: [FixedConsumerSpec; 25] = [
     FixedConsumerSpec::standard(
         COMMAND_STREAM,
         "ratatoskr_extractor_capture",
@@ -319,6 +319,20 @@ pub const DOMAIN_CONSUMERS: [FixedConsumerSpec; 23] = [
         EVENT_STREAM,
         "ratatoskr_knowledge_repository_requests",
         "evt.knowledge.repository_analysis.requested.v1",
+    )
+    .with_ack_wait_seconds(120),
+    // OBS-023: Knowledge analyses the notes of a connected vault and drops them when the vault is
+    // disconnected.
+    FixedConsumerSpec::standard(
+        EVENT_STREAM,
+        "ratatoskr_knowledge_notes_files",
+        "evt.notes.file.changed.v1",
+    )
+    .with_ack_wait_seconds(120),
+    FixedConsumerSpec::standard(
+        EVENT_STREAM,
+        "ratatoskr_knowledge_notes_vaults",
+        "evt.notes.vault.>",
     )
     .with_ack_wait_seconds(120),
     FixedConsumerSpec::standard(

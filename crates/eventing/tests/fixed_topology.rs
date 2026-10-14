@@ -137,6 +137,12 @@ fn table() -> Vec<Expected> {
             120,
         ),
         event(
+            "ratatoskr_knowledge_notes_files",
+            "evt.notes.file.changed.v1",
+            120,
+        ),
+        event("ratatoskr_knowledge_notes_vaults", "evt.notes.vault.>", 120),
+        event(
             "ratatoskr_github_analysis_completed",
             "evt.knowledge.repository_analysis.completed.v1",
             30,
@@ -222,8 +228,8 @@ async fn ensure_domain_topology_creates_every_fixed_consumer_and_the_kv_bucket()
     );
     assert_eq!(
         table().len(),
-        23,
-        "R5-11 rule 3 takes the table from 18 to 23"
+        25,
+        "R5-11 rule 3 takes the table from 18 to 23, and OBS-023 to 25"
     );
 
     for row in table() {

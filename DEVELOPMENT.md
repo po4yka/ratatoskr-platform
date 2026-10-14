@@ -103,7 +103,7 @@ must do for each:
   digest worker's `RATATOSKR__SCHEDULE__OWNER_USER_ID` must be an active user in
   `identity.users`, because Platform has no system principal: a registration for any other owner is
   rejected and audited, and no schedule is stored.
-- The bus. `deploy/nats/README.md` is the operator guide for the thirteen identities and the fixed
+- The bus. `deploy/nats/README.md` is the operator guide for the fourteen identities and the fixed
   durables Edge provisions at startup: reload NATS, restart Edge, then start the services.
 - Staging hygiene. `ratatoskr-edge` runs a bounded reaper over the archive staging root every
   `RATATOSKR__ARCHIVE_STAGING__SWEEP_INTERVAL_SECONDS` (rule V23, default 300) and re-checks the root

@@ -385,10 +385,10 @@ fn sorted(mut list: Vec<String>) -> Vec<String> {
     list
 }
 
-/// S03. Thirteen identities, each with exactly the publish list of the contract, subscribing to
-/// replies only, and only EDGE carrying a deny list.
+/// S03 and OBS-023. Fourteen identities, each with exactly the publish list of the contract,
+/// subscribing to replies only, and only EDGE carrying a deny list.
 #[test]
-fn the_deployed_acl_has_the_thirteen_identities_with_exactly_the_contract_grants() {
+fn the_deployed_acl_has_the_fourteen_identities_with_exactly_the_contract_grants() {
     let identities = deployed_identities();
     let mut names: Vec<&str> = identities
         .iter()
@@ -402,9 +402,9 @@ fn the_deployed_acl_has_the_thirteen_identities_with_exactly_the_contract_grants
     expected.sort_unstable();
     assert_eq!(
         names, expected,
-        "the deployed identities are not the thirteen of S03"
+        "the deployed identities are not the fourteen of S03 and OBS-023"
     );
-    assert_eq!(identities.len(), 13);
+    assert_eq!(identities.len(), 14);
 
     for (name, allow) in expected_publish_allow() {
         let identity = identities
@@ -578,6 +578,8 @@ fn every_fixed_consumer_has_exactly_one_owner_identity() {
         ("KNOWLEDGE", EVT, "ratatoskr_knowledge_social_sources"),
         ("KNOWLEDGE", EVT, "ratatoskr_knowledge_ai_archive"),
         ("KNOWLEDGE", EVT, "ratatoskr_knowledge_repository_requests"),
+        ("KNOWLEDGE", EVT, "ratatoskr_knowledge_notes_files"),
+        ("KNOWLEDGE", EVT, "ratatoskr_knowledge_notes_vaults"),
         ("GITHUB", EVT, "ratatoskr_github_analysis_completed"),
         ("GITHUB", EVT, "ratatoskr_github_analysis_failed"),
         ("GITHUB", EVT, "ratatoskr_github_policy_acknowledged"),
@@ -644,9 +646,9 @@ fn every_fixed_consumer_has_exactly_one_owner_identity() {
     }
     assert_eq!(
         platform_eventing::DOMAIN_CONSUMERS.len(),
-        23,
-        "S04 has seven command durables and sixteen event durables (eleven plus the five \
-         deletion-acknowledgement durables of R5-11)"
+        25,
+        "S04 has seven command durables and eighteen event durables (eleven, the five \
+         deletion-acknowledgement durables of R5-11 and the two note durables of OBS-023)"
     );
 }
 
@@ -669,6 +671,7 @@ fn the_operator_guide_documents_every_identity_and_the_rollout_order() {
         "github.nkey",
         "vault.nkey",
         "channel-digests.nkey",
+        "notes.nkey",
     ] {
         assert!(readme.contains(seed), "the NATS guide does not name {seed}");
     }

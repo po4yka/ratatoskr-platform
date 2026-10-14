@@ -31,7 +31,8 @@ const CONF: &str = include_str!("../../../deploy/nats/ratatoskr.conf");
 const CMD: &str = "ratatoskr_commands";
 const EVT: &str = "ratatoskr_events";
 
-/// One durable each identity owns, to describe on its own prefix. CHATGPT and CLAUDE own none.
+/// One durable each identity owns, to describe on its own prefix. CHATGPT, CLAUDE and NOTES own
+/// none.
 const OWN_DURABLE: [(&str, &str, &str); 10] = [
     ("TELEGRAM", EVT, "ratatoskr_telegram_notifications"),
     ("X", CMD, "ratatoskr_x_browser_capture"),
@@ -52,7 +53,7 @@ const OWN_DURABLE: [(&str, &str, &str); 10] = [
 /// XR-021 R3-01: each non-Edge identity's inbox prefix, the only namespace it may subscribe to. The
 /// prefix is `_INBOX_` and the identity name in lower case, underscores kept. Written out rather
 /// than derived, so the table is the contract and the deployed file is what is checked against it.
-const INBOX_PREFIXES: [(&str, &str); 12] = [
+const INBOX_PREFIXES: [(&str, &str); 13] = [
     ("TELEGRAM", "_INBOX_telegram"),
     ("CHATGPT", "_INBOX_chatgpt"),
     ("CLAUDE", "_INBOX_claude"),
@@ -68,6 +69,7 @@ const INBOX_PREFIXES: [(&str, &str); 12] = [
     ("GITHUB", "_INBOX_github"),
     ("VAULT", "_INBOX_vault"),
     ("CHANNEL_DIGESTS", "_INBOX_channel_digests"),
+    ("NOTES", "_INBOX_notes"),
 ];
 
 /// The prefix an identity connects with: its own, or the library default for EDGE.
@@ -265,7 +267,12 @@ async fn jetstream_request(
     let (client, _errors) = broker.client_observed(identity, inbox_prefix).await;
     let Some((_, stream, durable)) = OWN_DURABLE.iter().find(|(owner, _, _)| *owner == identity)
     else {
-        return publish_acked(&client, "evt.ai_archive.archive.imported.v1").await;
+        let subject = if identity == "NOTES" {
+            "evt.notes.file.changed.v1"
+        } else {
+            "evt.ai_archive.archive.imported.v1"
+        };
+        return publish_acked(&client, subject).await;
     };
     jetstream::new(client)
         .get_consumer_from_stream::<jetstream::consumer::pull::Config, _, _>(*durable, *stream)

@@ -166,6 +166,8 @@ fn expected_domain_services() -> Vec<(&'static str, Vec<String>)> {
                 trio(EVT, "ratatoskr_knowledge_social_sources"),
                 trio(EVT, "ratatoskr_knowledge_ai_archive"),
                 trio(EVT, "ratatoskr_knowledge_repository_requests"),
+                trio(EVT, "ratatoskr_knowledge_notes_files"),
+                trio(EVT, "ratatoskr_knowledge_notes_vaults"),
             ]),
         ),
         (
@@ -201,6 +203,15 @@ fn expected_domain_services() -> Vec<(&'static str, Vec<String>)> {
                 trio(EVT, "ratatoskr_channel_digest_recap_completed"),
                 trio(EVT, "ratatoskr_channel_digest_recap_failed"),
             ]),
+        ),
+        (
+            "NOTES",
+            join(vec![subjects(&[
+                "evt.notes.vault.connected.v1",
+                "evt.notes.vault.disconnected.v1",
+                "evt.notes.file.changed.v1",
+                "evt.platform.operation.reported.v1",
+            ])]),
         ),
     ]
 }

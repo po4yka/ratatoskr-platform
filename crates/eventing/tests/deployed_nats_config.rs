@@ -38,7 +38,7 @@ const EVT: &str = "ratatoskr_events";
 
 /// Every durable, the identity that owns it and the stream it lives on. EDGE owns the three that
 /// Platform consumes itself, listed separately because no other identity may even describe them.
-const OWNERS: [(&str, &str, &str); 29] = [
+const OWNERS: [(&str, &str, &str); 31] = [
     ("TELEGRAM", EVT, "ratatoskr_telegram_notifications"),
     ("X", CMD, "ratatoskr_x_browser_capture"),
     ("X", EVT, "ratatoskr_x_extractor_reports"),
@@ -52,6 +52,8 @@ const OWNERS: [(&str, &str, &str); 29] = [
     ("KNOWLEDGE", EVT, "ratatoskr_knowledge_social_sources"),
     ("KNOWLEDGE", EVT, "ratatoskr_knowledge_ai_archive"),
     ("KNOWLEDGE", EVT, "ratatoskr_knowledge_repository_requests"),
+    ("KNOWLEDGE", EVT, "ratatoskr_knowledge_notes_files"),
+    ("KNOWLEDGE", EVT, "ratatoskr_knowledge_notes_vaults"),
     ("GITHUB", EVT, "ratatoskr_github_analysis_completed"),
     ("GITHUB", EVT, "ratatoskr_github_analysis_failed"),
     ("GITHUB", EVT, "ratatoskr_github_policy_acknowledged"),
@@ -122,6 +124,8 @@ fn source_of(durable: &str) -> (&'static str, &'static str) {
         "ratatoskr_knowledge_repository_requests" => {
             ("GITHUB", "evt.knowledge.repository_analysis.requested.v1")
         }
+        "ratatoskr_knowledge_notes_files" => ("NOTES", "evt.notes.file.changed.v1"),
+        "ratatoskr_knowledge_notes_vaults" => ("NOTES", "evt.notes.vault.connected.v1"),
         "ratatoskr_github_analysis_completed" => (
             "KNOWLEDGE",
             "evt.knowledge.repository_analysis.completed.v1",
@@ -564,6 +568,7 @@ async fn only_knowledge_publishes_the_deletion_acknowledgement() {
         "GITHUB",
         "VAULT",
         "CHANNEL_DIGESTS",
+        "NOTES",
         "EDGE",
     ] {
         let client = broker.client(identity).await;
@@ -590,6 +595,20 @@ async fn only_knowledge_publishes_the_deletion_acknowledgement() {
             .await
             .unwrap_or_else(|error| panic!("{identity} could not read {durable}: {error}"));
     }
+}
+
+#[tokio::test]
+async fn notes_identity_matrix() {
+    exercise(
+        "NOTES",
+        &[
+            "evt.notes.vault.connected.v1",
+            "evt.notes.vault.disconnected.v1",
+            "evt.notes.file.changed.v1",
+            "evt.platform.operation.reported.v1",
+        ],
+    )
+    .await;
 }
 
 #[tokio::test]
@@ -751,6 +770,7 @@ async fn only_chatgpt_and_claude_publish_the_erasure_command() {
         "GITHUB",
         "VAULT",
         "CHANNEL_DIGESTS",
+        "NOTES",
         "TELEGRAM",
     ] {
         let client = broker.client(identity).await;

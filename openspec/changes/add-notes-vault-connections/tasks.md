@@ -11,4 +11,4 @@
 ## 3. NOTES identity and Knowledge durables (workspace 9.5, 9.6)
 
 - [x] 3.1 RED: extend `crates/eventing/tests/nats_permissions.rs` with the case `notes_identity_publishes_its_events_and_knowledge_reads_its_durables`, which asserts that `NOTES` can publish `evt.notes.file.changed.v1` and that Knowledge can fetch from `ratatoskr_knowledge_notes_files` and `ratatoskr_knowledge_notes_vaults`. Confirm that it fails because the identity and the durables do not exist.
-- [ ] 3.2 GREEN: add the `NOTES` stanza to `deploy/nats/ratatoskr.conf` and the two durables to `crates/eventing/src/stream.rs`, and move the topology tables of the existing tests to fourteen identities and 25 service durables. Verify 3.1.
+- [x] 3.2 GREEN: add the `NOTES` stanza to `deploy/nats/ratatoskr.conf` and the two durables to `crates/eventing/src/stream.rs`, and move the topology tables of the existing tests to fourteen identities and 25 service durables. Verify 3.1.

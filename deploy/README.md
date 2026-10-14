@@ -110,7 +110,7 @@ printf "alter role ratatoskr_edge password '%s';\n" "$(openssl rand -base64 24 |
 # Every other service's role comes from its own repository, after step 6 (see "PostgreSQL: one
 # database, one role per service" below).
 
-# 4. The bus credential, then the server. deploy/nats/README.md generates the thirteen pairs (one per
+# 4. The bus credential, then the server. deploy/nats/README.md generates the fourteen pairs (one per
 #    identity), lists each seed file and the variable that names it, and gives the mandatory order:
 #    reload NATS, restart Edge (it provisions every durable and the completion bucket), then start
 #    the other services. The public half goes into ratatoskr.conf and the seed into a file only its
