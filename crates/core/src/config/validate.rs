@@ -389,7 +389,18 @@ fn gateway_route_violations(
         ));
     }
     if let (Some(public), Some(class)) = (config.public.as_ref(), route.class) {
-        let budget = config.gateway.budgets.for_class(class);
+        let mut budget = config.gateway.budgets.for_class(class);
+        // A sub-path that carries bytes takes the transfer budget inside a route of another class.
+        if crate::config::GATEWAY_TRANSFER_PATHS
+            .iter()
+            .any(|(owner, _)| *owner == service)
+        {
+            let transfer = config.gateway.budgets.transfer;
+            budget.max_body_bytes = budget.max_body_bytes.max(transfer.max_body_bytes);
+            budget.response_timeout_seconds = budget
+                .response_timeout_seconds
+                .max(transfer.response_timeout_seconds);
+        }
         if public.max_body_bytes < budget.max_body_bytes {
             found.push(Violation {
                 key: "public.max_body_bytes".into(),

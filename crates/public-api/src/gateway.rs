@@ -15,7 +15,8 @@ use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::TokioExecutor;
 use platform_core::FailureKind;
 use platform_core::config::{
-    GatewayConfig, GatewayRouteBudget, GatewayRouteBudgets, GatewayRouteConfig,
+    GATEWAY_TRANSFER_PATHS, GatewayConfig, GatewayRouteBudget, GatewayRouteBudgets,
+    GatewayRouteConfig,
 };
 use ratatoskr_ai_archive_contracts::platform_receipt;
 use ratatoskr_error_contracts::ErrorEnvelope;
@@ -29,11 +30,6 @@ const MAX_ERROR_ENVELOPE_BYTES: usize = 65_536;
 /// `export_agent`, ...). `ratatoskr-contracts` names no constant for it yet. It carries the
 /// reserved prefix, so a copy that a client sends is removed with every other reserved header.
 const HEADER_DEVICE_KIND: &str = "x-ratatoskr-device-kind";
-
-/// The sub-paths of a route that carry bytes, as `(service, path below the route prefix)`. They use
-/// the `transfer` budget whatever the class of their route: [`crate::routes`] registers each one
-/// with the transfer body limit, and [`proxy`] waits for its answer under the transfer timeout.
-pub(crate) const TRANSFER_PATHS: [(&str, &str); 1] = [("notes", "/connections/{connection}/blobs")];
 
 /// A service-owned document observed through its loopback capability endpoint.
 #[derive(Debug, Clone, serde::Serialize, schemars::JsonSchema)]
@@ -382,7 +378,7 @@ impl Gateway {
         path: &str,
     ) -> Option<GatewayRouteBudget> {
         let below = path.strip_prefix(route.prefix.as_str()).unwrap_or_default();
-        if TRANSFER_PATHS
+        if GATEWAY_TRANSFER_PATHS
             .iter()
             .any(|(owner, sub_path)| *owner == service && is_under(sub_path, below))
         {
@@ -432,6 +428,10 @@ impl Gateway {
         .await
         {
             Ok(Ok(response)) => Ok(response),
+            Ok(Err(error)) if exceeds_body_limit(&error) => {
+                tracing::warn!("a connect body exceeded its budget while it streamed");
+                Err(FailureKind::PayloadTooLarge)
+            }
             Ok(Err(_)) => {
                 tracing::warn!("the notes service could not be reached for a connect");
                 Err(unavailable)
@@ -559,6 +559,14 @@ pub(crate) async fn device_kind(
             Err(platform_http::reject(FailureKind::RequestTimeout))
         }
     }
+}
+
+/// Whether a forward failed because the request body grew above its body limit while it streamed.
+/// A body that declares its length is refused before the forward starts; one that does not is
+/// stopped by the limit only while it is sent.
+fn exceeds_body_limit(error: &(dyn std::error::Error + 'static)) -> bool {
+    std::iter::successors(Some(error), |error| error.source())
+        .any(<dyn std::error::Error>::is::<http_body_util::LengthLimitError>)
 }
 
 /// Whether `path` is `pattern` or a path below it. A `{name}` segment of the pattern matches one

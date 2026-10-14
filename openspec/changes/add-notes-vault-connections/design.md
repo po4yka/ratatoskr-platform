@@ -23,7 +23,16 @@ second copy can disagree with it.
 
 The notes route is `control`. Edge registers the sub-path `/v1/notes/connections/{id}/blobs` (and
 the paths below it) with the `transfer` body limit, and the proxy selects the `transfer` response
-budget for it. One table in the gateway holds the sub-path, so a second one is one row.
+budget for it. One table, `platform_core::config::GATEWAY_TRANSFER_PATHS`, holds the sub-path, so a
+second one is one row. The configuration validation reads the same table: for a service named there,
+`public.max_body_bytes` and `public.request_timeout_seconds` must hold the `transfer` budget as well
+as the budget of the route class.
+
+The connect path keeps its own rules. A connect body that declares no length and grows above the
+`control` budget is refused with `413` while it streams, not reported as an unreachable upstream.
+`POST /v1/notes/connections/` (a trailing slash) is refused at Edge with `404`; without that, it
+would reach notes through the generic proxy, which mints no operation and does not keep the body out
+of the logs. Other methods at that path go through the generic proxy.
 
 ### D3. The connect call is an Edge handler that keeps no body
 

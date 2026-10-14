@@ -357,7 +357,7 @@ pub fn routes(state: Arc<ApiState>) -> Router {
                 .route(&format!("{}/{{*tail}}", route.prefix), handler)
         });
     // A sub-path that carries bytes takes the transfer body limit inside its route.
-    let router = gateway::TRANSFER_PATHS
+    let router = platform_core::config::GATEWAY_TRANSFER_PATHS
         .iter()
         .filter_map(|(service, sub_path)| {
             state
@@ -378,12 +378,23 @@ pub fn routes(state: Arc<ApiState>) -> Router {
             let limit = state.gateway.budget(route).map_or(0, |budget| {
                 usize::try_from(budget.max_body_bytes).unwrap_or(usize::MAX)
             });
-            router.route(
-                notes::CONNECT_ROUTE,
-                post(notes::connect)
-                    .fallback(gateway::proxy)
-                    .layer(RequestBodyLimitLayer::new(limit)),
-            )
+            // A connect at the path with a trailing slash would reach notes through the generic
+            // proxy, which mints no operation and does not keep the body out of the logs.
+            let refused =
+                || async { platform_http::reject(platform_core::FailureKind::RouteNotFound) };
+            router
+                .route(
+                    notes::CONNECT_ROUTE,
+                    post(notes::connect)
+                        .fallback(gateway::proxy)
+                        .layer(RequestBodyLimitLayer::new(limit)),
+                )
+                .route(
+                    &format!("{}/", notes::CONNECT_ROUTE),
+                    post(refused)
+                        .fallback(gateway::proxy)
+                        .layer(RequestBodyLimitLayer::new(limit)),
+                )
         }
         None => router,
     };

@@ -198,6 +198,13 @@ pub struct GatewayRouteBudget {
     pub response_timeout_seconds: u64,
 }
 
+/// The sub-paths of a route that carry bytes, as `(service, path below the route prefix)`. They use
+/// the `transfer` budget whatever the class of their route: Edge registers each one with the
+/// transfer body limit and waits for its answer under the transfer timeout, and the validation
+/// checks the public limits against the transfer budget for each service named here.
+pub const GATEWAY_TRANSFER_PATHS: [(&str, &str); 1] =
+    [("notes", "/connections/{connection}/blobs")];
+
 impl GatewayRouteBudgets {
     /// The budget selected by one route class.
     #[must_use]

@@ -31,10 +31,10 @@ use figment::providers::{Env, Serialized};
 pub use crate::config::model::{
     AdminConfig, ArchiveStagingConfig, BusConfig, ChannelDigestsConfig,
     DEFAULT_ACTOR_REQUESTS_PER_MINUTE, DEFAULT_MAX_ARCHIVE_BYTES, DEFAULT_STALE_AFTER_SECONDS,
-    DatabaseConfig, EVENT_RETENTION_DAYS, GatewayConfig, GatewayRouteBudget, GatewayRouteBudgets,
-    GatewayRouteClass, GatewayRouteConfig, IdentityConfig, LogFormat, OperationsConfig, OtlpConfig,
-    PlatformConfig, PublicConfig, RetentionConfig, SchedulingConfig, ShutdownConfig,
-    TelemetryConfig,
+    DatabaseConfig, EVENT_RETENTION_DAYS, GATEWAY_TRANSFER_PATHS, GatewayConfig,
+    GatewayRouteBudget, GatewayRouteBudgets, GatewayRouteClass, GatewayRouteConfig, IdentityConfig,
+    LogFormat, OperationsConfig, OtlpConfig, PlatformConfig, PublicConfig, RetentionConfig,
+    SchedulingConfig, ShutdownConfig, TelemetryConfig,
 };
 pub use crate::config::validate::{SHUTDOWN_CEILING_SECONDS, Violation};
 use crate::role::RuntimeRole;
