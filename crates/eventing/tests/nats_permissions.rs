@@ -1,4 +1,5 @@
-//! Real-broker proof for the least-privilege Telegram notification identity.
+//! Real-broker proof for the least-privilege Telegram notification identity, and for the `NOTES`
+//! identity of the deployed ACL with the two Knowledge durables that read note events.
 
 #![allow(
     clippy::expect_used,
@@ -11,7 +12,8 @@ use async_nats::jetstream;
 use futures_util::StreamExt as _;
 use nkeys::KeyPair;
 use platform_eventing::{
-    EVENT_STREAM, TELEGRAM_NOTIFICATION_CONSUMER, TELEGRAM_NOTIFICATION_SUBJECT,
+    DOMAIN_CONSUMERS, EVENT_STREAM, StreamSpec, TELEGRAM_NOTIFICATION_CONSUMER,
+    TELEGRAM_NOTIFICATION_SUBJECT, ensure_fixed_topology,
 };
 use std::time::Duration;
 use tokio::time::timeout;
@@ -254,5 +256,107 @@ async fn telegram_nkey_permission_matrix_is_enforced_by_nats() {
             !matches!(response, Ok(Ok(_))),
             "Telegram unexpectedly received a response after publishing to {forbidden}"
         );
+    }
+}
+
+/// Workspace OBS-023 task 9.5: on a broker that runs the rendered deployed ACL, `NOTES` publishes
+/// its events and `KNOWLEDGE` reads them from its two note durables, which Edge provisions.
+#[tokio::test]
+async fn notes_identity_publishes_its_events_and_knowledge_reads_its_durables() {
+    const DURABLES: [&str; 2] = [
+        "ratatoskr_knowledge_notes_files",
+        "ratatoskr_knowledge_notes_vaults",
+    ];
+    let rendered =
+        platform_nats_profile::render(include_str!("../../../deploy/nats/ratatoskr.conf"))
+            .expect("the deployed ACL renders");
+    let seed = |identity: &str| {
+        rendered
+            .seeds
+            .iter()
+            .find(|seed| seed.name == identity)
+            .map(|seed| seed.seed.clone())
+    };
+    let tabled: Vec<&str> = DURABLES
+        .into_iter()
+        .filter(|durable| {
+            DOMAIN_CONSUMERS
+                .iter()
+                .any(|spec| spec.durable_name == *durable)
+        })
+        .collect();
+    assert!(
+        seed("NOTES").is_some() && tabled == DURABLES,
+        "the deployed ACL must hold NOTES (holds it: {}) and Edge must provision {DURABLES:?} \
+         (provisions: {tabled:?})",
+        seed("NOTES").is_some()
+    );
+
+    let broker = Container::start("notes-permissions", &rendered.conf, &["--user", "root"]);
+    let edge = connect(&broker.url, &seed("EDGE").expect("the EDGE seed"), None)
+        .await
+        .0;
+    let provisioning = jetstream::new(edge);
+    for spec in [StreamSpec::command_stream(), StreamSpec::event_stream()] {
+        provisioning
+            .get_or_create_stream(spec.config())
+            .await
+            .expect("EDGE creates the streams");
+    }
+    ensure_fixed_topology(&provisioning)
+        .await
+        .expect("EDGE provisions every fixed durable");
+
+    let notes = connect(
+        &broker.url,
+        &seed("NOTES").expect("the NOTES seed"),
+        Some("_INBOX_notes"),
+    )
+    .await
+    .0;
+    for subject in ["evt.notes.file.changed.v1", "evt.notes.vault.connected.v1"] {
+        let acknowledged = timeout(REQUEST_TIMEOUT + Duration::from_millis(500), async {
+            jetstream::new(notes.clone())
+                .publish(subject, "{}".into())
+                .await
+                .map_err(|error| error.to_string())?
+                .await
+                .map_err(|error| error.to_string())
+        })
+        .await;
+        assert!(
+            matches!(acknowledged, Ok(Ok(_))),
+            "NOTES could not publish {subject}: {acknowledged:?}"
+        );
+    }
+
+    let knowledge = connect(
+        &broker.url,
+        &seed("KNOWLEDGE").expect("the KNOWLEDGE seed"),
+        Some("_INBOX_knowledge"),
+    )
+    .await
+    .0;
+    for durable in DURABLES {
+        let consumer: jetstream::consumer::PullConsumer = jetstream::new(knowledge.clone())
+            .get_consumer_from_stream(durable, EVENT_STREAM)
+            .await
+            .unwrap_or_else(|error| panic!("KNOWLEDGE cannot describe {durable}: {error}"));
+        let mut batch = consumer
+            .fetch()
+            .max_messages(1)
+            .expires(Duration::from_secs(2))
+            .messages()
+            .await
+            .unwrap_or_else(|error| panic!("KNOWLEDGE cannot fetch from {durable}: {error}"));
+        let message = batch
+            .next()
+            .await
+            .unwrap_or_else(|| panic!("{durable} delivered nothing"))
+            .unwrap_or_else(|error| panic!("{durable} delivery: {error}"));
+        message
+            .double_ack()
+            .await
+            .unwrap_or_else(|error| panic!("KNOWLEDGE cannot acknowledge on {durable}: {error}"));
     }
 }
