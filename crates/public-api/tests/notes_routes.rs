@@ -434,6 +434,150 @@ async fn blob_upload_uses_the_transfer_budget() {
     harness.cleanup().await.expect("cleanup");
 }
 
+/// A notes stub that answers every request with `status` and `body` after `delay`.
+async fn answering(
+    status: StatusCode,
+    body: serde_json::Value,
+    delay: Duration,
+) -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
+    let router = Router::new().fallback(move || {
+        let body = body.clone();
+        async move {
+            tokio::time::sleep(delay).await;
+            (status, axum::Json(body))
+        }
+    });
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("a loopback listener");
+    let address = listener.local_addr().expect("a listener address");
+    let task = tokio::spawn(async move {
+        axum::serve(listener, router)
+            .await
+            .expect("the notes stub serves");
+    });
+    (address, task)
+}
+
+/// A connect with a small body, as the owner.
+fn owner_connect() -> Request<Body> {
+    Request::builder()
+        .method("POST")
+        .uri("/v1/notes/connections")
+        .header("authorization", format!("Bearer {OWNER_CREDENTIAL}"))
+        .header("content-type", "application/json")
+        .body(Body::from(r#"{"channel":"sync"}"#))
+        .expect("a request")
+}
+
+/// The one connect operation of `owner`, as a client reads it.
+async fn connect_operation(
+    pool: &sqlx::PgPool,
+    owner: Uuid,
+) -> ratatoskr_operation_contracts::OperationSnapshot {
+    let operation_id: Uuid = sqlx::query_scalar(
+        "select operation_id from operations.operations
+          where owner_user_id = $1 and kind = 'notes.connection.connect'",
+    )
+    .bind(owner)
+    .fetch_one(pool)
+    .await
+    .expect("exactly one connect operation");
+    platform_operations::snapshot(pool, operation_id)
+        .await
+        .expect("the operation snapshot")
+}
+
+/// Send `request` through `gateway` and assert the answer and the terminal state of the operation.
+async fn assert_connect_fails(
+    gateway: &GatewayConfig,
+    request: Request<Body>,
+    answer: StatusCode,
+    code: &str,
+) {
+    let harness = TestDatabase::create().await.expect("a test database");
+    let owner = seed_owner(harness.pool()).await;
+    let app = app(&harness, gateway);
+
+    let (status, body) = send(&app, request).await;
+
+    assert_eq!(status, answer, "{body}");
+    let operation = connect_operation(harness.pool(), owner).await;
+    assert_eq!(
+        operation.status,
+        ratatoskr_operation_contracts::OperationStatus::Failed,
+        "the connect operation is not terminated"
+    );
+    let codes: Vec<&str> = operation
+        .errors
+        .iter()
+        .map(|error| error.code.as_str())
+        .collect();
+    assert_eq!(codes, [code]);
+    harness.cleanup().await.expect("cleanup");
+}
+
+#[tokio::test]
+async fn unreachable_notes_fails_the_connect_operation() {
+    let closed = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("a loopback listener");
+    let address = closed.local_addr().expect("a listener address");
+    drop(closed);
+
+    assert_connect_fails(
+        &notes_route(address),
+        owner_connect(),
+        StatusCode::SERVICE_UNAVAILABLE,
+        "edge.upstream_unavailable",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn timed_out_notes_fails_the_connect_operation() {
+    let (address, task) = answering(
+        StatusCode::ACCEPTED,
+        serde_json::json!({}),
+        Duration::from_secs(5),
+    )
+    .await;
+    let mut gateway = notes_route(address);
+    gateway.budgets.control.response_timeout_seconds = 1;
+
+    assert_connect_fails(
+        &gateway,
+        owner_connect(),
+        StatusCode::GATEWAY_TIMEOUT,
+        "edge.upstream_timeout",
+    )
+    .await;
+    task.abort();
+}
+
+#[tokio::test]
+async fn refused_connect_fails_the_operation_with_the_notes_code() {
+    let (address, task) = answering(
+        StatusCode::CONFLICT,
+        serde_json::json!({
+            "code": "notes.connection.vault_already_connected",
+            "message": "This vault is already connected.",
+            "retryable": false,
+        }),
+        Duration::ZERO,
+    )
+    .await;
+
+    assert_connect_fails(
+        &notes_route(address),
+        owner_connect(),
+        StatusCode::CONFLICT,
+        "notes.connection.vault_already_connected",
+    )
+    .await;
+    task.abort();
+}
+
 /// Everything a subscriber was asked to record, one `field=value` per line.
 #[derive(Clone, Default)]
 struct Captured(Arc<Mutex<String>>);

@@ -33,3 +33,22 @@ The shipped route table SHALL route `/v1/notes` to the loopback listener `127.0.
 
 - **WHEN** a test sends a connect request whose password fields hold known markers through Edge to a stub notes upstream, and then searches every Platform table and the captured log output for the markers
 - **THEN** no marker is found, and the stub received the body unchanged with the minted operation id, verified by `crates/public-api/tests/notes_routes.rs::connect_body_is_not_persisted_or_logged`
+
+### Requirement: A connect that notes does not take ends its operation
+
+When the forward of `POST /v1/notes/connections` fails after Edge minted the operation, Edge SHALL terminate the operation as `failed` through the one transition applier before it answers, with an error whose code is the code of the Edge fault, or the code of the error envelope of the notes service when notes answered one. The error SHALL hold no part of the notes answer other than its code.
+
+#### Scenario: The notes service is not reachable
+
+- **WHEN** a connect is sent through Edge and nothing listens on the notes listener
+- **THEN** Edge answers `503` and the operation is `failed` with `edge.upstream_unavailable`, verified by `crates/public-api/tests/notes_routes.rs::unreachable_notes_fails_the_connect_operation`
+
+#### Scenario: The notes service does not answer in time
+
+- **WHEN** a connect is sent through Edge and the stub notes upstream answers after the control budget
+- **THEN** Edge answers `504` and the operation is `failed` with `edge.upstream_timeout`, verified by `crates/public-api/tests/notes_routes.rs::timed_out_notes_fails_the_connect_operation`
+
+#### Scenario: The notes service refuses the connect
+
+- **WHEN** the stub notes upstream answers a connect with `409` and the error envelope `notes.connection.vault_already_connected`
+- **THEN** Edge relays the `409` and the operation is `failed` with `notes.connection.vault_already_connected`, verified by `crates/public-api/tests/notes_routes.rs::refused_connect_fails_the_operation_with_the_notes_code`
