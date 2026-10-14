@@ -14,6 +14,7 @@ use axum::body::Body;
 use axum::extract::{Extension, Request, State};
 use axum::response::{IntoResponse as _, Response};
 use http::StatusCode;
+use platform_api_doc::{Method, Payload, ResponseDoc, RouteDoc, Security};
 use platform_core::FailureKind;
 use platform_identity::audit::{self, AuditEvent, AuditOutcome};
 use ratatoskr_error_contracts::{ErrorCode, ErrorEnvelope};
@@ -39,16 +40,106 @@ const MAX_ANSWER_BYTES: usize = 16_384;
 /// error envelope only up to this size.
 const MAX_ERROR_BYTES: usize = 65_536;
 
+/// The path of the connect call.
+pub const CONNECT_ROUTE: &str = "/v1/notes/connections";
+
+/// The body of a connect. The notes service owns its members, and Edge sends it to the notes service
+/// unread.
+#[derive(Debug, schemars::JsonSchema)]
+#[schemars(rename = "NotesConnectRequest")]
+pub struct ConnectRequest(pub serde_json::Map<String, serde_json::Value>);
+
 /// What a client gets back from a connect that the notes service accepted.
-#[derive(Debug, serde::Serialize)]
-struct ConnectAccepted {
+#[derive(Debug, serde::Serialize, schemars::JsonSchema)]
+#[schemars(rename = "NotesConnectAccepted")]
+pub struct ConnectAccepted {
     /// The operation to poll at `/v1/operations/{id}`.
-    operation_id: Uuid,
+    pub operation_id: Uuid,
     /// Always `accepted` here.
-    status: &'static str,
-    /// The answer of the notes service, unchanged.
-    connection: serde_json::Value,
+    pub status: &'static str,
+    /// The answer of the notes service, unchanged: the connection id, its channel and its state.
+    pub connection: serde_json::Value,
 }
+
+/// How the connect call is described in the generated `OpenAPI` document.
+///
+/// The route is not in the route table of [`crate::routes`]: Edge serves it only when the
+/// deployment routes the notes service, and it takes the `control` body budget of that route.
+pub const CONNECT_DOC: RouteDoc = RouteDoc {
+    method: Method::Post,
+    path: CONNECT_ROUTE,
+    operation_id: "connectNotesVault",
+    summary: "Connect an Obsidian vault",
+    description: "\
+Starts the connection of one Obsidian vault to the notes service. Edge records an operation of kind \
+`notes.connection.connect`, sends the body to the notes service unchanged with the operation id, and \
+keeps no part of the body: the body holds the Obsidian password, the MFA code and the end-to-end \
+password, so Edge does not store, audit or log it. The notes service owns the members of the body \
+and reports the phases of the connection on the operation; poll `GET /v1/operations/{operation_id}`.\n\n\
+There is no `Idempotency-Key`: the ledger would keep a digest of the body. The notes service refuses \
+a second connect of one vault. When the notes service does not take the connect, Edge terminates the \
+operation as `failed` with the code of the failure before it answers.\n\n\
+Edge serves this route only when the deployment routes the notes service. The body budget is the \
+`control` budget of that route.",
+    tag: "notes",
+    security: Security::Session,
+    parameters: &[],
+    request: Some(Payload::Json("NotesConnectRequest")),
+    responses: &[
+        ResponseDoc {
+            status: 202,
+            description: "The notes service accepted the connect. The body carries the operation \
+                          to poll and the answer of the notes service.",
+            payload: Some(Payload::Json("NotesConnectAccepted")),
+        },
+        ResponseDoc {
+            status: 400,
+            description: "The notes service refused the body. The `code` in the envelope is the \
+                          code of the notes service.",
+            payload: Some(Payload::Json("ErrorEnvelope")),
+        },
+        ResponseDoc {
+            status: 401,
+            description: "No credential, or one that does not authenticate here.",
+            payload: Some(Payload::Json("ErrorEnvelope")),
+        },
+        ResponseDoc {
+            status: 409,
+            description: "The notes service refused the connect, for example \
+                          `notes.connection.vault_already_connected`.",
+            payload: Some(Payload::Json("ErrorEnvelope")),
+        },
+        ResponseDoc {
+            status: 413,
+            description: "The body is larger than the `control` budget of the notes route \
+                          (`platform.request.payload_too_large`).",
+            payload: Some(Payload::Json("ErrorEnvelope")),
+        },
+        ResponseDoc {
+            status: 429,
+            description: "This caller has spent its request allowance.",
+            payload: Some(Payload::Json("ErrorEnvelope")),
+        },
+        ResponseDoc {
+            status: 502,
+            description: "The notes service gave an answer that Edge cannot use \
+                          (`edge.upstream_invalid_response`). The operation is `failed`.",
+            payload: Some(Payload::Json("ErrorEnvelope")),
+        },
+        ResponseDoc {
+            status: 503,
+            description: "The notes service could not be reached \
+                          (`edge.upstream_unavailable`). The operation is `failed`.",
+            payload: Some(Payload::Json("ErrorEnvelope")),
+        },
+        ResponseDoc {
+            status: 504,
+            description: "The notes service did not answer within the `control` budget \
+                          (`edge.upstream_timeout`). The operation is `failed`.",
+            payload: Some(Payload::Json("ErrorEnvelope")),
+        },
+    ],
+};
 
 /// `POST /v1/notes/connections`.
 ///

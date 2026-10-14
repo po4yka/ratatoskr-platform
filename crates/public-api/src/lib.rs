@@ -379,7 +379,7 @@ pub fn routes(state: Arc<ApiState>) -> Router {
                 usize::try_from(budget.max_body_bytes).unwrap_or(usize::MAX)
             });
             router.route(
-                &format!("{}/connections", route.prefix),
+                notes::CONNECT_ROUTE,
                 post(notes::connect)
                     .fallback(gateway::proxy)
                     .layer(RequestBodyLimitLayer::new(limit)),
@@ -391,10 +391,18 @@ pub fn routes(state: Arc<ApiState>) -> Router {
 }
 
 /// This listener's half of the generated `OpenAPI` document.
+///
+/// The notes connect is described beside the table: [`routes`] serves it only when the deployment
+/// routes the notes service, with the body budget of that route, which the static table cannot
+/// carry. Test P-8 sends a request to it with a notes route configured.
 #[must_use]
 pub fn surface() -> ApiSurface {
     ApiSurface {
-        routes: table().into_iter().map(|endpoint| endpoint.doc).collect(),
+        routes: table()
+            .into_iter()
+            .map(|endpoint| endpoint.doc)
+            .chain([notes::CONNECT_DOC])
+            .collect(),
         register: register_schemas,
     }
 }
@@ -433,6 +441,8 @@ fn register_schemas(generator: &mut schemars::SchemaGenerator) {
     generator.subschema_for::<ratatoskr_operation_contracts::OperationSnapshot>();
     generator.subschema_for::<ratatoskr_error_contracts::ErrorEnvelope>();
     generator.subschema_for::<operations::OperationList>();
+    generator.subschema_for::<notes::ConnectRequest>();
+    generator.subschema_for::<notes::ConnectAccepted>();
     generator.subschema_for::<channel_digests::SetSubscription>();
     generator.subschema_for::<channel_digests::RequestRun>();
     generator.subschema_for::<channel_digests::ChannelDigestAccepted>();

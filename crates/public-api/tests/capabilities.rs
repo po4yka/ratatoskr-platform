@@ -427,7 +427,22 @@ fn the_vocabulary_is_sorted() {
 #[tokio::test]
 async fn every_documented_path_is_served() {
     let harness = TestDatabase::create().await.expect("a test database");
-    let app = app(deployment(&harness, true, true));
+    // The notes connect is served only where the deployment routes the notes service.
+    let mut state = deployment(&harness, true, true);
+    state.gateway = platform_public_api::gateway::Gateway::from_config(&GatewayConfig {
+        routes: BTreeMap::from([(
+            "notes".to_owned(),
+            GatewayRouteConfig {
+                prefix: "/v1/notes".to_owned(),
+                listener: "127.0.0.1:8099".parse().expect("a socket address"),
+                class: Some(GatewayRouteClass::Control),
+                capabilities_path: "/v1/capabilities".to_owned(),
+                archive_receipt_path: "/v1/ai-archives/receipt".to_owned(),
+            },
+        )]),
+        ..GatewayConfig::default()
+    });
+    let app = app(state);
 
     for route in platform_public_api::surface().routes {
         let path = route

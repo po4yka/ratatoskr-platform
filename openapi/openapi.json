@@ -1075,6 +1075,34 @@
         ],
         "type": "object"
       },
+      "NotesConnectAccepted": {
+        "description": "What a client gets back from a connect that the notes service accepted.",
+        "properties": {
+          "connection": {
+            "description": "The answer of the notes service, unchanged: the connection id, its channel and its state."
+          },
+          "operation_id": {
+            "description": "The operation to poll at `/v1/operations/{id}`.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "status": {
+            "description": "Always `accepted` here.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation_id",
+          "status",
+          "connection"
+        ],
+        "type": "object"
+      },
+      "NotesConnectRequest": {
+        "additionalProperties": true,
+        "description": "The body of a connect. The notes service owns its members, and Edge sends it to the notes service\nunread.",
+        "type": "object"
+      },
       "OpenDeviceSession": {
         "description": "What a logging-in device presents.",
         "properties": {
@@ -4900,6 +4928,123 @@
         "summary": "Search or browse the caller's library",
         "tags": [
           "library"
+        ]
+      }
+    },
+    "/v1/notes/connections": {
+      "post": {
+        "description": "Starts the connection of one Obsidian vault to the notes service. Edge records an operation of kind `notes.connection.connect`, sends the body to the notes service unchanged with the operation id, and keeps no part of the body: the body holds the Obsidian password, the MFA code and the end-to-end password, so Edge does not store, audit or log it. The notes service owns the members of the body and reports the phases of the connection on the operation; poll `GET /v1/operations/{operation_id}`.\n\nThere is no `Idempotency-Key`: the ledger would keep a digest of the body. The notes service refuses a second connect of one vault. When the notes service does not take the connect, Edge terminates the operation as `failed` with the code of the failure before it answers.\n\nEdge serves this route only when the deployment routes the notes service. The body budget is the `control` budget of that route.",
+        "operationId": "connectNotesVault",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NotesConnectRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotesConnectAccepted"
+                }
+              }
+            },
+            "description": "The notes service accepted the connect. The body carries the operation to poll and the answer of the notes service."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The notes service refused the body. The `code` in the envelope is the code of the notes service."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No credential, or one that does not authenticate here."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The notes service refused the connect, for example `notes.connection.vault_already_connected`."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The body is larger than the `control` budget of the notes route (`platform.request.payload_too_large`)."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "This caller has spent its request allowance."
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The notes service gave an answer that Edge cannot use (`edge.upstream_invalid_response`). The operation is `failed`."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The notes service could not be reached (`edge.upstream_unavailable`). The operation is `failed`."
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The notes service did not answer within the `control` budget (`edge.upstream_timeout`). The operation is `failed`."
+          }
+        },
+        "security": [
+          {
+            "sessionBearer": []
+          }
+        ],
+        "summary": "Connect an Obsidian vault",
+        "tags": [
+          "notes"
         ]
       }
     },
