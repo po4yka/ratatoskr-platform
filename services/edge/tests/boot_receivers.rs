@@ -103,7 +103,7 @@ fn edge_with_the_shipped_route_table_is_ready_without_any_receiver() {
         .map(|(key, value)| (key.to_owned(), value.to_owned()))
         .collect();
     assert!(shipped.len() >= 24, "the shipped route table: {shipped:?}");
-    for port in 8091..=8098 {
+    for port in 8091..=8099 {
         assert!(
             TcpStream::connect(("127.0.0.1", port)).is_err(),
             "port {port} must be free: this test needs every receiver absent"
@@ -168,10 +168,10 @@ fn edge_with_the_shipped_route_table_is_ready_without_any_receiver() {
     let (line, body) = capabilities.expect("the capability document is served");
     assert!(line.contains("200"), "{line}\n{body}");
     // No JSON parser is a dependency of this package, so the document is counted rather than
-    // parsed: seven configured services, each stale and each without a document.
-    assert_eq!(body.matches("\"service\":").count(), 7, "{body}");
-    assert_eq!(body.matches("\"stale\":true").count(), 7, "{body}");
-    assert_eq!(body.matches("\"document\":null").count(), 7, "{body}");
+    // parsed: eight configured services, each stale and each without a document.
+    assert_eq!(body.matches("\"service\":").count(), 8, "{body}");
+    assert_eq!(body.matches("\"stale\":true").count(), 8, "{body}");
+    assert_eq!(body.matches("\"document\":null").count(), 8, "{body}");
 }
 
 /// R3-12. The Edge example ships `RATATOSKR__IDENTITY__ASSERTION_KEY=CHANGE-ME` active. The loader

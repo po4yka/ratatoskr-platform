@@ -25,6 +25,16 @@ use crate::{ApiState, Principal};
 const RESERVED_PREFIX: &str = "x-ratatoskr-";
 const MAX_ERROR_ENVELOPE_BYTES: usize = 65_536;
 
+/// The claim that names the stored kind of the authenticated device (`obsidian_plugin`,
+/// `export_agent`, ...). `ratatoskr-contracts` names no constant for it yet. It carries the
+/// reserved prefix, so a copy that a client sends is removed with every other reserved header.
+const HEADER_DEVICE_KIND: &str = "x-ratatoskr-device-kind";
+
+/// The sub-paths of a route that carry bytes, as `(service, path below the route prefix)`. They use
+/// the `transfer` budget whatever the class of their route: [`crate::routes`] registers each one
+/// with the transfer body limit, and [`proxy`] waits for its answer under the transfer timeout.
+pub(crate) const TRANSFER_PATHS: [(&str, &str); 1] = [("notes", "/connections/{connection}/blobs")];
+
 /// A service-owned document observed through its loopback capability endpoint.
 #[derive(Debug, Clone, serde::Serialize, schemars::JsonSchema)]
 pub struct ServiceCapabilities {
@@ -355,10 +365,82 @@ impl Gateway {
         }
     }
 
-    fn route(&self, path: &str) -> Option<&GatewayRouteConfig> {
+    fn route(&self, path: &str) -> Option<(&str, &GatewayRouteConfig)> {
         self.routes
-            .values()
-            .find(|route| path == route.prefix || path.starts_with(&format!("{}/", route.prefix)))
+            .iter()
+            .find(|(_, route)| {
+                path == route.prefix || path.starts_with(&format!("{}/", route.prefix))
+            })
+            .map(|(service, route)| (service.as_str(), route))
+    }
+
+    /// The budget of one request: the class of its route, or `transfer` under a transfer sub-path.
+    fn budget_for(
+        &self,
+        service: &str,
+        route: &GatewayRouteConfig,
+        path: &str,
+    ) -> Option<GatewayRouteBudget> {
+        let below = path.strip_prefix(route.prefix.as_str()).unwrap_or_default();
+        if TRANSFER_PATHS
+            .iter()
+            .any(|(owner, sub_path)| *owner == service && is_under(sub_path, below))
+        {
+            return Some(self.budgets.transfer);
+        }
+        self.budget(route)
+    }
+
+    /// Send `POST /v1/notes/connections` to the notes listener, with the client's body and headers
+    /// unchanged, the minted claims, and the operation id that Edge minted. The answer is returned
+    /// unread, so the caller decides what the client sees. `Err` is the rejection to answer.
+    ///
+    /// Nothing here reads, buffers or logs the body: it holds the Obsidian secrets.
+    pub(crate) async fn send_notes_connect(
+        &self,
+        request: Request,
+        claims: Claims<'_>,
+        operation_id: uuid::Uuid,
+    ) -> Result<hyper::Response<hyper::body::Incoming>, Response> {
+        let unavailable = || platform_http::reject(FailureKind::UpstreamUnavailable);
+        let route = self.routes.get("notes").ok_or_else(unavailable)?;
+        let budget = self.budget(route).ok_or_else(unavailable)?;
+        let path_and_query = request
+            .uri()
+            .path_and_query()
+            .map_or("/", |value| value.as_str());
+        let uri: Uri = format!("http://{}{}", route.listener, path_and_query)
+            .parse()
+            .map_err(|_| unavailable())?;
+        let (parts, body) = request.into_parts();
+        let mut upstream = hyper::Request::builder()
+            .method(parts.method)
+            .uri(uri)
+            .body(body)
+            .map_err(|_| unavailable())?;
+        let mut headers = forwarded_headers(&parts.headers, claims);
+        insert(
+            &mut headers,
+            platform_receipt::HEADER_OPERATION_ID,
+            &operation_id.to_string(),
+        );
+        *upstream.headers_mut() = headers;
+        match tokio::time::timeout(
+            Duration::from_secs(budget.response_timeout_seconds),
+            self.client.request(upstream),
+        )
+        .await
+        {
+            Ok(Ok(response)) => Ok(response),
+            Ok(Err(_)) => {
+                tracing::warn!("the notes service could not be reached for a connect");
+                Err(unavailable())
+            }
+            Err(_) => {
+                tracing::warn!("the notes service did not answer a connect in time");
+                Err(platform_http::reject(FailureKind::UpstreamTimeout))
+            }
+        }
     }
 
     /// Stream a prepared archive to the receiving service's fixed receipt endpoint.
@@ -396,7 +478,12 @@ impl Gateway {
         else {
             return platform_http::reject(FailureKind::UpstreamUnavailable);
         };
-        let headers = forwarded_headers(&HeaderMap::new(), principal, correlation_id);
+        let claims = Claims {
+            principal,
+            device_kind: None,
+            correlation_id,
+        };
+        let headers = forwarded_headers(&HeaderMap::new(), claims);
         let mut headers = archive_headers(headers, operation_id, sha256, byte_size);
         headers.insert(
             http::header::CONTENT_TYPE,
@@ -442,6 +529,53 @@ fn knowledge_surface_available(document: &serde_json::Value) -> bool {
         })
 }
 
+/// The identity Edge mints onto one forwarded request.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Claims<'a> {
+    pub(crate) principal: Principal,
+    /// The stored kind of the device, when the principal is a device.
+    pub(crate) device_kind: Option<&'static str>,
+    pub(crate) correlation_id: &'a str,
+}
+
+/// The stored kind of the authenticated device, or `None` when the principal is not a device.
+///
+/// A device that is gone, revoked or owned by someone else since its session authenticated is
+/// refused as unauthenticated, and a read that fails is refused as a timeout.
+pub(crate) async fn device_kind(
+    state: &ApiState,
+    principal: Principal,
+) -> Result<Option<&'static str>, Response> {
+    let Some(device_id) = principal.device_id else {
+        return Ok(None);
+    };
+    match platform_identity::device::find_device(state.database.pool(), device_id).await {
+        Ok(Some(device)) if device.user_id == principal.user_id && device.is_active() => {
+            Ok(Some(device.kind.as_str()))
+        }
+        Ok(_) => Err(platform_http::reject(FailureKind::Unauthenticated)),
+        Err(error) => {
+            tracing::error!(%error, "the device kind could not be read");
+            Err(platform_http::reject(FailureKind::RequestTimeout))
+        }
+    }
+}
+
+/// Whether `path` is `pattern` or a path below it. A `{name}` segment of the pattern matches one
+/// segment that is not empty.
+fn is_under(pattern: &str, path: &str) -> bool {
+    let mut segments = path.split('/');
+    pattern.split('/').all(|expected| {
+        segments.next().is_some_and(|segment| {
+            if expected.starts_with('{') {
+                !segment.is_empty()
+            } else {
+                segment == expected
+            }
+        })
+    })
+}
+
 /// Authenticate at Edge, mint bounded claims, and stream the request and response unchanged.
 pub async fn proxy(
     State(state): State<Arc<ApiState>>,
@@ -449,11 +583,18 @@ pub async fn proxy(
     Extension(context): Extension<platform_http::RequestContext>,
     request: Request,
 ) -> Response {
-    let Some(route) = state.gateway.route(request.uri().path()) else {
+    let Some((service, route)) = state.gateway.route(request.uri().path()) else {
         return platform_http::reject(FailureKind::RouteNotFound);
     };
-    let Some(budget) = state.gateway.budget(route) else {
+    let Some(budget) = state
+        .gateway
+        .budget_for(service, route, request.uri().path())
+    else {
         return platform_http::reject(FailureKind::UpstreamUnavailable);
+    };
+    let device_kind = match device_kind(&state, principal).await {
+        Ok(kind) => kind,
+        Err(rejection) => return rejection,
     };
     let path_and_query = request
         .uri()
@@ -473,8 +614,11 @@ pub async fn proxy(
     };
     *upstream.headers_mut() = forwarded_headers(
         &parts.headers,
-        principal,
-        &context.correlation_id.to_string(),
+        Claims {
+            principal,
+            device_kind,
+            correlation_id: &context.correlation_id.to_string(),
+        },
     );
     match tokio::time::timeout(
         std::time::Duration::from_secs(budget.response_timeout_seconds),
@@ -504,7 +648,7 @@ pub async fn proxy(
 /// read to a client as its own credential being rejected, and the export agent removes its pairing
 /// on exactly that. `route` is the configured route prefix or the archive provider, both fixed
 /// labels; the log carries only it and a class.
-async fn response_from_upstream(
+pub(crate) async fn response_from_upstream(
     response: hyper::Response<hyper::body::Incoming>,
     route: &str,
 ) -> Response {
@@ -536,7 +680,12 @@ async fn response_from_upstream(
     platform_http::preserve_contract_error(response)
 }
 
-fn forwarded_headers(headers: &HeaderMap, principal: Principal, correlation_id: &str) -> HeaderMap {
+fn forwarded_headers(headers: &HeaderMap, claims: Claims<'_>) -> HeaderMap {
+    let Claims {
+        principal,
+        device_kind,
+        correlation_id,
+    } = claims;
     let connection_tokens = connection_tokens(headers);
     let mut forwarded = HeaderMap::new();
     for (name, value) in headers {
@@ -570,6 +719,9 @@ fn forwarded_headers(headers: &HeaderMap, principal: Principal, correlation_id: 
             platform_receipt::HEADER_DEVICE_ID,
             &device_id,
         );
+    }
+    if let Some(device_kind) = device_kind {
+        insert(&mut forwarded, HEADER_DEVICE_KIND, device_kind);
     }
     insert(
         &mut forwarded,

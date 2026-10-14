@@ -1,4 +1,4 @@
-//! Registered devices: a mobile app, a browser extension or the export agent.
+//! Registered devices: a mobile app, a browser extension, the export agent or the Obsidian plugin.
 //!
 //! `DOMAIN.md` calls a device "a registered installation with constrained credentials". The
 //! constrained part is why a device has its own row rather than being a session attribute: a device
@@ -19,6 +19,8 @@ pub enum DeviceKind {
     BrowserExtension,
     /// The macOS export agent.
     ExportAgent,
+    /// The Obsidian plugin, which sends the changes of a vault to `ratatoskr-notes`.
+    ObsidianPlugin,
 }
 
 impl DeviceKind {
@@ -29,6 +31,7 @@ impl DeviceKind {
             Self::Mobile => "mobile",
             Self::BrowserExtension => "browser_extension",
             Self::ExportAgent => "export_agent",
+            Self::ObsidianPlugin => "obsidian_plugin",
         }
     }
 
@@ -39,6 +42,7 @@ impl DeviceKind {
             "mobile" => Some(Self::Mobile),
             "browser_extension" => Some(Self::BrowserExtension),
             "export_agent" => Some(Self::ExportAgent),
+            "obsidian_plugin" => Some(Self::ObsidianPlugin),
             _ => None,
         }
     }

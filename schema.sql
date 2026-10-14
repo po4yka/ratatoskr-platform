@@ -121,7 +121,7 @@ create table identity.registered_devices (
     revoked_at    timestamptz,
 
     constraint registered_devices_kind_is_known
-        check (kind in ('mobile', 'browser_extension', 'export_agent')),
+        check (kind in ('mobile', 'browser_extension', 'export_agent', 'obsidian_plugin')),
     constraint registered_devices_display_name_is_bounded
         check (display_name is null or length(display_name) between 1 and 120),
     -- A 32-byte Argon2id/HMAC output. The length is checked so a plaintext secret, which would be
@@ -497,7 +497,7 @@ create table identity.pairing_codes (
     -- consumption, which is what makes the approval UX contract more than decoration.
     constraint pairing_codes_expected_kind_is_known
         check (expected_kind is null or expected_kind in
-               ('mobile', 'browser_extension', 'export_agent')),
+               ('mobile', 'browser_extension', 'export_agent', 'obsidian_plugin')),
     constraint pairing_codes_label_is_bounded
         check (label is null or length(label) between 1 and 120),
     constraint pairing_codes_code_hash_is_a_digest

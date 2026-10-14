@@ -311,6 +311,7 @@ fn edge_profile_declares_the_canonical_domain_gateway_table() {
         ("AI", "/v1/ai", "127.0.0.1:8095", "stream"),
         ("CHATGPT", "/v1/chatgpt", "127.0.0.1:8096", "transfer"),
         ("CLAUDE", "/v1/claude", "127.0.0.1:8097", "transfer"),
+        ("NOTES", "/v1/notes", "127.0.0.1:8099", "control"),
     ] {
         let root = format!("RATATOSKR__GATEWAY__ROUTES__{service}");
         assert_eq!(

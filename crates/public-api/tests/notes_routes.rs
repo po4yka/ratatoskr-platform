@@ -354,6 +354,10 @@ async fn connect_body_is_not_persisted_or_logged() {
     );
 
     let log = log.text();
+    assert!(
+        log.contains("/v1/notes/connections"),
+        "the capture recorded no request span, so it proves nothing: {log}"
+    );
     for marker in MARKERS {
         assert!(!log.contains(marker), "the log holds {marker}: {log}");
     }

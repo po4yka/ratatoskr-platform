@@ -51,8 +51,8 @@ bind to `0.0.0.0`.
 
 Edge also forwards to loopback upstreams, whose addresses are allocated in the workspace port table and
 configured in `systemd/edge.conf.example`. Each is bound by the owning service's own listener rather
-than its operator listener: Knowledge's API listener on 8091, GitHub's on 8092, and the ChatGPT and
-Claude receipt listeners on 8096 and 8097. Vault (8093), social (8094) and AI (8095) have no
+than its operator listener: Knowledge's API listener on 8091, GitHub's on 8092, the ChatGPT and
+Claude receipt listeners on 8096 and 8097, and the `ratatoskr-notes` API listener on 8099. Vault (8093), social (8094) and AI (8095) have no
 implementing service yet, so nothing listens there and Edge reports their capability stale on
 purpose. That is the truthful answer, not a fault to silence.
 

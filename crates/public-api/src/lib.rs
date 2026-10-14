@@ -40,6 +40,7 @@ pub mod devices;
 pub mod gateway;
 mod intake;
 pub mod library;
+pub mod notes;
 pub mod oauth;
 pub mod operations;
 pub mod sessions;
@@ -355,6 +356,37 @@ pub fn routes(state: Arc<ApiState>) -> Router {
                 .route(&route.prefix, handler.clone())
                 .route(&format!("{}/{{*tail}}", route.prefix), handler)
         });
+    // A sub-path that carries bytes takes the transfer body limit inside its route.
+    let router = gateway::TRANSFER_PATHS
+        .iter()
+        .filter_map(|(service, sub_path)| {
+            state
+                .gateway
+                .routes()
+                .get(*service)
+                .map(|route| format!("{}{sub_path}", route.prefix))
+        })
+        .fold(router, |router, path| {
+            let handler = any(gateway::proxy).layer(RequestBodyLimitLayer::new(upload_limit));
+            router
+                .route(&path, handler.clone())
+                .route(&format!("{path}/{{*tail}}"), handler)
+        });
+    // The connect call of the notes service is Edge's own handler; its other methods are proxied.
+    let router = match state.gateway.routes().get("notes") {
+        Some(route) => {
+            let limit = state.gateway.budget(route).map_or(0, |budget| {
+                usize::try_from(budget.max_body_bytes).unwrap_or(usize::MAX)
+            });
+            router.route(
+                &format!("{}/connections", route.prefix),
+                post(notes::connect)
+                    .fallback(gateway::proxy)
+                    .layer(RequestBodyLimitLayer::new(limit)),
+            )
+        }
+        None => router,
+    };
     router.with_state(state)
 }
 

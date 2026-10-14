@@ -38,12 +38,17 @@ RATATOSKR__ARCHIVE_STAGING__MAX_ARCHIVE_BYTES=2147483648
 RATATOSKR__ARCHIVE_STAGING__SWEEP_INTERVAL_SECONDS=300
 
 # Domain APIs are loopback-only. Edge owns the public prefixes, validates the session and mints
-# only x-ratatoskr-user-id, optional x-ratatoskr-device-id and x-correlation-id for each request.
+# only x-ratatoskr-user-id, optional x-ratatoskr-device-id and x-ratatoskr-device-kind, and
+# x-correlation-id for each request.
 #
 # Each upstream address below is bound by the OWNING service's own listener, not by its operator
 # listener (XR-021 R2-01): knowledge 8091 is Knowledge's API listener (RATATOSKR__API__LISTEN_ADDRESS),
 # github 8092 is GitHub's API listener, chatgpt 8096 and claude 8097 are the receipt listeners
-# (RATATOSKR__RECEIPT__LISTEN_ADDRESS). Vault 8093, social 8094 and ai 8095 have no implementing
+# (RATATOSKR__RECEIPT__LISTEN_ADDRESS), and notes 8099 is the domain API listener of ratatoskr-notes
+# (RATATOSKR__API__LISTEN_ADDRESS). The notes route is control; Edge gives
+# /v1/notes/connections/{id}/blobs the transfer budget, and it handles POST /v1/notes/connections
+# itself: it mints the operation and forwards the body, which holds Obsidian secrets, without
+# keeping any part of it. Vault 8093, social 8094 and ai 8095 have no implementing
 # service yet, so nothing listens there and Edge reports those capabilities stale on purpose: that is
 # the truthful answer, and a route is not removed to hide it.
 RATATOSKR__GATEWAY__ROUTES__KNOWLEDGE__PREFIX=/v1/k
@@ -69,6 +74,9 @@ RATATOSKR__GATEWAY__ROUTES__CLAUDE__PREFIX=/v1/claude
 RATATOSKR__GATEWAY__ROUTES__CLAUDE__LISTENER=127.0.0.1:8097
 RATATOSKR__GATEWAY__ROUTES__CLAUDE__CLASS=transfer
 RATATOSKR__GATEWAY__ROUTES__CLAUDE__ARCHIVE_RECEIPT_PATH=/v1/ai-archives/receipt
+RATATOSKR__GATEWAY__ROUTES__NOTES__PREFIX=/v1/notes
+RATATOSKR__GATEWAY__ROUTES__NOTES__LISTENER=127.0.0.1:8099
+RATATOSKR__GATEWAY__ROUTES__NOTES__CLASS=control
 
 # The channel-digests read API, behind GET /v1/channel-digests/{subscriptions,results}. Both keys or
 # neither (rule V22). The listener is loopback on the allocated port 8098; the secret equals the

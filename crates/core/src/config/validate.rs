@@ -356,7 +356,7 @@ fn gateway_route_violations(
         found.push(route_violation(
             None,
             "service",
-            "must name one of knowledge, github, vault, social, ai, chatgpt, claude",
+            "must name one of knowledge, github, vault, social, ai, chatgpt, claude, notes",
         ));
         return;
     };
@@ -416,6 +416,7 @@ fn gateway_service(service: &str) -> Option<(&'static str, u16)> {
         "ai" => Some(("/v1/ai", 8095)),
         "chatgpt" => Some(("/v1/chatgpt", 8096)),
         "claude" => Some(("/v1/claude", 8097)),
+        "notes" => Some(("/v1/notes", 8099)),
         _ => None,
     }
 }
