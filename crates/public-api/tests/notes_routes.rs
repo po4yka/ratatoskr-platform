@@ -12,7 +12,8 @@
     reason = "assertions in a test binary"
 )]
 
-use std::collections::BTreeMap;
+mod notes_support;
+
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -21,25 +22,20 @@ use std::time::Duration;
 use axum::Router;
 use axum::body::{Body, Bytes};
 use http::{HeaderMap, Method, Request, StatusCode};
-use http_body_util::BodyExt as _;
-use platform_core::RuntimeRole;
-use platform_core::config::{GatewayConfig, GatewayRouteClass, GatewayRouteConfig, PublicConfig};
-use platform_http::{HttpState, RuntimeState};
-use platform_identity::{DeviceKind, NewSession, SecretDigest, SessionKind};
+use notes_support::{
+    OWNER_CREDENTIAL, answering, app, assert_connect_fails, notes_route, now, owner_connect,
+    seed_owner, send,
+};
+use platform_identity::{DeviceKind, SecretDigest};
 use platform_persistence::test_support::TestDatabase;
-use platform_public_api::{ApiState, auth};
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
-use tower::ServiceExt as _;
 use tracing::field::{Field, Visit};
 use tracing::span::{Attributes, Id, Record};
 use tracing::{Event, Metadata, Subscriber};
 use uuid::Uuid;
 
-const AUDIENCE: &str = "edge";
-const OWNER_CREDENTIAL: &str = "notes-owner-credential-000000000";
 const DEVICE_SECRET: &str = "notes-plugin-device-secret";
-const EDGE_EXAMPLE: &str = include_str!("../../../deploy/systemd/edge.conf.example");
 
 /// The values of the connect body that must stay inside the request.
 const MARKERS: [&str; 4] = [
@@ -48,69 +44,6 @@ const MARKERS: [&str; 4] = [
     "MARKER-MFA-4b2d",
     "MARKER-E2E-6d8f",
 ];
-
-/// The handlers read the wall clock themselves, so a session seeded here is minted on that clock.
-fn now() -> jiff::Timestamp {
-    jiff::Timestamp::now() // wall-clock: the handlers under test read the clock themselves
-}
-
-/// The value of an active `RATATOSKR__GATEWAY__ROUTES__NOTES__<key>` line of the shipped example.
-fn shipped(key: &str) -> Option<String> {
-    let line = format!("RATATOSKR__GATEWAY__ROUTES__NOTES__{key}=");
-    EDGE_EXAMPLE
-        .lines()
-        .map(str::trim)
-        .filter(|candidate| !candidate.starts_with('#'))
-        .find_map(|candidate| candidate.strip_prefix(&line))
-        .map(str::to_owned)
-}
-
-/// The notes route of the shipped Edge example, pointed at `listener` instead of 8099. The control
-/// budget is small and the transfer budget large, so a test can tell the two apart.
-fn notes_route(listener: std::net::SocketAddr) -> GatewayConfig {
-    assert_eq!(
-        shipped("PREFIX").as_deref(),
-        Some("/v1/notes"),
-        "the shipped Edge route table has no notes route"
-    );
-    assert_eq!(shipped("LISTENER").as_deref(), Some("127.0.0.1:8099"));
-    assert_eq!(shipped("CLASS").as_deref(), Some("control"));
-    let mut gateway = GatewayConfig {
-        routes: BTreeMap::from([(
-            "notes".to_owned(),
-            GatewayRouteConfig {
-                prefix: "/v1/notes".to_owned(),
-                listener,
-                class: Some(GatewayRouteClass::Control),
-                capabilities_path: "/v1/capabilities".to_owned(),
-                archive_receipt_path: "/v1/ai-archives/receipt".to_owned(),
-            },
-        )]),
-        ..GatewayConfig::default()
-    };
-    gateway.budgets.control.max_body_bytes = 1024;
-    gateway.budgets.transfer.max_body_bytes = 1_048_576;
-    gateway
-}
-
-fn app(harness: &TestDatabase, gateway: &GatewayConfig) -> Router {
-    let health = Arc::new(RuntimeState::new(RuntimeRole::Edge));
-    health.set_database_reachable(true);
-    let mut state = ApiState::new(harness.database.clone(), AUDIENCE, health, true);
-    state.gateway = platform_public_api::gateway::Gateway::from_config(gateway);
-    let config = PublicConfig {
-        bind: "127.0.0.1:0".parse().expect("a socket address"),
-        request_timeout_seconds: 15,
-        max_body_bytes: 4 * 1_048_576,
-        max_concurrent_requests: 64,
-        actor_requests_per_minute: 120,
-    };
-    platform_http::observe::public_router(
-        Arc::new(HttpState::new(RuntimeRole::Edge)),
-        &config,
-        platform_public_api::routes(Arc::new(state)),
-    )
-}
 
 /// What the stub saw of one request.
 struct Seen {
@@ -170,42 +103,6 @@ async fn stub() -> (
             .expect("the notes stub serves");
     });
     (address, seen_rx, task)
-}
-
-async fn send(app: &Router, request: Request<Body>) -> (StatusCode, serde_json::Value) {
-    let response = app.clone().oneshot(request).await.expect("a response");
-    let status = response.status();
-    let bytes = response
-        .into_body()
-        .collect()
-        .await
-        .expect("a response body")
-        .to_bytes();
-    let body = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
-    (status, body)
-}
-
-/// A user with a primary browser session that presents `OWNER_CREDENTIAL`.
-async fn seed_owner(pool: &sqlx::PgPool) -> Uuid {
-    let user = platform_identity::user::create_user(pool, now())
-        .await
-        .expect("a user")
-        .user_id;
-    platform_identity::session::create_session(
-        pool,
-        &NewSession {
-            user_id: user,
-            kind: SessionKind::Browser,
-            device_id: None,
-            audience: AUDIENCE,
-            token: Some(auth::credential_digest(OWNER_CREDENTIAL)),
-            issued_at: now(),
-            expires_at: now() + jiff::SignedDuration::from_hours(1),
-        },
-    )
-    .await
-    .expect("a session");
-    user
 }
 
 /// Open a device session through the public route, as a paired client does.
@@ -431,89 +328,6 @@ async fn blob_upload_uses_the_transfer_budget() {
         "an oversized change batch reached the notes service"
     );
     task.abort();
-    harness.cleanup().await.expect("cleanup");
-}
-
-/// A notes stub that answers every request with `status` and `body` after `delay`.
-async fn answering(
-    status: StatusCode,
-    body: serde_json::Value,
-    delay: Duration,
-) -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
-    let router = Router::new().fallback(move || {
-        let body = body.clone();
-        async move {
-            tokio::time::sleep(delay).await;
-            (status, axum::Json(body))
-        }
-    });
-    let listener = TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("a loopback listener");
-    let address = listener.local_addr().expect("a listener address");
-    let task = tokio::spawn(async move {
-        axum::serve(listener, router)
-            .await
-            .expect("the notes stub serves");
-    });
-    (address, task)
-}
-
-/// A connect with a small body, as the owner.
-fn owner_connect() -> Request<Body> {
-    Request::builder()
-        .method("POST")
-        .uri("/v1/notes/connections")
-        .header("authorization", format!("Bearer {OWNER_CREDENTIAL}"))
-        .header("content-type", "application/json")
-        .body(Body::from(r#"{"channel":"sync"}"#))
-        .expect("a request")
-}
-
-/// The one connect operation of `owner`, as a client reads it.
-async fn connect_operation(
-    pool: &sqlx::PgPool,
-    owner: Uuid,
-) -> ratatoskr_operation_contracts::OperationSnapshot {
-    let operation_id: Uuid = sqlx::query_scalar(
-        "select operation_id from operations.operations
-          where owner_user_id = $1 and kind = 'notes.connection.connect'",
-    )
-    .bind(owner)
-    .fetch_one(pool)
-    .await
-    .expect("exactly one connect operation");
-    platform_operations::snapshot(pool, operation_id)
-        .await
-        .expect("the operation snapshot")
-}
-
-/// Send `request` through `gateway` and assert the answer and the terminal state of the operation.
-async fn assert_connect_fails(
-    gateway: &GatewayConfig,
-    request: Request<Body>,
-    answer: StatusCode,
-    code: &str,
-) {
-    let harness = TestDatabase::create().await.expect("a test database");
-    let owner = seed_owner(harness.pool()).await;
-    let app = app(&harness, gateway);
-
-    let (status, body) = send(&app, request).await;
-
-    assert_eq!(status, answer, "{body}");
-    let operation = connect_operation(harness.pool(), owner).await;
-    assert_eq!(
-        operation.status,
-        ratatoskr_operation_contracts::OperationStatus::Failed,
-        "the connect operation is not terminated"
-    );
-    let codes: Vec<&str> = operation
-        .errors
-        .iter()
-        .map(|error| error.code.as_str())
-        .collect();
-    assert_eq!(codes, [code]);
     harness.cleanup().await.expect("cleanup");
 }
 

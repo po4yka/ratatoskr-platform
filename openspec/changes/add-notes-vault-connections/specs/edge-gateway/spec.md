@@ -25,6 +25,11 @@ The shipped route table SHALL route `/v1/notes` to the loopback listener `127.0.
 - **WHEN** an authenticated client sends a body above the control body budget to `/v1/notes/connections/{id}/blobs` and to `/v1/notes/connections/{id}/changes`
 - **THEN** the stub upstream receives the blob body unchanged, and Edge refuses the change batch with `413` before it reaches the stub, verified by `crates/public-api/tests/notes_routes.rs::blob_upload_uses_the_transfer_budget`
 
+#### Scenario: A streamed blob upload is larger than the transfer budget
+
+- **WHEN** an authenticated client sends a blob body without `Content-Length` that streams more bytes than the transfer budget to `/v1/notes/connections/{id}/blobs`
+- **THEN** Edge answers `413` with `platform.request.payload_too_large`, and not `503`, verified by `crates/public-api/tests/notes_connect.rs::oversized_streamed_blob_upload_is_refused_with_413`
+
 ### Requirement: The connect proxy keeps no part of the body
 
 `POST /v1/notes/connections` SHALL mint an operation of kind `notes.connection.connect`, forward the body to the notes upstream unchanged with `x-ratatoskr-operation-id`, and answer `202` with the operation id. Edge SHALL NOT write any part of the body to its database, its outbox, its idempotency records, its audit records or its logs.
@@ -36,7 +41,7 @@ The shipped route table SHALL route `/v1/notes` to the loopback listener `127.0.
 
 ### Requirement: A connect that notes does not take ends its operation
 
-When the forward of `POST /v1/notes/connections` fails after Edge minted the operation, Edge SHALL terminate the operation as `failed` through the one transition applier before it answers, with an error whose code is the code of the Edge fault, or the code of the error envelope of the notes service when notes answered one. The error SHALL hold no part of the notes answer other than its code.
+When the forward of `POST /v1/notes/connections` fails after Edge minted the operation, Edge SHALL terminate the operation as `failed` through the one transition applier before it answers, with an error whose code is the code of the Edge fault, or the code of the error envelope of the notes service when notes answered one. The error and the progress entry SHALL hold the fixed message `The connect did not complete.` and no part of the notes answer other than its code.
 
 #### Scenario: The notes service is not reachable
 
@@ -53,6 +58,43 @@ When the forward of `POST /v1/notes/connections` fails after Edge minted the ope
 - **WHEN** the stub notes upstream answers a connect with `409` and the error envelope `notes.connection.vault_already_connected`
 - **THEN** Edge relays the `409` and the operation is `failed` with `notes.connection.vault_already_connected`, verified by `crates/public-api/tests/notes_routes.rs::refused_connect_fails_the_operation_with_the_notes_code`
 
+#### Scenario: The operation keeps no notes text
+
+- **WHEN** the stub notes upstream refuses a connect with an error envelope whose message holds a marker
+- **THEN** Edge relays the envelope to the client, the error and the progress entry of the operation hold `The connect did not complete.`, and no row of `operations.operation_errors` or `operations.operation_progress` holds the marker, verified by `crates/public-api/tests/notes_connect.rs::refused_connect_keeps_no_notes_text`
+
+### Requirement: A client disconnect does not stop the end of a connect
+
+Edge SHALL do the forward of a connect and the terminal write of its operation in a task that a client disconnect does not stop.
+
+#### Scenario: The client disconnects before notes answers
+
+- **WHEN** a connect reaches the stub notes upstream, the client disconnects, and the stub then refuses the connect with `409`
+- **THEN** the operation is `failed` with `notes.connection.vault_already_connected`, verified by `crates/public-api/tests/notes_connect.rs::client_disconnect_does_not_stop_the_terminal_write`
+
+### Requirement: A connect body that fails is a request error
+
+A connect body that fails while Edge sends it to notes SHALL be refused with `400` (`platform.request.invalid`), and its operation SHALL be `failed` with that code, not with `edge.upstream_unavailable`.
+
+#### Scenario: The request body fails while Edge sends it
+
+- **WHEN** a client sends a part of a connect body and then the body fails
+- **THEN** Edge answers `400` and the operation is `failed` with `platform.request.invalid`, verified by `crates/public-api/tests/notes_connect.rs::aborted_connect_body_is_a_request_error`
+
+### Requirement: Edge accepts only 202 from notes for a connect
+
+An answer of notes to a connect that is not `202` and not an error envelope SHALL be `502` (`edge.upstream_invalid_response`), Edge SHALL NOT relay it, and the operation SHALL be `failed` with that code.
+
+#### Scenario: Notes answers a redirect
+
+- **WHEN** the stub notes upstream answers a connect with `307` and a `Location` header
+- **THEN** Edge answers `502` with `edge.upstream_invalid_response` and no `Location` header, and the operation is `failed` with that code, verified by `crates/public-api/tests/notes_connect.rs::redirect_from_notes_is_an_invalid_response`
+
+#### Scenario: Notes answers a success other than 202
+
+- **WHEN** the stub notes upstream answers a connect with `200` and a JSON body
+- **THEN** Edge answers `502` and the operation is `failed` with `edge.upstream_invalid_response`, verified by `crates/public-api/tests/notes_connect.rs::success_other_than_202_is_an_invalid_response`
+
 ### Requirement: The connect keeps its body budget while the body streams
 
 A connect body that declares no length and grows above the `control` body budget of the notes route SHALL be refused with `413` (`platform.request.payload_too_large`), and its operation SHALL be `failed` with that code.
@@ -62,7 +104,7 @@ A connect body that declares no length and grows above the `control` body budget
 - **WHEN** a connect body without `Content-Length` streams more bytes than the `control` budget through Edge
 - **THEN** Edge answers `413` and the operation is `failed` with `platform.request.payload_too_large`, verified by `crates/public-api/tests/notes_routes.rs::oversized_streamed_connect_is_refused_with_413`
 
-### Requirement: Edge refuses a connect at any other path
+### Requirement: Edge refuses a connect at the path with a trailing slash
 
 Edge SHALL refuse `POST /v1/notes/connections/` with `404` and SHALL NOT forward it, so a connect cannot reach the notes service through the generic proxy, which keeps no operation and does not protect the body. Other methods at that path SHALL go through the generic proxy.
 
