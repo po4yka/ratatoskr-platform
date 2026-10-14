@@ -403,6 +403,123 @@ async fn the_snapshot_projection_satisfies_the_contract() {
     harness.cleanup().await.expect("dropping the test database");
 }
 
+/// L-6. Two writers that fail one operation at the same time record one terminal transition and
+/// one error.
+///
+/// Each writer does what the Edge failure paths do: it applies `failed`, and it records an error
+/// only when that was an `Advance`. The second writer starts while the first one holds the row and
+/// has not committed. If `record_status` reads the status without a row lock, both writers read
+/// `accepted`, both advance, and the operation holds two `failed` progress entries and two errors.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn two_concurrent_failures_record_one_transition_and_one_error() {
+    let harness = TestDatabase::create().await.expect("a test database");
+    let pool = harness.pool();
+    let operation_id = platform_operations::accept(
+        pool,
+        owner(),
+        "content.capture.submit",
+        CORRELATION,
+        None,
+        None,
+        now(),
+    )
+    .await
+    .expect("accepting")
+    .operation_id;
+
+    let mut first = pool.begin().await.expect("the first transaction");
+    let first_outcome = fail_once(&mut first, operation_id).await;
+    assert_eq!(first_outcome, Transition::Advance(OperationStatus::Failed));
+
+    let second = {
+        let pool = pool.clone();
+        tokio::spawn(async move {
+            let mut transaction = pool.begin().await.expect("the second transaction");
+            let outcome = fail_once(&mut transaction, operation_id).await;
+            transaction.commit().await.expect("the second commit");
+            outcome
+        })
+    };
+
+    // The first writer commits only when the second one waits for a lock, so the second one has
+    // started its work before the first one ended.
+    let mut observer = <sqlx::PgConnection as sqlx::Connection>::connect(&harness.url())
+        .await
+        .expect("an observer connection");
+    let waiting = async {
+        loop {
+            let waiting: i64 = sqlx::query_scalar(
+                "select count(*) from pg_stat_activity
+                  where datname = current_database() and wait_event_type = 'Lock'",
+            )
+            .fetch_one(&mut observer)
+            .await
+            .expect("reading the lock waits");
+            if waiting > 0 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    };
+    tokio::time::timeout(std::time::Duration::from_secs(10), waiting)
+        .await
+        .expect("the second writer waits for the row of the first one");
+    first.commit().await.expect("the first commit");
+    let second_outcome = second.await.expect("the second writer");
+
+    let failed: i64 = sqlx::query_scalar(
+        "select count(*) from operations.operation_progress
+          where operation_id = $1 and status = 'failed'",
+    )
+    .bind(operation_id)
+    .fetch_one(pool)
+    .await
+    .expect("counting the failed entries");
+    let errors: i64 = sqlx::query_scalar(
+        "select count(*) from operations.operation_errors where operation_id = $1",
+    )
+    .bind(operation_id)
+    .fetch_one(pool)
+    .await
+    .expect("counting the errors");
+    assert_eq!(
+        (second_outcome, failed, errors),
+        (Transition::Duplicate, 1, 1),
+        "the second writer must find the operation failed: (outcome, failed entries, errors)"
+    );
+
+    harness.cleanup().await.expect("dropping the test database");
+}
+
+/// Apply `failed` and, when that advanced the operation, record its error: the pattern of
+/// `fail_notes_connect` and `fail_ai_archive_delivery`, inside the caller's transaction.
+async fn fail_once(transaction: &mut sqlx::PgTransaction<'_>, operation_id: Uuid) -> Transition {
+    let (outcome, _) = platform_operations::record_status(
+        transaction,
+        operation_id,
+        OperationStatus::Failed,
+        Some("connect"),
+        None,
+        Some("The connect did not complete."),
+        now(),
+    )
+    .await
+    .expect("applying failed");
+    if matches!(outcome, Transition::Advance(_)) {
+        let error = ratatoskr_error_contracts::ErrorEnvelope::new(
+            ratatoskr_error_contracts::ErrorCode::parse("edge.upstream_unavailable")
+                .expect("a stable code"),
+            ratatoskr_identifiers::SafeMessage::parse("The connect did not complete.")
+                .expect("a safe message"),
+            true,
+        );
+        platform_operations::record_error(transaction, operation_id, &error, now())
+            .await
+            .expect("recording the error");
+    }
+    outcome
+}
+
 fn status_token(status: OperationStatus) -> &'static str {
     match status {
         OperationStatus::Accepted => "accepted",
