@@ -16,6 +16,7 @@ use axum::response::{IntoResponse as _, Response};
 use http::StatusCode;
 use platform_core::FailureKind;
 use platform_identity::audit::{self, AuditEvent, AuditOutcome};
+use ratatoskr_error_contracts::{ErrorCode, ErrorEnvelope};
 use uuid::Uuid;
 
 use crate::gateway::{self, Claims};
@@ -34,6 +35,10 @@ const NOTES_PRODUCER: &str = "ratatoskr-notes";
 /// a channel and a state.
 const MAX_ANSWER_BYTES: usize = 16_384;
 
+/// The largest error answer that Edge reads back to find its code. The generic proxy relays an
+/// error envelope only up to this size.
+const MAX_ERROR_BYTES: usize = 65_536;
+
 /// What a client gets back from a connect that the notes service accepted.
 #[derive(Debug, serde::Serialize)]
 struct ConnectAccepted {
@@ -48,7 +53,10 @@ struct ConnectAccepted {
 /// `POST /v1/notes/connections`.
 ///
 /// A notes error envelope is relayed as the generic proxy relays it. A success answer that is not
-/// JSON is an invalid upstream response.
+/// JSON is an invalid upstream response. When the forward fails after the operation is minted, the
+/// operation is terminated as `failed` before Edge answers, so a client that polls it does not wait
+/// for the stale-operation reaper. The error envelope has no field for the operation id
+/// (contracts ADR-0008 keeps its `extensions` empty), so a failed connect does not name it.
 pub async fn connect(
     State(state): State<Arc<ApiState>>,
     principal: Principal,
@@ -75,10 +83,11 @@ pub async fn connect(
         .await
     {
         Ok(response) => response,
-        Err(rejection) => return rejection,
+        Err(kind) => return refuse(&state, operation_id, kind).await,
     };
     if !response.status().is_success() {
-        return gateway::response_from_upstream(response, ROUTE).await;
+        let relayed = gateway::response_from_upstream(response, ROUTE).await;
+        return relay_refusal(&state, operation_id, relayed).await;
     }
     let Ok(answer) = axum::body::to_bytes(Body::new(response.into_body()), MAX_ANSWER_BYTES).await
     else {
@@ -87,7 +96,7 @@ pub async fn connect(
             class = "oversized_body",
             "a connect answer exceeded its bound"
         );
-        return platform_http::reject(FailureKind::UpstreamInvalidResponse);
+        return refuse(&state, operation_id, FailureKind::UpstreamInvalidResponse).await;
     };
     let Ok(connection) = serde_json::from_slice::<serde_json::Value>(&answer) else {
         tracing::warn!(
@@ -95,7 +104,7 @@ pub async fn connect(
             class = "invalid_json",
             "a connect answer was not JSON"
         );
-        return platform_http::reject(FailureKind::UpstreamInvalidResponse);
+        return refuse(&state, operation_id, FailureKind::UpstreamInvalidResponse).await;
     };
     (
         StatusCode::ACCEPTED,
@@ -106,6 +115,49 @@ pub async fn connect(
         }),
     )
         .into_response()
+}
+
+/// Terminate the operation with the code of an Edge fault, and answer that fault.
+async fn refuse(state: &ApiState, operation_id: Uuid, kind: FailureKind) -> Response {
+    let fault = kind.fault();
+    fail(state, operation_id, &fault.code, fault.retryable).await;
+    platform_http::reject(kind)
+}
+
+/// Terminate the operation with the code of the error that notes answered, and relay that error.
+///
+/// `relayed` is what the generic proxy makes of the answer: the notes error envelope when it is
+/// one, or an Edge fault with an empty body. The body is in memory already or bounded here.
+async fn relay_refusal(state: &ApiState, operation_id: Uuid, relayed: Response) -> Response {
+    let (parts, body) = relayed.into_parts();
+    let bytes = axum::body::to_bytes(body, MAX_ERROR_BYTES)
+        .await
+        .unwrap_or_default();
+    let (code, retryable) = serde_json::from_slice::<ErrorEnvelope>(&bytes).map_or_else(
+        |_| {
+            let fault = FailureKind::UpstreamInvalidResponse.fault();
+            (fault.code.clone(), fault.retryable)
+        },
+        |envelope| (envelope.code, envelope.retryable),
+    );
+    fail(state, operation_id, &code, retryable).await;
+    Response::from_parts(parts, Body::from(bytes))
+}
+
+/// Terminate the operation as `failed`. When that fails, the stale-operation reaper terminates it
+/// later, so the client still gets the answer of the connect.
+async fn fail(state: &ApiState, operation_id: Uuid, code: &ErrorCode, retryable: bool) {
+    if let Err(error) = platform_operations::fail_notes_connect(
+        state.database.pool(),
+        operation_id,
+        code,
+        retryable,
+        jiff::Timestamp::now(),
+    )
+    .await
+    {
+        tracing::error!(%error, "a failed connect operation could not be terminated");
+    }
 }
 
 /// Record the operation and its audit event in one transaction, before the notes service can report

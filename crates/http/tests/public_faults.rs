@@ -151,9 +151,10 @@ fn oversized() -> Request<Body> {
 
 /// Every permitted `ErrorEnvelope::new` site, with the reason it is permitted. Adding a row here is
 /// a deliberate act a reviewer sees; adding a construction site without one fails F-1.
-const ALLOWED_ENVELOPE_SITES: [&str; 3] = [
+const ALLOWED_ENVELOPE_SITES: [&str; 4] = [
     "crates/http/src/fault.rs",
     "crates/operations/src/archive.rs",
+    "crates/operations/src/notes.rs",
     "crates/operations/src/reconcile.rs",
 ];
 
@@ -165,7 +166,7 @@ const ALLOWED_ENVELOPE_SITES: [&str; 3] = [
 ///
 /// The assertion is set equality against an allowlist rather than a count. A count would pass the
 /// moment somebody deleted one site and added another, and it would say nothing about why a site is
-/// allowed. Two sites exist and they do different things:
+/// allowed. Four sites exist and they do different things:
 ///
 ///   * `crates/http/src/fault.rs` is the ONLY place that authors an envelope as an HTTP RESPONSE
 ///     BODY. That is the rule milestone 1 established and it is unchanged: no handler writes its
@@ -175,6 +176,9 @@ const ALLOWED_ENVELOPE_SITES: [&str; 3] = [
 ///     routing it through `fault.rs` would map it onto a `FailureKind` that does not describe it.
 ///   * `crates/operations/src/archive.rs` authors the generic safe diagnostic for an importer delivery
 ///     that Edge observed fail. It is stored operation data, never an HTTP response body.
+///   * `crates/operations/src/notes.rs` authors the diagnostic of a notes connect that Edge observed
+///     fail: the stable code of the failure and a fixed message. It is stored operation data, never
+///     an HTTP response body.
 #[test]
 fn error_envelope_is_constructed_in_exactly_one_place() {
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");

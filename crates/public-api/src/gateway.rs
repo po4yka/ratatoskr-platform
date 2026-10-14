@@ -393,7 +393,7 @@ impl Gateway {
 
     /// Send `POST /v1/notes/connections` to the notes listener, with the client's body and headers
     /// unchanged, the minted claims, and the operation id that Edge minted. The answer is returned
-    /// unread, so the caller decides what the client sees. `Err` is the rejection to answer.
+    /// unread, so the caller decides what the client sees. `Err` is the failure to answer.
     ///
     /// Nothing here reads, buffers or logs the body: it holds the Obsidian secrets.
     pub(crate) async fn send_notes_connect(
@@ -401,23 +401,23 @@ impl Gateway {
         request: Request,
         claims: Claims<'_>,
         operation_id: uuid::Uuid,
-    ) -> Result<hyper::Response<hyper::body::Incoming>, Response> {
-        let unavailable = || platform_http::reject(FailureKind::UpstreamUnavailable);
-        let route = self.routes.get("notes").ok_or_else(unavailable)?;
-        let budget = self.budget(route).ok_or_else(unavailable)?;
+    ) -> Result<hyper::Response<hyper::body::Incoming>, FailureKind> {
+        let unavailable = FailureKind::UpstreamUnavailable;
+        let route = self.routes.get("notes").ok_or(unavailable)?;
+        let budget = self.budget(route).ok_or(unavailable)?;
         let path_and_query = request
             .uri()
             .path_and_query()
             .map_or("/", |value| value.as_str());
         let uri: Uri = format!("http://{}{}", route.listener, path_and_query)
             .parse()
-            .map_err(|_| unavailable())?;
+            .map_err(|_| unavailable)?;
         let (parts, body) = request.into_parts();
         let mut upstream = hyper::Request::builder()
             .method(parts.method)
             .uri(uri)
             .body(body)
-            .map_err(|_| unavailable())?;
+            .map_err(|_| unavailable)?;
         let mut headers = forwarded_headers(&parts.headers, claims);
         insert(
             &mut headers,
@@ -434,11 +434,11 @@ impl Gateway {
             Ok(Ok(response)) => Ok(response),
             Ok(Err(_)) => {
                 tracing::warn!("the notes service could not be reached for a connect");
-                Err(unavailable())
+                Err(unavailable)
             }
             Err(_) => {
                 tracing::warn!("the notes service did not answer a connect in time");
-                Err(platform_http::reject(FailureKind::UpstreamTimeout))
+                Err(FailureKind::UpstreamTimeout)
             }
         }
     }

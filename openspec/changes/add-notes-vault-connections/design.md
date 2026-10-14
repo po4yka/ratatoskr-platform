@@ -34,7 +34,14 @@ budget for it. One table in the gateway holds the sub-path, so a second one is o
 2. streams the request body to the notes listener unchanged, with the minted claims and
    `x-ratatoskr-operation-id`;
 3. answers `202` with `{ "operation_id", "status": "accepted", "connection": <notes answer> }` when
-   notes answers with a success, and relays a notes error envelope as the generic proxy does.
+   notes answers with a success, and relays a notes error envelope as the generic proxy does;
+4. terminates the operation as `failed` before it answers, through the one transition applier, when
+   the forward fails: notes is not reachable (`edge.upstream_unavailable`), does not answer in time
+   (`edge.upstream_timeout`), answers an error (the code of its envelope, or
+   `edge.upstream_invalid_response` when the answer is not an envelope), or answers a success that is
+   too large or not JSON (`edge.upstream_invalid_response`). The error keeps only the code and a
+   fixed message, never the notes message. The error envelope has no field for the operation id
+   (contracts ADR-0008 keeps `extensions` empty), so the failed answer does not name it.
 
 The body is never buffered, parsed or logged by Edge, and the idempotency ledger is not used for this
 route: its record would hold a digest of the body, and the notes service already refuses a second
@@ -54,11 +61,13 @@ grants of `ratatoskr_knowledge_notes_files` and `ratatoskr_knowledge_notes_vault
 
 ## Risks / Trade-offs
 
-- [A refused connect leaves an operation `accepted`] → Edge does not mark it failed; the stale
-  operation reaper (ADR-0014) harvests it. A retried connect also mints a new operation. The notes
-  service must answer `202` early and report the phases on the operation.
+- [A failed connect ends its operation at Edge] → a retried connect mints a new operation. If
+  the stale reaper is the only path, a client polls an open operation for a day; Edge therefore
+  terminates it at once (D3 step 4). When that write fails, the reaper (ADR-0014) is the fallback.
 - [The connect waits for the notes answer] → the `control` budget (15 s) limits the wait. A `sync`
-  login that runs longer answers `504` at Edge, while notes continues; the operation then depends on
-  the reports of notes.
+  login that runs longer answers `504` at Edge, and Edge terminates the operation as `failed`, while
+  notes can continue. A later report of notes is then a stale or conflicting transition and is not
+  applied, so a vault that notes connects after the timeout is not visible on that operation. The
+  notes service must answer `202` early and report the phases on the operation.
 - [The report subject is shared] → `NOTES` can forge a report for another producer's operation; the
   authority table and the recorded lane limit what is applied (workspace `fleet-bus-topology`).

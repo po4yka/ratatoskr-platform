@@ -19,6 +19,7 @@ pub use crate::archive::{
 };
 pub use crate::cancel::{Cancellation, request_cancellation};
 pub use crate::list::{ListScope, Page, list_operations};
+pub use crate::notes::fail_notes_connect;
 pub use crate::projection::ProgressProjection;
 use ratatoskr_error_contracts::{ErrorEnvelope, WarningEnvelope};
 use ratatoskr_identifiers::{EntityRef, Extensions, OperationId, TenantRef, UserId, WireTimestamp};
@@ -36,6 +37,7 @@ pub mod archive;
 pub mod authority;
 pub mod cancel;
 pub mod list;
+pub mod notes;
 pub mod projection;
 pub mod reconcile;
 pub mod transition;
