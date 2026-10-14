@@ -65,12 +65,17 @@ When the forward of `POST /v1/notes/connections` fails after Edge minted the ope
 
 ### Requirement: A client disconnect does not stop the end of a connect
 
-Edge SHALL do the forward of a connect and the terminal write of its operation in a task that a client disconnect does not stop.
+Edge SHALL do the forward of a connect and the terminal write of its operation in a task that a client disconnect does not stop. The task SHALL end within the `control` response budget of the notes route.
 
 #### Scenario: The client disconnects before notes answers
 
 - **WHEN** a connect reaches the stub notes upstream, the client disconnects, and the stub then refuses the connect with `409`
 - **THEN** the operation is `failed` with `notes.connection.vault_already_connected`, verified by `crates/public-api/tests/notes_connect.rs::client_disconnect_does_not_stop_the_terminal_write`
+
+#### Scenario: Notes stops in the middle of its answer
+
+- **WHEN** the stub notes upstream answers a connect with `202` and never ends the body of the answer, and the `control` response budget is one second
+- **THEN** Edge answers `504` within the budget and the operation is `failed` with `edge.upstream_timeout`, verified by `crates/public-api/tests/notes_connect.rs::stalled_connect_answer_fails_within_the_budget`
 
 ### Requirement: A connect body that fails is a request error
 

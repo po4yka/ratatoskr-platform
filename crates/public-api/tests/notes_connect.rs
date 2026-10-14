@@ -259,3 +259,48 @@ async fn oversized_streamed_blob_upload_is_refused_with_413() {
     task.abort();
     harness.cleanup().await.expect("cleanup");
 }
+
+/// A notes stub that answers `202` and then never ends the body of the answer.
+async fn stalling() -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
+    let router = Router::new().fallback(|| async {
+        let chunks = futures_util::StreamExt::chain(
+            futures_util::stream::once(async { Ok::<_, std::io::Error>(Bytes::from_static(b"{")) }),
+            futures_util::stream::pending(),
+        );
+        (StatusCode::ACCEPTED, Body::from_stream(chunks))
+    });
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("a loopback listener");
+    let address = listener.local_addr().expect("a listener address");
+    let task = tokio::spawn(async move {
+        axum::serve(listener, router)
+            .await
+            .expect("the notes stub serves");
+    });
+    (address, task)
+}
+
+#[tokio::test]
+async fn stalled_connect_answer_fails_within_the_budget() {
+    let (address, task) = stalling().await;
+    let mut gateway = notes_route(address);
+    gateway.budgets.control.response_timeout_seconds = 1;
+    let harness = TestDatabase::create().await.expect("a test database");
+    let owner = seed_owner(harness.pool()).await;
+    let app = app(&harness, &gateway);
+
+    let answered = tokio::time::timeout(
+        Duration::from_secs(5),
+        send(&app, notes_support::owner_connect()),
+    )
+    .await;
+
+    let (status, body) = answered.unwrap_or_else(|_| {
+        panic!("a connect whose answer stalls must end within the control budget")
+    });
+    assert_eq!(status, StatusCode::GATEWAY_TIMEOUT, "{body}");
+    assert_failed_with(harness.pool(), owner, "edge.upstream_timeout").await;
+    task.abort();
+    harness.cleanup().await.expect("cleanup");
+}
