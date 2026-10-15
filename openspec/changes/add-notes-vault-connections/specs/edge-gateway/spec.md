@@ -47,7 +47,7 @@ Edge SHALL forward a change batch up to 2 MiB, a manifest up to 32 MiB and an up
 #### Scenario: The transfer budget is below the manifest limit
 
 - **WHEN** Edge loads a configuration with the notes route and a `transfer` body budget of one byte less than 32 MiB, and then one of 32 MiB
-- **THEN** the first is refused for `gateway.budgets.transfer.max_body_bytes` and the second is accepted, verified by `crates/core/tests/config_validation.rs::notes_route_needs_a_transfer_budget_that_holds_its_body_limits`
+- **THEN** the first is refused for `gateway.budgets.transfer.max_body_bytes` and the second is accepted, verified by `crates/core/tests/config_notes_route.rs::notes_route_needs_a_transfer_budget_that_holds_its_body_limits`
 
 #### Scenario: A streamed body grows past the largest size that notes takes
 
@@ -199,4 +199,4 @@ The configuration SHALL be refused when `public.max_body_bytes` or `public.reque
 #### Scenario: The notes route with public limits that hold only the control budget
 
 - **WHEN** Edge loads a configuration with the notes route (`control`) and public limits equal to the `control` budget
-- **THEN** the configuration is refused for `public.max_body_bytes` and `public.request_timeout_seconds`, and limits equal to the `transfer` budget are accepted, verified by `crates/core/tests/config_validation.rs::notes_blob_path_needs_the_public_transfer_limits`
+- **THEN** the configuration is refused for `public.max_body_bytes` and `public.request_timeout_seconds`, and limits equal to the `transfer` budget are accepted, verified by `crates/core/tests/config_notes_route.rs::notes_blob_path_needs_the_public_transfer_limits`

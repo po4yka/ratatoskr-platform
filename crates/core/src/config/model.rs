@@ -205,7 +205,8 @@ pub struct GatewayRouteBudget {
 ///
 /// A body limit is the largest body that the service takes at that path and below it. The proxy
 /// refuses a larger body with `413`, so the service never answers it with a refusal that is not an
-/// error envelope. The limit is never above the transfer budget. The notes limits are
+/// error envelope. The limit is never above the transfer budget, and the validation refuses a
+/// transfer budget below the largest limit of a configured route. The notes limits are
 /// `MAX_BATCH_BYTES` and `MAX_MANIFEST_BYTES` of its channel routes, and `CHUNK_SIZE_MAX_BYTES` of
 /// the shared transfer contract.
 pub const GATEWAY_TRANSFER_PATHS: [(&str, &str, Option<u64>); 4] = [

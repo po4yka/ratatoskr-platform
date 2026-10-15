@@ -388,6 +388,19 @@ fn gateway_route_violations(
             "must be /v1/ai-archives/receipt so archive delivery has one bounded service-owned path",
         ));
     }
+    // A sub-path limit is never above the transfer budget, so a smaller budget would lower it.
+    let largest = crate::config::GATEWAY_TRANSFER_PATHS
+        .iter()
+        .filter(|(owner, _, _)| *owner == service)
+        .filter_map(|(_, _, limit)| *limit)
+        .max();
+    if largest.is_some_and(|limit| config.gateway.budgets.transfer.max_body_bytes < limit) {
+        found.push(Violation {
+            key: "gateway.budgets.transfer.max_body_bytes".into(),
+            env_var: "RATATOSKR__GATEWAY__BUDGETS__TRANSFER__MAX_BODY_BYTES".into(),
+            rule: "must hold the largest body limit of a sub-path of a configured route",
+        });
+    }
     if let (Some(public), Some(class)) = (config.public.as_ref(), route.class) {
         let mut budget = config.gateway.budgets.for_class(class);
         // A sub-path that carries bytes takes the transfer budget inside a route of another class.
