@@ -436,7 +436,12 @@ async fn site_origin(
     }
     let correlation = context.correlation_id.to_string();
     if capability.is_public() {
-        // The one public route outside the content rows is the event stream.
+        // The one public route outside the content rows is the event stream. Every request to
+        // it takes a token of the public rate limit first, the owner's too: the limit is per
+        // client, and it comes before any read that the request causes.
+        if let Some(refused) = public_limit(state, &parts, site) {
+            return refused;
+        }
         match site_capabilities::public(state, &correlation, site, capability).await {
             Ok(true) => {}
             Ok(false) => return site_sessions::site_not_found(context),
@@ -667,6 +672,25 @@ fn declares_body(headers: &http::HeaderMap) -> bool {
 ///
 /// A request that declares a body is `400`. The buckets are checked before the proxy, and a
 /// refusal is `429` with `Retry-After`. Nothing here reads a credential or a cookie.
+/// The refusal of a public request of the client of `request` to `site` above the public rate
+/// limit, with its `Retry-After`; `None` when the request is admitted. Edge applies it before it
+/// asks the sites service for the manifest.
+fn public_limit(state: &ApiState, request: &http::request::Parts, site: &str) -> Option<Response> {
+    let client = client_key(state, request);
+    if state
+        .site_limits
+        .admit(client.as_bytes(), site, jiff::Timestamp::now())
+    {
+        return None;
+    }
+    let mut refused = platform_http::reject(FailureKind::RateLimited);
+    refused.headers_mut().insert(
+        http::header::RETRY_AFTER,
+        HeaderValue::from(state.site_limits.retry_after_seconds),
+    );
+    Some(refused)
+}
+
 async fn content(
     state: &ApiState,
     context: &RequestContext,
@@ -678,16 +702,7 @@ async fn content(
     if declares_body(headers) {
         return platform_http::reject(FailureKind::InvalidRequest);
     }
-    let client = client_key(state, request);
-    if !state
-        .site_limits
-        .admit(client.as_bytes(), site, jiff::Timestamp::now())
-    {
-        let mut refused = platform_http::reject(FailureKind::RateLimited);
-        refused.headers_mut().insert(
-            http::header::RETRY_AFTER,
-            HeaderValue::from(state.site_limits.retry_after_seconds),
-        );
+    if let Some(refused) = public_limit(state, request, site) {
         return refused;
     }
     let correlation = context.correlation_id.to_string();
