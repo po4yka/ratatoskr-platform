@@ -508,7 +508,13 @@ async fn owner_route(
         ["conflicts", conflict_id] => {
             site_edits::conflict(state, context, principal, site, conflict_id).await
         }
-        // The library and the knowledge search arrive with task 8.4.
+        // The owner's library and knowledge search, with the parameters and the answer of
+        // `/v1/library/search`: the same Knowledge question for the same owner. A tenant
+        // parameter is not a parameter of the route, so it is refused before Knowledge.
+        ["library"] | ["knowledge", "search"] => {
+            let params = axum::extract::Query::try_from_uri(&parts.uri);
+            crate::library::search(State(Arc::clone(state)), principal, params).await
+        }
         _ => platform_http::reject(FailureKind::RouteNotFound),
     }
 }
