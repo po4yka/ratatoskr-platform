@@ -367,3 +367,62 @@ async fn file_bytes_stream_without_buffering() {
     task.abort();
     harness.cleanup().await.expect("cleanup");
 }
+
+#[tokio::test]
+async fn device_credential_is_refused_on_owner_routes() {
+    let (address, mut seen, task) = stub().await;
+    let harness = TestDatabase::create().await.expect("a test database");
+    let (_, device) = seed_plugin(harness.pool()).await;
+    let app = app(&harness, &notes_route(address));
+    let credential = device_credential(&app, device).await;
+    let request = |method: Method, uri: &str| {
+        Request::builder()
+            .method(method)
+            .uri(uri)
+            .header("authorization", format!("Bearer {credential}"))
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"channel":"plugin"}"#))
+            .expect("a request")
+    };
+
+    let revision = "c".repeat(64);
+    for (method, uri) in [
+        (Method::GET, "/v1/notes/connections".to_owned()),
+        (Method::GET, format!("{CONNECTION}/files")),
+        (
+            Method::GET,
+            format!("{CONNECTION}/files/Daily/2024-01-01.md?revision={revision}"),
+        ),
+        (
+            Method::GET,
+            format!("{CONNECTION}/index/Daily/2024-01-01.md"),
+        ),
+        (Method::PUT, format!("{CONNECTION}/excluded-folders")),
+        (Method::DELETE, CONNECTION.to_owned()),
+    ] {
+        let (status, body) = send(&app, request(method, &uri)).await;
+        assert_eq!(
+            status,
+            StatusCode::FORBIDDEN,
+            "{uri}: an owner route must refuse a device credential: {body}"
+        );
+        assert_eq!(body["code"], "platform.auth.forbidden");
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), seen.recv())
+                .await
+                .is_err(),
+            "{uri}: a device request reached an owner route of notes"
+        );
+    }
+
+    let (status, body) = send(&app, request(Method::POST, "/v1/notes/connections")).await;
+    assert_eq!(
+        status,
+        StatusCode::ACCEPTED,
+        "a device keeps the connect: {body}"
+    );
+    let forwarded = seen.recv().await.expect("the connect is forwarded");
+    assert_eq!(forwarded.path, "/v1/notes/connections");
+    task.abort();
+    harness.cleanup().await.expect("cleanup");
+}

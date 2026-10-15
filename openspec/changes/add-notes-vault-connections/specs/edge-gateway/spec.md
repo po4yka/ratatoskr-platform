@@ -46,12 +46,21 @@ Edge SHALL forward a change batch up to 2 MiB, a manifest up to 32 MiB and an up
 
 ### Requirement: A notes device route needs a device credential
 
-Edge SHALL refuse with `403` (`platform.auth.forbidden`), and SHALL NOT forward, a request to `/v1/notes/connections/{id}/changes`, `/v1/notes/connections/{id}/manifest` or a path under `/v1/notes/connections/{id}/blobs` whose credential is not the credential of an active paired device. Notes answers such a request with `401`, which Edge does not relay. The other notes routes SHALL go to notes with the user id claim of any authenticated session of the owner.
+Edge SHALL refuse with `403` (`platform.auth.forbidden`), and SHALL NOT forward, a request to `/v1/notes/connections/{id}/changes`, `/v1/notes/connections/{id}/manifest` or a path under `/v1/notes/connections/{id}/blobs` whose credential is not the credential of an active paired device. Notes answers such a request with `401`, which Edge does not relay. The other notes routes SHALL go to notes with the user id claim of an authenticated session of the owner that is not a device.
 
 #### Scenario: The owner's browser session calls the device routes and the read routes
 
 - **WHEN** the owner's browser session sends a change batch, a manifest and each upload request, and then reads the connections, the files, a file at a revision and its index, sets the excluded folders and removes the connection
 - **THEN** Edge answers each device request with `403` and the stub upstream does not receive it, and the stub receives each other request with its method, path and query unchanged, the owner's user id and no device claim, verified by `crates/public-api/tests/notes_device_routes.rs::owner_session_is_refused_on_device_routes`
+
+### Requirement: A device credential reaches only the connect and the device routes of notes
+
+Edge SHALL refuse with `403` (`platform.auth.forbidden`), and SHALL NOT forward, a request of an active paired device to a notes path other than `POST /v1/notes/connections` and the device routes: `GET /v1/notes/connections`, `…/{id}/files`, `…/{id}/files/{path}`, `…/{id}/index/{path}`, `PUT …/{id}/excluded-folders` and `DELETE …/{id}` included. The Obsidian plugin and the export agent call only the connect and the device routes.
+
+#### Scenario: A paired plugin calls the owner routes
+
+- **WHEN** a paired plugin reads the connections, the files, a file at a revision and its index, sets the excluded folders, removes the connection, and then sends a connect
+- **THEN** Edge answers each of the first six with `403` and the stub upstream does not receive them, and the stub receives the connect, verified by `crates/public-api/tests/notes_device_routes.rs::device_credential_is_refused_on_owner_routes`
 
 ### Requirement: Edge does not relay a redirect of a domain service
 
