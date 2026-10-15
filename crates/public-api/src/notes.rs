@@ -41,7 +41,7 @@ const MAX_ANSWER_BYTES: usize = 16_384;
 /// The path of the connect call.
 pub const CONNECT_ROUTE: &str = "/v1/notes/connections";
 
-/// The paths below the notes route that only a paired device calls: the change batch, the manifest
+/// The paths below the notes route that a paired device calls: the change batch, the manifest
 /// and the uploads (workspace spec `notes-device-channels`). Notes answers a request without the
 /// device claims with `401`, which Edge does not relay, so Edge refuses it with `403` first.
 pub(crate) const DEVICE_PATHS: [&str; 3] = [
@@ -50,14 +50,23 @@ pub(crate) const DEVICE_PATHS: [&str; 3] = [
     "/connections/{connection}/blobs",
 ];
 
+/// The device path that the owner's primary session calls too: it uploads the content of a write
+/// there before it sends the write (workspace change `add-notes-write-back`, design D4). Edge does
+/// not decide which connection the session may use; notes checks the owner.
+const SESSION_UPLOAD_PATH: &str = "/connections/{connection}/blobs";
+
 /// Whether the generic proxy refuses a request to `below`, the path below the notes route: a device
-/// route without a device, or another path with a device. A device keeps only the connect, which
-/// is [`connect`] and not the generic proxy, and the device routes; the plugin and the export agent
-/// call nothing else, and a device that reaches the read routes can read every vault of the owner.
+/// route without a device, except an upload, or another path with a device. A device keeps only
+/// the connect, which is [`connect`] and not the generic proxy, and the device routes; the plugin
+/// and the export agent call nothing else, and a device that reaches the read routes can read every
+/// vault of the owner.
 pub(crate) fn refuses(below: &str, device_kind: Option<&str>) -> bool {
     let device_path = DEVICE_PATHS
         .iter()
         .any(|pattern| gateway::is_under(pattern, below));
+    if device_kind.is_none() && gateway::is_under(SESSION_UPLOAD_PATH, below) {
+        return false;
+    }
     device_path != device_kind.is_some()
 }
 

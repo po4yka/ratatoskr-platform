@@ -155,14 +155,9 @@ async fn owner_session_is_refused_on_device_routes() {
             .expect("a request")
     };
 
-    for (method, path) in [
-        (Method::POST, "/changes"),
-        (Method::POST, "/manifest"),
-        (Method::POST, "/blobs"),
-        (Method::PUT, "/blobs/session-1/chunks/0"),
-        (Method::GET, "/blobs/session-1/status"),
-        (Method::POST, "/blobs/session-1/finalize"),
-    ] {
+    // The uploads are not here: the owner's session uploads the content of a write (OBS-024,
+    // notes_routes.rs::session_upload_claim_names_the_session_kind).
+    for (method, path) in [(Method::POST, "/changes"), (Method::POST, "/manifest")] {
         let (status, body) = send(&app, request(method, &format!("{CONNECTION}{path}"))).await;
         assert_eq!(
             status,

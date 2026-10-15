@@ -31,6 +31,10 @@ pub(crate) const MAX_ERROR_ENVELOPE_BYTES: usize = 65_536;
 /// reserved prefix, so a copy that a client sends is removed with every other reserved header.
 const HEADER_DEVICE_KIND: &str = "x-ratatoskr-device-kind";
 
+/// The claim that names the kind of the authenticated session (`browser`, `device`, ...), so that
+/// notes tells the owner's upload from a device upload. Reserved prefix, as above.
+const HEADER_SESSION_KIND: &str = "x-ratatoskr-session-kind";
+
 /// A service-owned document observed through its loopback capability endpoint.
 #[derive(Debug, Clone, serde::Serialize, schemars::JsonSchema)]
 pub struct ServiceCapabilities {
@@ -766,6 +770,7 @@ fn forwarded_headers(headers: &HeaderMap, claims: Claims<'_>) -> HeaderMap {
     if let Some(device_kind) = device_kind {
         insert(&mut forwarded, HEADER_DEVICE_KIND, device_kind);
     }
+    insert(&mut forwarded, HEADER_SESSION_KIND, principal.kind.as_str());
     insert(
         &mut forwarded,
         platform_receipt::HEADER_CORRELATION_ID,
