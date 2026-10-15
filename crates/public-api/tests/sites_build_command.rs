@@ -30,6 +30,8 @@ use serde_json::Value;
 use tokio::net::TcpListener;
 use tower::ServiceExt as _;
 
+mod site_owner_support;
+
 const AUDIENCE: &str = "edge";
 const OWNER: &str = "sites-build-owner-0000000000000000";
 const MEMBER: &str = "sites-build-member-000000000000000";
@@ -240,6 +242,99 @@ async fn anonymous_build_request_writes_no_command() {
         .expect("the operations");
     assert_eq!(operations, 0, "no operation");
     assert_eq!(count.load(Ordering::SeqCst), 0);
+
+    harness.cleanup().await.expect("cleanup");
+}
+
+/// An Edge with `site-a` and `site-b` approved for the owner with `capabilities`, the stub sites
+/// service serving the same active manifests, and a site owner session of `site-a`.
+async fn site_owner_edge(harness: &TestDatabase, capabilities: &[&str]) -> (Router, String) {
+    use site_owner_support as support;
+    let stub = support::Stub::start().await;
+    let owner = support::primary(harness.pool(), support::OWNER, true).await;
+    for (site, hostname) in [
+        (support::SITE, support::HOSTNAME),
+        (support::OTHER_SITE, support::OTHER_HOSTNAME),
+    ] {
+        stub.manifest(site, hostname, capabilities);
+        support::approval(
+            harness.pool(),
+            owner,
+            site,
+            hostname,
+            capabilities,
+            "approved",
+        )
+        .await;
+    }
+    let app = support::app(support::state(harness, stub.address, &[]));
+    let cookie = support::sign_in(&app, support::SITE, support::HOSTNAME).await;
+    (app, cookie)
+}
+
+/// `POST /v1/sites/{site}/releases` from the site's page with the site owner cookie.
+async fn site_build(app: &Router, site: &str, cookie: &str) -> (u16, String) {
+    use site_owner_support as support;
+    let request = support::from_site(
+        "POST",
+        &format!("/v1/sites/{site}/releases"),
+        cookie,
+        true,
+        Some(&format!("https://{}", support::HOSTNAME)),
+        &Value::Null,
+    );
+    support::status_and_code(app, request).await
+}
+
+/// Spec `site-route-classes`, "A site session with notes.edit requests a build".
+#[tokio::test]
+async fn site_owner_with_notes_edit_publishes_one_command() {
+    let harness = TestDatabase::create().await.expect("a test database");
+    let (app, cookie) = site_owner_edge(&harness, &["pages.read", "notes.edit"]).await;
+
+    let answer = site_build(&app, "site-a", &cookie).await;
+    assert_eq!(
+        commands(harness.pool()).await.len(),
+        1,
+        "one build command: {answer:?}"
+    );
+    assert_eq!(answer.0, 202, "{answer:?}");
+
+    harness.cleanup().await.expect("cleanup");
+}
+
+/// Spec `site-route-classes`, "A site session without notes.edit requests a build".
+#[tokio::test]
+async fn site_owner_without_notes_edit_writes_no_command() {
+    let harness = TestDatabase::create().await.expect("a test database");
+    let (app, cookie) = site_owner_edge(&harness, &["pages.read"]).await;
+
+    assert_eq!(
+        site_build(&app, "site-a", &cookie).await,
+        (403, "edge.capability_not_granted".to_owned())
+    );
+    assert!(
+        commands(harness.pool()).await.is_empty(),
+        "a command was written"
+    );
+
+    harness.cleanup().await.expect("cleanup");
+}
+
+/// Spec `site-route-classes`, "A site session of another site requests a build".
+#[tokio::test]
+async fn site_owner_of_another_site_writes_no_command() {
+    let harness = TestDatabase::create().await.expect("a test database");
+    let (app, cookie) = site_owner_edge(&harness, &["pages.read", "notes.edit"]).await;
+
+    assert_eq!(
+        site_build(&app, "site-b", &cookie).await,
+        (401, "platform.auth.unauthenticated".to_owned())
+    );
+    assert!(
+        commands(harness.pool()).await.is_empty(),
+        "a command was written"
+    );
 
     harness.cleanup().await.expect("cleanup");
 }
