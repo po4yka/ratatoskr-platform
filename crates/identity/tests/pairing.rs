@@ -58,6 +58,7 @@ fn new_code(
         user_id,
         created_by_session_id,
         expected_kind,
+        site_id: None,
         label: Some("pixel phone"),
         code_digest,
         now: minted_at,

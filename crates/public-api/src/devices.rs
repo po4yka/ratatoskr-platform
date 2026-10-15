@@ -116,6 +116,7 @@ pub async fn create_pairing_code(
             user_id: principal.user_id,
             created_by_session_id: principal.session_id,
             expected_kind,
+            site_id: None,
             label: request.label.as_deref(),
             code_digest: digest,
             now,

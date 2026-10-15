@@ -1,4 +1,5 @@
-//! Registered devices: a mobile app, a browser extension, the export agent or the Obsidian plugin.
+//! Registered devices: a mobile app, a browser extension, the export agent, the Obsidian plugin or
+//! the deploy command of a site.
 //!
 //! `DOMAIN.md` calls a device "a registered installation with constrained credentials". The
 //! constrained part is why a device has its own row rather than being a session attribute: a device
@@ -21,6 +22,9 @@ pub enum DeviceKind {
     ExportAgent,
     /// The Obsidian plugin, which sends the changes of a vault to `ratatoskr-notes`.
     ObsidianPlugin,
+    /// The deploy command of one site (`ratatoskr-site deploy`). It reaches only the deploy routes
+    /// of the site that its pairing code named.
+    SiteDeployer,
 }
 
 impl DeviceKind {
@@ -32,6 +36,7 @@ impl DeviceKind {
             Self::BrowserExtension => "browser_extension",
             Self::ExportAgent => "export_agent",
             Self::ObsidianPlugin => "obsidian_plugin",
+            Self::SiteDeployer => "site_deployer",
         }
     }
 
@@ -43,6 +48,7 @@ impl DeviceKind {
             "browser_extension" => Some(Self::BrowserExtension),
             "export_agent" => Some(Self::ExportAgent),
             "obsidian_plugin" => Some(Self::ObsidianPlugin),
+            "site_deployer" => Some(Self::SiteDeployer),
             _ => None,
         }
     }
@@ -59,6 +65,8 @@ pub struct Device {
     pub kind: DeviceKind,
     /// A human label the user chose. Never used for authorization.
     pub display_name: Option<String>,
+    /// The one site that a `site_deployer` deploys. `None` for every other kind.
+    pub site_id: Option<String>,
     /// When it was registered.
     pub created_at: jiff::Timestamp,
     /// When it was revoked, if it was.
@@ -113,6 +121,7 @@ where
         user_id,
         kind,
         display_name: display_name.map(str::to_owned),
+        site_id: None,
         created_at: now,
         revoked_at: None,
     })
@@ -153,6 +162,7 @@ where
             display_name: row
                 .try_get("display_name")
                 .map_err(PersistenceError::Query)?,
+            site_id: None,
             created_at: from_offset(row.try_get("created_at").map_err(PersistenceError::Query)?),
             revoked_at: revoked_at.map(from_offset),
         })

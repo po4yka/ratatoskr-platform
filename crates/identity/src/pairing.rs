@@ -60,6 +60,8 @@ pub struct NewPairingCode<'a> {
     pub created_by_session_id: Uuid,
     /// The kind the initiator pinned, when any.
     pub expected_kind: Option<DeviceKind>,
+    /// The one site of a `site_deployer` code. `None` for every other kind.
+    pub site_id: Option<&'a str>,
     /// Their free-text note, already bounded by the caller.
     pub label: Option<&'a str>,
     /// The digest of the minted code.
