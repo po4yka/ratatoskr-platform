@@ -613,6 +613,24 @@ create unique index site_approvals_hostname_is_unique_while_approved
     on identity.site_approvals (hostname)
     where state = 'approved';
 
+-- ---------------------------------------------------------------------------------------------
+-- site_sign_in_codes: the single-use code that opens a site owner session (SITE-027)
+-- ---------------------------------------------------------------------------------------------
+
+create table identity.site_sign_in_codes (
+    code_id               uuid        primary key,
+    code_hash             bytea       not null,
+    user_id               uuid        not null references identity.users (user_id),
+    created_by_session_id uuid        not null references identity.sessions (session_id),
+    site_id               text        not null,
+    challenge             text        not null,
+    return_path           text        not null,
+    hostname              text        not null,
+    created_at            timestamptz not null,
+    expires_at            timestamptz not null,
+    consumed_at           timestamptz
+);
+
 -- =================================================================================================
 -- operations
 -- =================================================================================================

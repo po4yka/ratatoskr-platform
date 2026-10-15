@@ -33,6 +33,7 @@ pub mod pairing;
 pub mod refresh;
 pub mod relay;
 pub mod session;
+pub mod site_sign_in;
 pub mod user;
 
 pub use crate::assertion::{AssertionClaims, AssertionRejected};
