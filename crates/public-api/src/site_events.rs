@@ -10,7 +10,9 @@
 //!
 //! Anonymous connections have a bound per client and a bound per site; the client is the key of
 //! the `public` class (`X-Ratatoskr-Client-IP` from the sites gateway only). The connections of the
-//! site's owner sessions count against neither.
+//! site's owner sessions count against neither, and have their own bound per site. An owner
+//! connection ends when its session ends: at the session's expiry or idle limit, and within one
+//! check after a revocation (revoke-site, a withdrawal of the site).
 
 use std::collections::{HashMap, VecDeque};
 use std::convert::Infallible;
@@ -87,6 +89,7 @@ struct SiteLog {
     events: VecDeque<Stored>,
     anonymous: usize,
     clients: HashMap<String, usize>,
+    owners: usize,
 }
 
 /// The per-site buffers of the site event stream.
@@ -189,11 +192,12 @@ impl SiteEventHub {
         Read::Events(events, log.last)
     }
 
-    /// Count one anonymous connection of `client` on `site`, or refuse it above a bound.
+    /// Count one connection on `site`, or refuse it above a bound: an anonymous connection of
+    /// `client`, or an owner connection when `client` is `None`.
     fn admit(
         self: &Arc<Self>,
         site: &str,
-        client: &str,
+        client: Option<&str>,
         limits: SiteStreamLimits,
     ) -> Option<Admitted> {
         let mut sites = self.sites.lock().unwrap_or_else(PoisonError::into_inner);
@@ -201,25 +205,33 @@ impl SiteEventHub {
             return None;
         }
         let log = sites.entry(site.to_owned()).or_default();
-        let of_client = log.clients.get(client).copied().unwrap_or(0);
-        if log.anonymous >= limits.per_site || of_client >= limits.per_client {
-            return None;
+        if let Some(client) = client {
+            let of_client = log.clients.get(client).copied().unwrap_or(0);
+            if log.anonymous >= limits.per_site || of_client >= limits.per_client {
+                return None;
+            }
+            log.anonymous += 1;
+            log.clients.insert(client.to_owned(), of_client + 1);
+        } else {
+            if log.owners >= limits.per_site_owner {
+                return None;
+            }
+            log.owners += 1;
         }
-        log.anonymous += 1;
-        log.clients.insert(client.to_owned(), of_client + 1);
         Some(Admitted {
             hub: Arc::clone(self),
             site: site.to_owned(),
-            client: client.to_owned(),
+            client: client.map(str::to_owned),
         })
     }
 }
 
-/// One counted anonymous connection; dropping it, when the client goes away, releases the count.
+/// One counted connection; dropping it, when the client goes away or the stream ends, releases
+/// the count. `client` is `None` for an owner connection.
 struct Admitted {
     hub: Arc<SiteEventHub>,
     site: String,
-    client: String,
+    client: Option<String>,
 }
 
 impl Drop for Admitted {
@@ -229,15 +241,56 @@ impl Drop for Admitted {
             .sites
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
-        if let Some(log) = sites.get_mut(&self.site) {
-            log.anonymous = log.anonymous.saturating_sub(1);
-            if let Some(count) = log.clients.get_mut(&self.client) {
-                *count = count.saturating_sub(1);
-                if *count == 0 {
-                    log.clients.remove(&self.client);
-                }
+        let Some(log) = sites.get_mut(&self.site) else {
+            return;
+        };
+        let Some(client) = &self.client else {
+            log.owners = log.owners.saturating_sub(1);
+            return;
+        };
+        log.anonymous = log.anonymous.saturating_sub(1);
+        if let Some(count) = log.clients.get_mut(client) {
+            *count = count.saturating_sub(1);
+            if *count == 0 {
+                log.clients.remove(client);
             }
         }
+    }
+}
+
+/// The site owner session of an owner connection, which the connection checks (review M3).
+#[derive(Debug, Clone)]
+pub(crate) struct OwnerWatch {
+    pub(crate) pool: sqlx::PgPool,
+    /// The digest of the session's cookie.
+    pub(crate) token: platform_identity::SecretDigest,
+    /// The audience of the site.
+    pub(crate) audience: String,
+    /// When the session ends unless it is used again: its idle limit or its expiry.
+    pub(crate) ends_at: jiff::Timestamp,
+}
+
+impl OwnerWatch {
+    /// Whether the session is still live: before its end, and not revoked. A failed read ends the
+    /// connection; the client opens a new one.
+    async fn live(&self) -> bool {
+        let now = jiff::Timestamp::now();
+        if now >= self.ends_at {
+            return false;
+        }
+        matches!(
+            platform_identity::session::authenticate(&self.pool, self.token, &self.audience, now)
+                .await,
+            Ok(Some(session)) if session.kind == platform_identity::SessionKind::SiteOwner
+        )
+    }
+
+    /// How long to wait for the next check: `every`, or less when the session ends sooner.
+    fn pause(&self, every: Duration) -> Duration {
+        let left = self.ends_at.duration_since(jiff::Timestamp::now());
+        Duration::try_from(left)
+            .unwrap_or(Duration::ZERO)
+            .min(every)
     }
 }
 
@@ -245,7 +298,7 @@ impl Drop for Admitted {
 /// owner session of the site, else `client` is the client key of the anonymous connection.
 pub(crate) struct Connection<'a> {
     pub(crate) site: &'a str,
-    pub(crate) owner: bool,
+    pub(crate) owner: Option<OwnerWatch>,
     pub(crate) client: &'a str,
     pub(crate) last_event_id: Option<&'a str>,
 }
@@ -257,18 +310,16 @@ pub(crate) fn stream(
     limits: SiteStreamLimits,
     connection: &Connection<'_>,
 ) -> Response {
-    let admitted = if connection.owner {
-        None
-    } else {
-        match hub.admit(connection.site, connection.client, limits) {
-            Some(admitted) => Some(admitted),
-            None => return platform_http::reject(FailureKind::Overloaded),
-        }
+    let client = connection.owner.is_none().then_some(connection.client);
+    let Some(admitted) = hub.admit(connection.site, client, limits) else {
+        return platform_http::reject(FailureKind::Overloaded);
     };
     let mut reader = Reader {
         hub: Arc::clone(hub),
         site: connection.site.to_owned(),
-        owner: connection.owner,
+        owner: connection.owner.is_some(),
+        watch: connection.owner.clone(),
+        check_every: limits.owner_check,
         wake: hub.wake.subscribe(),
         pending: VecDeque::new(),
         cursor: 0,
@@ -295,10 +346,12 @@ struct Reader {
     hub: Arc<SiteEventHub>,
     site: String,
     owner: bool,
+    watch: Option<OwnerWatch>,
+    check_every: Duration,
     wake: broadcast::Receiver<String>,
     pending: VecDeque<Event>,
     cursor: u64,
-    _admitted: Option<Admitted>,
+    _admitted: Admitted,
 }
 
 impl Reader {
@@ -312,7 +365,27 @@ impl Reader {
                 if !reader.pending.is_empty() {
                     continue;
                 }
-                match reader.wake.recv().await {
+                let woken = match reader
+                    .watch
+                    .as_ref()
+                    .map(|watch| watch.pause(reader.check_every))
+                {
+                    None => reader.wake.recv().await,
+                    Some(pause) => tokio::select! {
+                        woken = reader.wake.recv() => woken,
+                        () = tokio::time::sleep(pause) => {
+                            let live = match &reader.watch {
+                                Some(watch) => watch.live().await,
+                                None => true,
+                            };
+                            if !live {
+                                return None;
+                            }
+                            continue;
+                        }
+                    },
+                };
+                match woken {
                     Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) => {}
                     Err(broadcast::error::RecvError::Closed) => return None,
                 }

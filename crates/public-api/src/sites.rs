@@ -447,8 +447,8 @@ async fn site_origin(
             Ok(false) => return site_sessions::site_not_found(context),
             Err(refusal) => return platform_http::reject(refusal),
         }
-        let owner = match site_sessions::site_owner(state, &parts, site).await {
-            Ok(principal) => principal.is_some(),
+        let owner = match site_sessions::site_owner_watch(state, &parts, site).await {
+            Ok(watch) => watch,
             Err(refusal) => return refusal,
         };
         let client = client_key(state, &parts);

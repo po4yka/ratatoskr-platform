@@ -388,6 +388,42 @@ pub(crate) async fn site_owner(
     }))
 }
 
+/// The site owner session of a request to the site's event stream, with what the stream needs to
+/// end with the session (review M3): `None` when the request carries no such session.
+///
+/// # Errors
+///
+/// The refusal response of [`site_owner`], or a timeout when the database cannot answer.
+pub(crate) async fn site_owner_watch(
+    state: &Arc<ApiState>,
+    parts: &http::request::Parts,
+    site: &str,
+) -> Result<Option<crate::site_events::OwnerWatch>, Response> {
+    let Some(principal) = site_owner(state, parts, site).await? else {
+        return Ok(None);
+    };
+    let Some(token) = cookie(&parts.headers) else {
+        return Ok(None);
+    };
+    // Read after the liveness touch of `site_owner`, so the idle limit counts from this use.
+    let found = session::find_session(state.database.pool(), principal.session_id)
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, "a site session could not be read");
+            platform_http::reject(FailureKind::RequestTimeout)
+        })?;
+    let Some(found) = found else {
+        return Ok(None);
+    };
+    let used = found.last_seen_at.unwrap_or(found.issued_at);
+    Ok(Some(crate::site_events::OwnerWatch {
+        pool: state.database.pool().clone(),
+        token: SecretDigest::of(token),
+        audience: site_audience(site),
+        ends_at: found.expires_at.min(used + session::SITE_OWNER_IDLE),
+    }))
+}
+
 /// What `POST /v1/sessions/revoke-site` takes.
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
