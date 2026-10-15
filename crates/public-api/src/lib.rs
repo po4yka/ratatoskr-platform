@@ -41,6 +41,7 @@ pub mod gateway;
 mod intake;
 pub mod library;
 pub mod notes;
+pub mod notes_writes;
 pub mod oauth;
 pub mod operations;
 pub mod sessions;
@@ -406,6 +407,26 @@ pub fn routes(state: Arc<ApiState>) -> Router {
                         .fallback(gateway::proxy)
                         .layer(RequestBodyLimitLayer::new(limit)),
                 )
+                // The write routes are Edge's own handlers in the `control` budget; their other
+                // methods are proxied.
+                .route(
+                    notes_writes::WRITES_PATH,
+                    post(notes_writes::write)
+                        .fallback(gateway::proxy)
+                        .layer(RequestBodyLimitLayer::new(limit)),
+                )
+                .route(
+                    notes_writes::RESOLUTION_PATH,
+                    post(notes_writes::resolve)
+                        .fallback(gateway::proxy)
+                        .layer(RequestBodyLimitLayer::new(limit)),
+                )
+                .route(
+                    notes_writes::WRITE_MODE_PATH,
+                    put(notes_writes::set_write_mode)
+                        .fallback(gateway::proxy)
+                        .layer(RequestBodyLimitLayer::new(limit)),
+                )
         }
         None => router,
     };
@@ -414,16 +435,22 @@ pub fn routes(state: Arc<ApiState>) -> Router {
 
 /// This listener's half of the generated `OpenAPI` document.
 ///
-/// The notes connect is described beside the table: [`routes`] serves it only when the deployment
-/// routes the notes service, with the body budget of that route, which the static table cannot
-/// carry. Test P-8 sends a request to it with a notes route configured.
+/// The notes connect and the three notes write routes are described beside the table: [`routes`]
+/// serves them only when the deployment routes the notes service, with the body budget of that
+/// route, which the static table cannot carry. Test P-8 sends a request to the connect with a notes
+/// route configured, and `tests/notes_writes.rs` to the write routes.
 #[must_use]
 pub fn surface() -> ApiSurface {
     ApiSurface {
         routes: table()
             .into_iter()
             .map(|endpoint| endpoint.doc)
-            .chain([notes::CONNECT_DOC])
+            .chain([
+                notes::CONNECT_DOC,
+                notes_writes::WRITES_DOC,
+                notes_writes::RESOLUTION_DOC,
+                notes_writes::WRITE_MODE_DOC,
+            ])
             .collect(),
         register: register_schemas,
     }
@@ -465,6 +492,10 @@ fn register_schemas(generator: &mut schemars::SchemaGenerator) {
     generator.subschema_for::<operations::OperationList>();
     generator.subschema_for::<notes::ConnectRequest>();
     generator.subschema_for::<notes::ConnectAccepted>();
+    generator.subschema_for::<notes_writes::WriteRequest>();
+    generator.subschema_for::<notes_writes::ResolutionRequest>();
+    generator.subschema_for::<notes_writes::WriteModeRequest>();
+    generator.subschema_for::<notes_writes::WriteAccepted>();
     generator.subschema_for::<channel_digests::SetSubscription>();
     generator.subschema_for::<channel_digests::RequestRun>();
     generator.subschema_for::<channel_digests::ChannelDigestAccepted>();

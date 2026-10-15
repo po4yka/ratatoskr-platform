@@ -154,7 +154,7 @@ pub async fn set_subscription(
         key: &key,
         fingerprint: &fingerprint,
         correlation: &correlation,
-        reporter: CHANNEL_DIGESTS_PRODUCER,
+        reporter: Some(CHANNEL_DIGESTS_PRODUCER),
     };
     accept(&state, principal, &intake, accepted, |operation, now| {
         let operation_id = OperationId(operation.operation_id);
@@ -204,7 +204,7 @@ pub async fn request_run(
         key: &key,
         fingerprint: &body,
         correlation: &correlation,
-        reporter: CHANNEL_DIGESTS_PRODUCER,
+        reporter: Some(CHANNEL_DIGESTS_PRODUCER),
     };
     accept(&state, principal, &intake, accepted, |operation, now| {
         let operation_id = OperationId(operation.operation_id);

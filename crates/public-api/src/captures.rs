@@ -123,7 +123,7 @@ pub async fn submit(
         key: &key,
         fingerprint: &body,
         correlation: &correlation,
-        reporter: capture_reporter(&submit),
+        reporter: Some(capture_reporter(&submit)),
     };
     accept(&state, principal, &intake, accepted, |operation, now| {
         prepare_url(operation, &principal, &intake, now, &submit)
@@ -172,7 +172,7 @@ pub async fn submit_blob(
         key: &key,
         fingerprint: &body,
         correlation: &correlation,
-        reporter: EXTRACTOR_PRODUCER,
+        reporter: Some(EXTRACTOR_PRODUCER),
     };
     accept(&state, principal, &intake, accepted, |operation, now| {
         let command_id = Uuid::now_v7();

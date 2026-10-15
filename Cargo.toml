@@ -66,6 +66,7 @@ ratatoskr-blob-transfer-contracts = { git = "https://github.com/po4yka/ratatoskr
 ratatoskr-ai-archive-contracts = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "75e954fb1af6b9d0f7b30383c7a993c64d01e2c9" }
 ratatoskr-document-contracts = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "75e954fb1af6b9d0f7b30383c7a993c64d01e2c9" }
 ratatoskr-channel-digest-contracts = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "75e954fb1af6b9d0f7b30383c7a993c64d01e2c9" }
+ratatoskr-notes-contracts = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "75e954fb1af6b9d0f7b30383c7a993c64d01e2c9" }
 
 # ---- persistence ----
 # No `migrate` feature: the schema is one file, `include_str!`d into the binary by

@@ -492,7 +492,7 @@ async fn two_concurrent_failures_record_one_transition_and_one_error() {
 }
 
 /// Apply `failed` and, when that advanced the operation, record its error: the pattern of
-/// `fail_notes_connect` and `fail_ai_archive_delivery`, inside the caller's transaction.
+/// `fail_notes_forward` and `fail_ai_archive_delivery`, inside the caller's transaction.
 async fn fail_once(transaction: &mut sqlx::PgTransaction<'_>, operation_id: Uuid) -> Transition {
     let (outcome, _) = platform_operations::record_status(
         transaction,

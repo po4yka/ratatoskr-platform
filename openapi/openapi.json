@@ -690,6 +690,25 @@
         ],
         "type": "object"
       },
+      "CreateFile": {
+        "additionalProperties": false,
+        "description": "`create`: add a file at a path that no live file holds.",
+        "properties": {
+          "blob": {
+            "$ref": "#/components/schemas/BlobRef",
+            "description": "The content of the new file, uploaded first to `ratatoskr-notes`."
+          },
+          "path": {
+            "$ref": "#/components/schemas/VaultWritePath",
+            "description": "The path of the new file, relative to the vault root, in NFC."
+          }
+        },
+        "required": [
+          "path",
+          "blob"
+        ],
+        "type": "object"
+      },
       "CreatePairingCode": {
         "description": "What creating a pairing code may ask for.",
         "properties": {
@@ -708,6 +727,25 @@
             ]
           }
         },
+        "type": "object"
+      },
+      "DeleteFile": {
+        "additionalProperties": false,
+        "description": "`delete`: move a file to the vault trash.",
+        "properties": {
+          "base_hash": {
+            "$ref": "#/components/schemas/DigestHex",
+            "description": "The lowercase hex SHA-256 of the revision that the writer read."
+          },
+          "path": {
+            "$ref": "#/components/schemas/VaultWritePath",
+            "description": "The path of the file, relative to the vault root, in NFC."
+          }
+        },
+        "required": [
+          "path",
+          "base_hash"
+        ],
         "type": "object"
       },
       "DeviceList": {
@@ -1075,6 +1113,16 @@
         ],
         "type": "object"
       },
+      "NotesConflictId": {
+        "description": "Identity of one conflict of a connected vault. Bare canonical lowercase hyphenated UUID; not namespaced.",
+        "examples": [
+          "018f0000-0000-7000-8000-000000000001"
+        ],
+        "format": "uuid",
+        "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+        "title": "NotesConflictId",
+        "type": "string"
+      },
       "NotesConnectAccepted": {
         "description": "What a client gets back from a connect that the notes service accepted.",
         "properties": {
@@ -1101,6 +1149,94 @@
       "NotesConnectRequest": {
         "additionalProperties": true,
         "description": "The body of a connect. The notes service owns its members, and Edge sends it to the notes service\nunread.",
+        "type": "object"
+      },
+      "NotesConnectionId": {
+        "description": "Identity of one vault connection of ratatoskr-notes. Bare canonical lowercase hyphenated UUID; not namespaced.",
+        "examples": [
+          "018f0000-0000-7000-8000-000000000001"
+        ],
+        "format": "uuid",
+        "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+        "title": "NotesConnectionId",
+        "type": "string"
+      },
+      "NotesResolutionRequest": {
+        "additionalProperties": false,
+        "description": "What a client submits to end an open conflict.",
+        "properties": {
+          "blob": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BlobRef"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The content to write, uploaded first to notes. Present exactly when `choice` is `custom`."
+          },
+          "choice": {
+            "$ref": "#/components/schemas/ResolutionChoice",
+            "description": "How the owner resolves the conflict."
+          },
+          "connection_id": {
+            "$ref": "#/components/schemas/NotesConnectionId",
+            "description": "The connection whose vault holds the file of the conflict, as\n`GET /v1/notes/conflicts/{conflict_id}` names it. Edge holds no notes data; notes refuses a\nconnection that does not hold the conflict."
+          }
+        },
+        "required": [
+          "connection_id",
+          "choice"
+        ],
+        "type": "object"
+      },
+      "NotesWriteAccepted": {
+        "description": "What a client gets back from the three routes: an operation to poll, never a result.",
+        "properties": {
+          "operation_id": {
+            "description": "The operation to poll at `/v1/operations/{id}`.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "status": {
+            "description": "Always `accepted` here.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation_id",
+          "status"
+        ],
+        "type": "object"
+      },
+      "NotesWriteModeRequest": {
+        "additionalProperties": false,
+        "description": "What a client submits to turn write mode on or off. Notes owns the member; Edge checks it so\nthat it mints no operation for a body that notes cannot take.",
+        "properties": {
+          "write_mode": {
+            "$ref": "#/components/schemas/WriteMode",
+            "description": "The mode to set."
+          }
+        },
+        "required": [
+          "write_mode"
+        ],
+        "type": "object"
+      },
+      "NotesWriteRequest": {
+        "additionalProperties": false,
+        "description": "What a client submits to change one file of a connected vault.",
+        "properties": {
+          "operation": {
+            "$ref": "#/components/schemas/WriteOperation",
+            "description": "The one change: an object with one member, whose name is the operation kind (`create`,\n`update`, `rename`, `move`, `delete`, `set_property` or `resolve_conflict`)."
+          }
+        },
+        "required": [
+          "operation"
+        ],
         "type": "object"
       },
       "OpenDeviceSession": {
@@ -1662,6 +1798,56 @@
         "title": "ProgressPercent",
         "type": "integer"
       },
+      "PropertyChange": {
+        "description": "What a `set_property` operation does to its property. A frontmatter value is note content, so the caller uploads it as one JSON document (`application/json`) to ratatoskr-notes first, and `set` names the resulting BlobRef.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "description": "Set the property to the uploaded JSON value, and add the property when the file has none.",
+            "properties": {
+              "set": {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/BlobRef"
+                  },
+                  {
+                    "properties": {
+                      "media_type": {
+                        "const": "application/json",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "media_type"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "set"
+            ],
+            "type": "object"
+          },
+          {
+            "const": "remove",
+            "description": "Remove the property from the frontmatter.",
+            "type": "string"
+          }
+        ]
+      },
+      "PropertyKey": {
+        "description": "The name of one frontmatter property of a Markdown file, as the owner wrote it.\n\n1 to 255 characters with no C0 or DEL control character. The pattern carries the\n255-character bound; the length guard is 1020 UTF-8 bytes, the most 255 characters can\ntake.",
+        "examples": [
+          "tags",
+          "status"
+        ],
+        "maxLength": 1020,
+        "pattern": "^[^\\x00-\\x1f\\x7f]{1,255}$",
+        "title": "PropertyKey",
+        "type": "string"
+      },
       "PublicComponentId": {
         "description": "A stable public component group that reveals no private topology.",
         "oneOf": [
@@ -1870,6 +2056,30 @@
         ],
         "type": "object"
       },
+      "RelocateFile": {
+        "additionalProperties": false,
+        "description": "`rename` and `move`: give a file a new path. Links to the file are rewritten.",
+        "properties": {
+          "base_hash": {
+            "$ref": "#/components/schemas/DigestHex",
+            "description": "The lowercase hex SHA-256 of the revision that the writer read."
+          },
+          "path": {
+            "$ref": "#/components/schemas/VaultWritePath",
+            "description": "The path of the file before the operation, relative to the vault root, in NFC."
+          },
+          "target_path": {
+            "$ref": "#/components/schemas/VaultWritePath",
+            "description": "The path of the file after the operation, relative to the vault root, in NFC."
+          }
+        },
+        "required": [
+          "path",
+          "base_hash",
+          "target_path"
+        ],
+        "type": "object"
+      },
       "ReplaceReadState": {
         "additionalProperties": false,
         "description": "The complete read-state resource accepted by `PUT`.",
@@ -1897,6 +2107,80 @@
           "output_language"
         ],
         "type": "object"
+      },
+      "ResolutionChoice": {
+        "description": "How the owner resolves a conflict.\n\n**Closed on purpose**: each choice selects different bytes, and an unknown choice must stop\nthe write instead of being read as one of them.",
+        "oneOf": [
+          {
+            "const": "keep_current",
+            "description": "Keep the current revision of the vault.",
+            "type": "string"
+          },
+          {
+            "const": "keep_writer",
+            "description": "Write the writer's content of the conflict.",
+            "type": "string"
+          },
+          {
+            "const": "accept_merge",
+            "description": "Write the merge proposal of the conflict. Notes refuses it for a conflict without one.",
+            "type": "string"
+          },
+          {
+            "const": "custom",
+            "description": "Write content that the owner uploaded for this resolution, named by `blob`.",
+            "type": "string"
+          }
+        ]
+      },
+      "ResolveConflict": {
+        "description": "`resolve_conflict`: end an open conflict with one choice. `blob` is present exactly when `choice` is `custom`. There is no `base_hash`: ratatoskr-notes checks the resolution against the current revision that the conflict recorded.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "description": "Keep the current revision, write the writer's content, or write the merge proposal.",
+            "properties": {
+              "choice": {
+                "enum": [
+                  "keep_current",
+                  "keep_writer",
+                  "accept_merge"
+                ],
+                "type": "string"
+              },
+              "conflict_id": {
+                "$ref": "#/components/schemas/NotesConflictId"
+              }
+            },
+            "required": [
+              "conflict_id",
+              "choice"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "Write content that the owner uploaded for this resolution.",
+            "properties": {
+              "blob": {
+                "$ref": "#/components/schemas/BlobRef"
+              },
+              "choice": {
+                "const": "custom",
+                "type": "string"
+              },
+              "conflict_id": {
+                "$ref": "#/components/schemas/NotesConflictId"
+              }
+            },
+            "required": [
+              "conflict_id",
+              "choice",
+              "blob"
+            ],
+            "type": "object"
+          }
+        ]
       },
       "RevokedAll": {
         "description": "What revoke-all answers.",
@@ -2232,6 +2516,35 @@
         ],
         "type": "object"
       },
+      "SetFileProperty": {
+        "additionalProperties": false,
+        "description": "`set_property`: set or remove one frontmatter property of a Markdown file.",
+        "properties": {
+          "base_hash": {
+            "$ref": "#/components/schemas/DigestHex",
+            "description": "The lowercase hex SHA-256 of the revision that the writer read."
+          },
+          "path": {
+            "$ref": "#/components/schemas/VaultWritePath",
+            "description": "The path of the file, relative to the vault root, in NFC."
+          },
+          "property_change": {
+            "$ref": "#/components/schemas/PropertyChange",
+            "description": "`{\"set\": <BlobRef of an application/json value>}` to set the property, or `\"remove\"` to\nremove it."
+          },
+          "property_key": {
+            "$ref": "#/components/schemas/PropertyKey",
+            "description": "The frontmatter property to change."
+          }
+        },
+        "required": [
+          "path",
+          "base_hash",
+          "property_key",
+          "property_change"
+        ],
+        "type": "object"
+      },
       "SetSubscription": {
         "additionalProperties": false,
         "description": "What a client submits to set a subscription's state.",
@@ -2384,6 +2697,30 @@
         "pattern": "^[0-9a-f]{32}$",
         "title": "TraceId",
         "type": "string"
+      },
+      "UpdateFile": {
+        "additionalProperties": false,
+        "description": "`update`: replace the bytes of a file.",
+        "properties": {
+          "base_hash": {
+            "$ref": "#/components/schemas/DigestHex",
+            "description": "The lowercase hex SHA-256 of the revision that the writer read and changed."
+          },
+          "blob": {
+            "$ref": "#/components/schemas/BlobRef",
+            "description": "The new content of the file, uploaded first to `ratatoskr-notes`."
+          },
+          "path": {
+            "$ref": "#/components/schemas/VaultWritePath",
+            "description": "The path of the file, relative to the vault root, in NFC."
+          }
+        },
+        "required": [
+          "path",
+          "base_hash",
+          "blob"
+        ],
+        "type": "object"
       },
       "UploadChunkReceipt": {
         "additionalProperties": true,
@@ -2629,6 +2966,17 @@
         "title": "UserId",
         "type": "string"
       },
+      "VaultWritePath": {
+        "description": "A path that a write may change: a [`crate::VaultPath`] whose first segment is not\n`.obsidian` in any ASCII case.\n\nNot empty, at most 1024 UTF-8 bytes, segments separated by `/`, no leading or trailing\n`/`, no empty, `.` or `..` segment, no backslash and no C0 or DEL control character, so a\npath can never name a file outside the vault. `.obsidian/` is the vault configuration, and\nRatatoskr never writes it; a case-insensitive file system maps `.OBSIDIAN/` to the same\nfolder, so every case is refused. The pattern spells the first segment without\nlook-ahead: any segment, except one that starts with `.o` and continues with exactly\n`bsidian`.\n\nThe path is in Unicode NFC. This contract does not check NFC: the producer normalises\nevery path before it sends one.",
+        "examples": [
+          "Projects/Plan.md",
+          "Archive/2026/Plan.md"
+        ],
+        "maxLength": 1024,
+        "pattern": "^(?:[^./\\\\\\x00-\\x1f\\x7f][^/\\\\\\x00-\\x1f\\x7f]*|\\.[^./oO\\\\\\x00-\\x1f\\x7f][^/\\\\\\x00-\\x1f\\x7f]*|\\.[oO](?:|[^bB/\\\\\\x00-\\x1f\\x7f][^/\\\\\\x00-\\x1f\\x7f]*|[bB](?:|[^sS/\\\\\\x00-\\x1f\\x7f][^/\\\\\\x00-\\x1f\\x7f]*|[sS](?:|[^iI/\\\\\\x00-\\x1f\\x7f][^/\\\\\\x00-\\x1f\\x7f]*|[iI](?:|[^dD/\\\\\\x00-\\x1f\\x7f][^/\\\\\\x00-\\x1f\\x7f]*|[dD](?:|[^iI/\\\\\\x00-\\x1f\\x7f][^/\\\\\\x00-\\x1f\\x7f]*|[iI](?:|[^aA/\\\\\\x00-\\x1f\\x7f][^/\\\\\\x00-\\x1f\\x7f]*|[aA](?:|[^nN/\\\\\\x00-\\x1f\\x7f][^/\\\\\\x00-\\x1f\\x7f]*|[nN][^/\\\\\\x00-\\x1f\\x7f]+)))))))|\\.\\.[^/\\\\\\x00-\\x1f\\x7f][^/\\\\\\x00-\\x1f\\x7f]*)(?:/(?:[^./\\\\\\x00-\\x1f\\x7f]|\\.[^./\\\\\\x00-\\x1f\\x7f]|\\.\\.[^/\\\\\\x00-\\x1f\\x7f])[^/\\\\\\x00-\\x1f\\x7f]*)*$",
+        "title": "VaultWritePath",
+        "type": "string"
+      },
       "WarningEnvelope": {
         "additionalProperties": true,
         "description": "A non-terminal problem that did not prevent the recorded outcome.\n\nA distinct type, not a flag on [`ErrorEnvelope`]: `ARCHITECTURE.md` S5.5 requires\n\"partial-success warnings are distinct from terminal errors\", and a shared type with a\nseverity field would let a producer emit a \"warning\" that consumers treat as fatal.",
@@ -2682,6 +3030,117 @@
         "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,9})?Z$",
         "title": "WireTimestamp",
         "type": "string"
+      },
+      "WriteMode": {
+        "description": "Whether Ratatoskr may write the vault of a connection.",
+        "oneOf": [
+          {
+            "const": "on",
+            "description": "Writes are delivered.",
+            "type": "string"
+          },
+          {
+            "const": "off",
+            "description": "Writes are refused, and every write not yet delivered fails.",
+            "type": "string"
+          }
+        ]
+      },
+      "WriteOperation": {
+        "description": "The one change that a write asks for. On the wire it is an object with exactly one member,\nwhose name is the operation kind.\n\n**Closed on purpose**: a consumer that does not know an operation must refuse the write rather\nthan guess what it changes.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "description": "Add a file.",
+            "properties": {
+              "create": {
+                "$ref": "#/components/schemas/CreateFile"
+              }
+            },
+            "required": [
+              "create"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "Replace the bytes of a file.",
+            "properties": {
+              "update": {
+                "$ref": "#/components/schemas/UpdateFile"
+              }
+            },
+            "required": [
+              "update"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "Give a file a new name.",
+            "properties": {
+              "rename": {
+                "$ref": "#/components/schemas/RelocateFile"
+              }
+            },
+            "required": [
+              "rename"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "Give a file a new folder.",
+            "properties": {
+              "move": {
+                "$ref": "#/components/schemas/RelocateFile"
+              }
+            },
+            "required": [
+              "move"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "Move a file to the vault trash.",
+            "properties": {
+              "delete": {
+                "$ref": "#/components/schemas/DeleteFile"
+              }
+            },
+            "required": [
+              "delete"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "Set or remove one frontmatter property.",
+            "properties": {
+              "set_property": {
+                "$ref": "#/components/schemas/SetFileProperty"
+              }
+            },
+            "required": [
+              "set_property"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "End an open conflict.",
+            "properties": {
+              "resolve_conflict": {
+                "$ref": "#/components/schemas/ResolveConflict"
+              }
+            },
+            "required": [
+              "resolve_conflict"
+            ],
+            "type": "object"
+          }
+        ]
       }
     },
     "securitySchemes": {
@@ -4931,6 +5390,134 @@
         ]
       }
     },
+    "/v1/notes/conflicts/{conflict_id}/resolution": {
+      "post": {
+        "description": "Accepts the resolution of one open conflict durably and returns the operation of kind `notes.file.write` that tracks it. A resolution is one more write, `resolve_conflict`: it waits in the queue of its file and is checked like any other write. `choice` is `keep_current`, `keep_writer`, `accept_merge` (only for a conflict with a merge proposal) or `custom`, which names content uploaded first to `/v1/notes/connections/{connection_id}/blobs` in `blob`.\n\nThe body names the connection of the conflict, as `GET /v1/notes/conflicts/{conflict_id}` gives it, because Edge holds no notes data. The notes service fails the operation with `notes.connection.not_found` when the caller does not own the connection or the connection does not hold the conflict.\n\n`Idempotency-Key` is required, as on the write route.",
+        "operationId": "resolveNotesConflict",
+        "parameters": [
+          {
+            "description": "The open conflict.",
+            "in": "path",
+            "name": "conflict_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "A client-chosen key, 1 to 255 characters, unique per distinct request. It is hashed before it is stored, so it may carry meaning the client considers private.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NotesResolutionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotesWriteAccepted"
+                }
+              }
+            },
+            "description": "Accepted durably. The body carries the operation to poll."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No `Idempotency-Key`, an id in the path that is not a UUID, or a body that fails `notes/write-request.v1`. The `code` in the envelope distinguishes them."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No credential, or one that does not authenticate here."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "A device credential. A device calls only the device routes of notes."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The key is in use for a different request, or an earlier attempt with it has not finished."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The body is larger than the `control` budget of the notes route."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "This caller has spent its request allowance."
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "A dependency did not answer in time. Nothing was written; retrying with the same key is safe."
+          }
+        },
+        "security": [
+          {
+            "sessionBearer": []
+          }
+        ],
+        "summary": "Resolve a conflict of a connected vault",
+        "tags": [
+          "notes"
+        ]
+      }
+    },
     "/v1/notes/connections": {
       "post": {
         "description": "Starts the connection of one Obsidian vault to the notes service. Edge records an operation of kind `notes.connection.connect`, sends the body to the notes service unchanged with the operation id, and keeps no part of the body: the body holds the Obsidian password, the MFA code and the end-to-end password, so Edge does not store, audit or log it. The notes service owns the members of the body and reports the phases of the connection on the operation; poll `GET /v1/operations/{operation_id}`.\n\nThere is no `Idempotency-Key`: the ledger would keep a digest of the body. The notes service refuses a second connect of one vault. When the notes service does not take the connect, Edge terminates the operation as `failed` with the code of the failure before it answers.\n\nEdge serves this route only when the deployment routes the notes service. The body budget is the `control` budget of that route.",
@@ -5043,6 +5630,292 @@
           }
         ],
         "summary": "Connect an Obsidian vault",
+        "tags": [
+          "notes"
+        ]
+      }
+    },
+    "/v1/notes/connections/{connection_id}/write-mode": {
+      "put": {
+        "description": "Every connection starts with write mode off. Edge records an operation of kind `notes.connection.write_mode` and sends the request to the notes service with the operation id; the notes service reports the operation, because a `sync` connection must reconfigure its client before the mode is true. Turning write mode off fails every write that was not delivered yet.\n\nWhen the notes service does not take the request, Edge terminates the operation as `failed` with the code of the failure before it answers. `Idempotency-Key` is required: the same key and body return the ORIGINAL operation and are not sent to the notes service again.",
+        "operationId": "setNotesWriteMode",
+        "parameters": [
+          {
+            "description": "The vault connection.",
+            "in": "path",
+            "name": "connection_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "A client-chosen key, 1 to 255 characters, unique per distinct request. It is hashed before it is stored, so it may carry meaning the client considers private.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NotesWriteModeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotesWriteAccepted"
+                }
+              }
+            },
+            "description": "The notes service took the request. The body carries the operation to poll."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No `Idempotency-Key`, a connection id that is not a UUID, or a body other than `{\"write_mode\":\"on\"}` or `{\"write_mode\":\"off\"}`. Or the notes service refused the request, with its own code; the operation is then `failed`."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No credential, or one that does not authenticate here."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "A device credential. A device calls only the device routes of notes."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The notes service does not know the connection for this caller (`notes.connection.not_found`). The operation is `failed`."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The key is in use for a different request."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The body is larger than the `control` budget of the notes route."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "This caller has spent its request allowance."
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The notes service gave an answer that Edge cannot use. The operation is `failed`."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The notes service could not be reached. The operation is `failed`."
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The notes service did not answer within the `control` budget, or a dependency of Edge did not answer in time."
+          }
+        },
+        "security": [
+          {
+            "sessionBearer": []
+          }
+        ],
+        "summary": "Turn write-back on or off for a connected vault",
+        "tags": [
+          "notes"
+        ]
+      }
+    },
+    "/v1/notes/connections/{connection_id}/writes": {
+      "post": {
+        "description": "Accepts one change of one file durably and returns the operation of kind `notes.file.write` that tracks it; the notes service reports the outcome on the operation. The body names exactly one operation of the contract `notes/write-request.v1`: `create`, `update`, `rename`, `move`, `delete`, `set_property` or `resolve_conflict`. Every operation on an existing file names the `base_hash` that the writer read, and a write on an older revision ends as a conflict, never as an overwrite.\n\nContent never travels in this request. Upload the bytes first to `/v1/notes/connections/{connection_id}/blobs`, and name the resulting `BlobRef` (owner `ratatoskr-notes`); a frontmatter value is uploaded as one `application/json` document. Edge sets `origin` to `platform`. Edge holds no notes data: the notes service fails the operation with `notes.connection.not_found` for a connection that the caller does not own, and with `notes.write.disabled` while the write mode of the connection is off.\n\n`Idempotency-Key` is required. The same key and body return the ORIGINAL operation; the same key with another body or another connection is refused.",
+        "operationId": "writeNotesFile",
+        "parameters": [
+          {
+            "description": "The vault connection.",
+            "in": "path",
+            "name": "connection_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "A client-chosen key, 1 to 255 characters, unique per distinct request. It is hashed before it is stored, so it may carry meaning the client considers private.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NotesWriteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotesWriteAccepted"
+                }
+              }
+            },
+            "description": "Accepted durably. The body carries the operation to poll."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No `Idempotency-Key`, an id in the path that is not a UUID, or a body that fails `notes/write-request.v1`. The `code` in the envelope distinguishes them."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No credential, or one that does not authenticate here."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "A device credential. A device calls only the device routes of notes."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The key is in use for a different request, or an earlier attempt with it has not finished."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The body is larger than the `control` budget of the notes route."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "This caller has spent its request allowance."
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "A dependency did not answer in time. Nothing was written; retrying with the same key is safe."
+          }
+        },
+        "security": [
+          {
+            "sessionBearer": []
+          }
+        ],
+        "summary": "Change one file of a connected vault",
         "tags": [
           "notes"
         ]

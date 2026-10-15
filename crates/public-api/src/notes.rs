@@ -163,16 +163,37 @@ Edge serves this route only when the deployment routes the notes service. The bo
     ],
 };
 
+/// A notes request for which Edge mints the operation before it forwards the request: what the
+/// operation records when the forward fails, and what the client gets when notes takes it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Forward {
+    /// `POST /v1/notes/connections`. Notes answers `202` with the connection.
+    Connect,
+    /// `PUT /v1/notes/connections/{id}/write-mode`. Notes answers with any success status.
+    WriteMode,
+}
+
+impl Forward {
+    /// The stage that a failed forward records on the operation.
+    const fn stage(self) -> &'static str {
+        match self {
+            Self::Connect => "connect",
+            Self::WriteMode => "write_mode",
+        }
+    }
+
+    /// The fixed message that a failed forward records. The answer of notes can name the vault or
+    /// the account, and the failure can also be the client's body or Edge's own refusal, so the
+    /// message is neutral.
+    const fn message(self) -> &'static str {
+        match self {
+            Self::Connect => "The connect did not complete.",
+            Self::WriteMode => "The write-mode change did not complete.",
+        }
+    }
+}
+
 /// `POST /v1/notes/connections`.
-///
-/// When the forward fails after the operation is minted, the operation is terminated as `failed`
-/// before Edge answers, so a client that polls it does not wait for the stale-operation reaper. The
-/// error envelope has no field for the operation id (contracts ADR-0008 keeps its `extensions`
-/// empty), so a failed connect does not name it.
-///
-/// The forward and the terminal write run in a task of their own. A client that disconnects drops
-/// this handler, and the task still ends the operation. The `control` response budget of the notes
-/// route bounds the task.
 pub async fn connect(
     State(state): State<Arc<ApiState>>,
     principal: Principal,
@@ -188,6 +209,44 @@ pub async fn connect(
         Ok(operation_id) => operation_id,
         Err(rejection) => return rejection,
     };
+    settle(
+        state,
+        request,
+        Claimed {
+            principal,
+            device_kind,
+            correlation_id,
+        },
+        operation_id,
+        Forward::Connect,
+    )
+    .await
+}
+
+/// The identity that Edge mints onto a forwarded request, owned so that it moves into the task.
+pub(crate) struct Claimed {
+    pub(crate) principal: Principal,
+    pub(crate) device_kind: Option<&'static str>,
+    pub(crate) correlation_id: String,
+}
+
+/// Forward a request for which Edge minted `operation_id`, and answer the client.
+///
+/// When the forward fails, the operation is terminated as `failed` before Edge answers, so a client
+/// that polls it does not wait for the stale-operation reaper. The error envelope has no field for
+/// the operation id (contracts ADR-0008 keeps its `extensions` empty), so a failed forward does not
+/// name it.
+///
+/// The forward and the terminal write run in a task of their own. A client that disconnects drops
+/// the handler, and the task still ends the operation. The `control` response budget of the notes
+/// route bounds the task.
+pub(crate) async fn settle(
+    state: Arc<ApiState>,
+    request: Request,
+    claimed: Claimed,
+    operation_id: Uuid,
+    kind: Forward,
+) -> Response {
     // The request timeout of the public listener does not stop the task, so the response budget
     // of the notes route bounds it: the forward and the read of the answer.
     let budget = state
@@ -200,16 +259,19 @@ pub async fn connect(
         });
     let forward = async move {
         let claims = Claims {
-            principal,
-            device_kind,
-            correlation_id: &correlation_id,
+            principal: claimed.principal,
+            device_kind: claimed.device_kind,
+            correlation_id: &claimed.correlation_id,
         };
-        let forward = forward(&state, request, claims, operation_id);
+        let forward = forward(&state, request, claims, operation_id, kind);
         if let Ok(response) = tokio::time::timeout(budget, forward).await {
             response
         } else {
-            tracing::warn!("a connect did not complete within its budget");
-            refuse(&state, operation_id, FailureKind::UpstreamTimeout).await
+            tracing::warn!(
+                stage = kind.stage(),
+                "a notes request did not complete within its budget"
+            );
+            refuse(&state, operation_id, kind, FailureKind::UpstreamTimeout).await
         }
     };
     match tokio::spawn(forward.in_current_span()).await {
@@ -222,38 +284,50 @@ pub async fn connect(
     }
 }
 
-/// Send the connect to notes and answer what it answered.
+/// Send the request to notes and answer what it answered.
 ///
-/// A notes error envelope is relayed as the generic proxy relays it. Any other answer than `202`
-/// and an error is an invalid upstream response: a redirect is not relayed, because the client
-/// would send its secrets to the place it names. A `202` answer that is not JSON is an invalid
-/// upstream response too.
+/// A notes error envelope is relayed as the generic proxy relays it. A connect answer other than
+/// `202` and an error is an invalid upstream response: a redirect is not relayed, because the
+/// client would send its secrets to the place it names. A `202` connect answer that is not JSON is
+/// an invalid upstream response too. A write-mode answer is any success status, and its body is not
+/// read.
 async fn forward(
     state: &ApiState,
     request: Request,
     claims: Claims<'_>,
     operation_id: Uuid,
+    kind: Forward,
 ) -> Response {
     let response = match state
         .gateway
-        .send_notes_connect(request, claims, operation_id)
+        .send_notes_minted(request, claims, operation_id)
         .await
     {
         Ok(response) => response,
-        Err(kind) => return refuse(state, operation_id, kind).await,
+        Err(fault) => return refuse(state, operation_id, kind, fault).await,
     };
     let status = response.status();
     if status.is_client_error() || status.is_server_error() {
         let relayed = gateway::response_from_upstream(response, ROUTE).await;
-        return relay_refusal(state, operation_id, relayed).await;
+        return relay_refusal(state, operation_id, kind, relayed).await;
+    }
+    if kind == Forward::WriteMode && status.is_success() {
+        return crate::notes_writes::accepted(operation_id);
     }
     if status != StatusCode::ACCEPTED {
         tracing::warn!(
             route = ROUTE,
+            stage = kind.stage(),
             class = "unexpected_status",
-            "a connect answer had a status other than 202"
+            "a notes answer had a status that Edge does not take"
         );
-        return refuse(state, operation_id, FailureKind::UpstreamInvalidResponse).await;
+        return refuse(
+            state,
+            operation_id,
+            kind,
+            FailureKind::UpstreamInvalidResponse,
+        )
+        .await;
     }
     let Ok(answer) = axum::body::to_bytes(Body::new(response.into_body()), MAX_ANSWER_BYTES).await
     else {
@@ -262,7 +336,13 @@ async fn forward(
             class = "oversized_body",
             "a connect answer exceeded its bound"
         );
-        return refuse(state, operation_id, FailureKind::UpstreamInvalidResponse).await;
+        return refuse(
+            state,
+            operation_id,
+            kind,
+            FailureKind::UpstreamInvalidResponse,
+        )
+        .await;
     };
     let Ok(connection) = serde_json::from_slice::<serde_json::Value>(&answer) else {
         tracing::warn!(
@@ -270,7 +350,13 @@ async fn forward(
             class = "invalid_json",
             "a connect answer was not JSON"
         );
-        return refuse(state, operation_id, FailureKind::UpstreamInvalidResponse).await;
+        return refuse(
+            state,
+            operation_id,
+            kind,
+            FailureKind::UpstreamInvalidResponse,
+        )
+        .await;
     };
     (
         StatusCode::ACCEPTED,
@@ -284,17 +370,27 @@ async fn forward(
 }
 
 /// Terminate the operation with the code of an Edge fault, and answer that fault.
-async fn refuse(state: &ApiState, operation_id: Uuid, kind: FailureKind) -> Response {
-    let fault = kind.fault();
-    fail(state, operation_id, &fault.code, fault.retryable).await;
-    platform_http::reject(kind)
+async fn refuse(
+    state: &ApiState,
+    operation_id: Uuid,
+    kind: Forward,
+    fault: FailureKind,
+) -> Response {
+    let public = fault.fault();
+    fail(state, operation_id, kind, &public.code, public.retryable).await;
+    platform_http::reject(fault)
 }
 
 /// Terminate the operation with the code of the error that notes answered, and relay that error.
 ///
 /// `relayed` is what the generic proxy makes of the answer: the notes error envelope when it is
 /// one, or an Edge fault with an empty body. The body is in memory already or bounded here.
-async fn relay_refusal(state: &ApiState, operation_id: Uuid, relayed: Response) -> Response {
+async fn relay_refusal(
+    state: &ApiState,
+    operation_id: Uuid,
+    kind: Forward,
+    relayed: Response,
+) -> Response {
     let (parts, body) = relayed.into_parts();
     let bytes = axum::body::to_bytes(body, gateway::MAX_ERROR_ENVELOPE_BYTES)
         .await
@@ -306,23 +402,31 @@ async fn relay_refusal(state: &ApiState, operation_id: Uuid, relayed: Response) 
         },
         |envelope| (envelope.code, envelope.retryable),
     );
-    fail(state, operation_id, &code, retryable).await;
+    fail(state, operation_id, kind, &code, retryable).await;
     Response::from_parts(parts, Body::from(bytes))
 }
 
 /// Terminate the operation as `failed`. When that fails, the stale-operation reaper terminates it
-/// later, so the client still gets the answer of the connect.
-async fn fail(state: &ApiState, operation_id: Uuid, code: &ErrorCode, retryable: bool) {
-    if let Err(error) = platform_operations::fail_notes_connect(
+/// later, so the client still gets the answer.
+async fn fail(
+    state: &ApiState,
+    operation_id: Uuid,
+    kind: Forward,
+    code: &ErrorCode,
+    retryable: bool,
+) {
+    if let Err(error) = platform_operations::fail_notes_forward(
         state.database.pool(),
         operation_id,
+        kind.stage(),
+        kind.message(),
         code,
         retryable,
         jiff::Timestamp::now(),
     )
     .await
     {
-        tracing::error!(%error, "a failed connect operation could not be terminated");
+        tracing::error!(%error, stage = kind.stage(), "a failed notes operation could not be terminated");
     }
 }
 

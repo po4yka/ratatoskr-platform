@@ -19,7 +19,7 @@ pub use crate::archive::{
 };
 pub use crate::cancel::{Cancellation, request_cancellation};
 pub use crate::list::{ListScope, Page, list_operations};
-pub use crate::notes::fail_notes_connect;
+pub use crate::notes::fail_notes_forward;
 pub use crate::projection::ProgressProjection;
 use ratatoskr_error_contracts::{ErrorEnvelope, WarningEnvelope};
 use ratatoskr_identifiers::{EntityRef, Extensions, OperationId, TenantRef, UserId, WireTimestamp};

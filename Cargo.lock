@@ -2167,6 +2167,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "ratatoskr-notes-contracts"
+version = "0.1.0"
+source = "git+https://github.com/po4yka/ratatoskr-contracts.git?rev=75e954fb1af6b9d0f7b30383c7a993c64d01e2c9#75e954fb1af6b9d0f7b30383c7a993c64d01e2c9"
+dependencies = [
+ "ratatoskr-event-envelope",
+ "ratatoskr-identifiers",
+ "regex",
+ "schemars",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "ratatoskr-operation-contracts"
 version = "0.1.0"
 source = "git+https://github.com/po4yka/ratatoskr-contracts.git?rev=75e954fb1af6b9d0f7b30383c7a993c64d01e2c9#75e954fb1af6b9d0f7b30383c7a993c64d01e2c9"
@@ -2418,6 +2432,7 @@ dependencies = [
  "ratatoskr-error-contracts",
  "ratatoskr-event-envelope",
  "ratatoskr-identifiers",
+ "ratatoskr-notes-contracts",
  "ratatoskr-operation-contracts",
  "ratatoskr-operational-contracts",
  "ratatoskr-platform-api-doc",
@@ -3325,7 +3340,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",

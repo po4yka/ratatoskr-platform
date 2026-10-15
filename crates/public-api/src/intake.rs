@@ -5,6 +5,9 @@
 //! writes the audit record. A crash at any point leaves all five or none, which is what makes a
 //! retried request safe. The routes differ in the operation they create and the command they
 //! enqueue, and nothing else, so those two are the parameters.
+//!
+//! A route whose work Edge forwards itself (the notes write-mode switch) takes the same transaction
+//! without the command, through [`mint`].
 
 use axum::response::Response;
 use platform_core::FailureKind;
@@ -32,7 +35,7 @@ pub(crate) struct Intake<'a> {
     pub(crate) correlation: &'a str,
     /// The one service the command is dispatched to, recorded on the operation as the only
     /// producer allowed to report for it (XR-021 R3-02).
-    pub(crate) reporter: &'static str,
+    pub(crate) reporter: Option<&'static str>,
 }
 
 /// The command one accepted request produces, built once its operation exists.
@@ -41,6 +44,14 @@ pub(crate) struct Prepared {
     /// The envelope's `command_id`, which is also the outbox row id and the `Nats-Msg-Id`.
     pub(crate) command_id: Uuid,
     pub(crate) payload: serde_json::Value,
+}
+
+/// What [`mint`] did with one request.
+pub(crate) enum Minted {
+    /// A new operation exists, and the caller does the work that follows it.
+    Fresh(Uuid),
+    /// The key and the request were seen before: this is that operation, and nothing was done.
+    Replayed(Uuid),
 }
 
 /// Reserve, create, enqueue, complete — in one transaction, so a crash at any point leaves all four
@@ -59,11 +70,45 @@ pub(crate) async fn accept<F>(
 where
     F: FnOnce(&platform_operations::Operation, jiff::Timestamp) -> Result<Prepared, FailureKind>,
 {
+    match admit(state, principal, intake, |operation, now| {
+        prepare(operation, now).map(Some)
+    })
+    .await
+    {
+        Ok(Minted::Fresh(operation_id) | Minted::Replayed(operation_id)) => answer(operation_id),
+        Err(kind) => platform_http::reject(kind),
+    }
+}
+
+/// Reserve, create, complete — in one transaction, with no command: for a route whose work Edge
+/// forwards itself once the operation exists.
+pub(crate) async fn mint(
+    state: &ApiState,
+    principal: Principal,
+    intake: &Intake<'_>,
+) -> Result<Minted, FailureKind> {
+    admit(state, principal, intake, |_, _| Ok(None)).await
+}
+
+/// The one transaction of [`accept`] and [`mint`]. `prepare` returns the command to enqueue, or
+/// `None` when the route enqueues none. `Err` is the refusal to answer.
+async fn admit<F>(
+    state: &ApiState,
+    principal: Principal,
+    intake: &Intake<'_>,
+    prepare: F,
+) -> Result<Minted, FailureKind>
+where
+    F: FnOnce(
+        &platform_operations::Operation,
+        jiff::Timestamp,
+    ) -> Result<Option<Prepared>, FailureKind>,
+{
     let now = jiff::Timestamp::now();
     let pool = state.database.pool();
     let Ok(mut transaction) = pool.begin().await else {
         tracing::error!("a transaction could not be started");
-        return platform_http::reject(FailureKind::RequestTimeout);
+        return Err(FailureKind::RequestTimeout);
     };
 
     let reservation = match platform_idempotency::reserve(
@@ -81,15 +126,15 @@ where
         Ok(reservation) => reservation,
         Err(error) => {
             tracing::error!(%error, "the idempotency key could not be reserved");
-            return platform_http::reject(FailureKind::RequestTimeout);
+            return Err(FailureKind::RequestTimeout);
         }
     };
 
     let record_id = match reservation.outcome() {
         Outcome::Proceed(record_id) => record_id,
         // S8.1: "Retrying the same payload returns the original operation."
-        Outcome::Replay(operation_id) => return answer(operation_id),
-        Outcome::Refuse => return platform_http::reject(FailureKind::IdempotencyConflict),
+        Outcome::Replay(operation_id) => return Ok(Minted::Replayed(operation_id)),
+        Outcome::Refuse => return Err(FailureKind::IdempotencyConflict),
     };
 
     let operation = match platform_operations::accept(
@@ -98,7 +143,7 @@ where
         intake.kind,
         intake.correlation,
         Some(intake.key),
-        Some(intake.reporter),
+        intake.reporter,
         now,
     )
     .await
@@ -106,27 +151,25 @@ where
         Ok(operation) => operation,
         Err(error) => {
             tracing::error!(%error, "the operation could not be accepted");
-            return platform_http::reject(FailureKind::RequestTimeout);
+            return Err(FailureKind::RequestTimeout);
         }
     };
 
-    let prepared = match prepare(&operation, now) {
-        Ok(prepared) => prepared,
-        Err(kind) => return platform_http::reject(kind),
-    };
+    let prepared = prepare(&operation, now)?;
 
-    if let Err(error) = Outbox::enqueue(
-        &mut *transaction,
-        prepared.command_id,
-        &prepared.subject,
-        &prepared.payload,
-        Some(operation.operation_id),
-        now,
-    )
-    .await
+    if let Some(prepared) = prepared
+        && let Err(error) = Outbox::enqueue(
+            &mut *transaction,
+            prepared.command_id,
+            &prepared.subject,
+            &prepared.payload,
+            Some(operation.operation_id),
+            now,
+        )
+        .await
     {
         tracing::error!(%error, "the command could not be enqueued");
-        return platform_http::reject(FailureKind::RequestTimeout);
+        return Err(FailureKind::RequestTimeout);
     }
 
     if let Err(error) = platform_idempotency::complete(
@@ -139,7 +182,7 @@ where
     .await
     {
         tracing::error!(%error, "the idempotency record could not be completed");
-        return platform_http::reject(FailureKind::RequestTimeout);
+        return Err(FailureKind::RequestTimeout);
     }
 
     // Inside the transaction, so the record and the thing it records commit together. An audited
@@ -153,17 +196,17 @@ where
     );
     if let Err(error) = audit::record(&mut *transaction, &event, now).await {
         tracing::error!(%error, "the capture could not be audited");
-        return platform_http::reject(FailureKind::RequestTimeout);
+        return Err(FailureKind::RequestTimeout);
     }
 
     if let Err(error) = transaction.commit().await {
         // Nothing happened: no reservation, no operation, no command. The client may retry with the
         // same key and get a clean first attempt.
         tracing::error!(%error, "the capture transaction could not be committed");
-        return platform_http::reject(FailureKind::RequestTimeout);
+        return Err(FailureKind::RequestTimeout);
     }
 
-    answer(operation.operation_id)
+    Ok(Minted::Fresh(operation.operation_id))
 }
 
 /// The audit record of one accepted request.

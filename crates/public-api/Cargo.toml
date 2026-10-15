@@ -33,6 +33,7 @@ ratatoskr-blob-transfer-contracts.workspace = true
 ratatoskr-ai-archive-contracts.workspace = true
 ratatoskr-document-contracts.workspace = true
 ratatoskr-channel-digest-contracts.workspace = true
+ratatoskr-notes-contracts.workspace = true
 axum = { workspace = true, features = ["tokio"] }
 async-stream.workspace = true
 futures-util.workspace = true

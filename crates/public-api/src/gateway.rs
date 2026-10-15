@@ -394,12 +394,13 @@ impl Gateway {
             )
     }
 
-    /// Send `POST /v1/notes/connections` to the notes listener, with the client's body and headers
-    /// unchanged, the minted claims, and the operation id that Edge minted. The answer is returned
-    /// unread, so the caller decides what the client sees. `Err` is the failure to answer.
+    /// Send a notes request for which Edge minted an operation (the connect and the write-mode
+    /// switch) to the notes listener, with the client's method, path, body and headers unchanged,
+    /// the minted claims, and the operation id. The answer is returned unread, so the caller
+    /// decides what the client sees. `Err` is the failure to answer.
     ///
-    /// Nothing here reads, buffers or logs the body: it holds the Obsidian secrets.
-    pub(crate) async fn send_notes_connect(
+    /// Nothing here reads, buffers or logs the body: a connect body holds the Obsidian secrets.
+    pub(crate) async fn send_notes_minted(
         &self,
         request: Request,
         claims: Claims<'_>,
@@ -436,19 +437,19 @@ impl Gateway {
         {
             Ok(Ok(response)) => Ok(response),
             Ok(Err(error)) if caused_by::<http_body_util::LengthLimitError>(&error) => {
-                tracing::warn!("a connect body exceeded its budget while it streamed");
+                tracing::warn!("a notes request body exceeded its budget while it streamed");
                 Err(FailureKind::PayloadTooLarge)
             }
             Ok(Err(error)) if caused_by::<axum::Error>(&error) => {
-                tracing::warn!("a connect body failed while it streamed");
+                tracing::warn!("a notes request body failed while it streamed");
                 Err(FailureKind::InvalidRequest)
             }
             Ok(Err(_)) => {
-                tracing::warn!("the notes service could not be reached for a connect");
+                tracing::warn!("the notes service could not be reached for a minted request");
                 Err(unavailable)
             }
             Err(_) => {
-                tracing::warn!("the notes service did not answer a connect in time");
+                tracing::warn!("the notes service did not answer a minted request in time");
                 Err(FailureKind::UpstreamTimeout)
             }
         }
