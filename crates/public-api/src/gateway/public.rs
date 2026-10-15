@@ -34,6 +34,10 @@ impl Gateway {
         let Some(budget) = self.budget(route) else {
             return unavailable();
         };
+        let path = path_and_query.split('?').next().unwrap_or_default();
+        if !super::paths::forwardable(&route.prefix, path) {
+            return platform_http::reject(FailureKind::RouteNotFound);
+        }
         let Ok(uri) = format!("http://{}{path_and_query}", route.listener).parse::<Uri>() else {
             return unavailable();
         };

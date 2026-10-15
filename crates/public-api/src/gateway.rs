@@ -23,6 +23,7 @@ use ratatoskr_error_contracts::ErrorEnvelope;
 use crate::{ApiState, Principal};
 
 mod headers;
+mod paths;
 mod public;
 
 use headers::{archive_headers, forwarded_headers, insert, response_headers};
@@ -406,6 +407,9 @@ impl Gateway {
     ) -> Result<hyper::Response<hyper::body::Incoming>, FailureKind> {
         let unavailable = FailureKind::UpstreamUnavailable;
         let route = self.routes.get("notes").ok_or(unavailable)?;
+        if !paths::forwardable(&route.prefix, request.uri().path()) {
+            return Err(FailureKind::RouteNotFound);
+        }
         let budget = self.budget(route).ok_or(unavailable)?;
         let path_and_query = request
             .uri()
@@ -612,6 +616,9 @@ pub async fn proxy(
     let Some((service, route)) = state.gateway.route(request.uri().path()) else {
         return platform_http::reject(FailureKind::RouteNotFound);
     };
+    if !paths::forwardable(&route.prefix, request.uri().path()) {
+        return platform_http::reject(FailureKind::RouteNotFound);
+    }
     let Some(budget) = state
         .gateway
         .budget_for(service, route, request.uri().path())
