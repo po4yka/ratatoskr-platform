@@ -420,3 +420,68 @@ async fn write_mode_route_is_control_class() {
     task.abort();
     harness.cleanup().await.expect("cleanup");
 }
+
+/// A write and a resolution are both `notes.file.write`, and notes deduplicates a write by its key
+/// and connection. A key that one route took is therefore refused on the other with `409`, instead
+/// of a second operation whose command notes would refuse as a reused key. The same request with
+/// the same key still replays its first operation.
+#[tokio::test]
+async fn a_key_is_one_write_across_the_write_and_resolution_routes() {
+    let (address, _seen, task) = stub().await;
+    let gateway = notes_route(address);
+    let harness = TestDatabase::create().await.expect("a test database");
+    let owner = seed_owner(harness.pool()).await;
+    let app = app(&harness, &gateway);
+    let resolution_uri = "/v1/notes/conflicts/018f0000-0000-7000-8000-0000000000e1/resolution";
+    let resolution =
+        || serde_json::json!({ "connection_id": CONNECTION, "choice": "keep_current" }).to_string();
+
+    let (status, first) = send(
+        &app,
+        owner_request(
+            "POST",
+            &writes_uri(),
+            Some("key-1"),
+            update_body(b"# Plan\n"),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{first}");
+    let (status, body) = send(
+        &app,
+        owner_request("POST", resolution_uri, Some("key-1"), resolution()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["code"], "platform.request.idempotency_conflict");
+
+    let (status, resolved) = send(
+        &app,
+        owner_request("POST", resolution_uri, Some("key-2"), resolution()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{resolved}");
+    let (status, body) = send(
+        &app,
+        owner_request(
+            "POST",
+            &writes_uri(),
+            Some("key-2"),
+            update_body(b"# Plan\n"),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    let (status, replayed) = send(
+        &app,
+        owner_request("POST", resolution_uri, Some("key-2"), resolution()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{replayed}");
+    assert_eq!(replayed["operation_id"], resolved["operation_id"]);
+
+    assert_eq!(operations_of(harness.pool(), owner).await, 2);
+    assert_eq!(outbox_rows(harness.pool()).await, 2);
+    task.abort();
+    harness.cleanup().await.expect("cleanup");
+}
