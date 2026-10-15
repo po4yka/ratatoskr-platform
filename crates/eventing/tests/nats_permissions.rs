@@ -521,9 +521,11 @@ async fn sites_identity_reads_its_durables_and_publishes_only_its_events() {
     for (durable, stream, _, _) in DURABLES {
         fetch_one_and_acknowledge(&sites, "SITES", stream, durable).await;
     }
+    // SITE-027: the sites service publishes the draft change that Edge's site event stream reads.
     for subject in [
         "evt.sites.release.published.v1",
         "evt.platform.operation.reported.v1",
+        "evt.sites.draft.changed.v1",
     ] {
         let outcome = acknowledged(&sites, subject).await;
         assert!(
