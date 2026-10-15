@@ -258,7 +258,7 @@ const DELETION_ACKNOWLEDGED_SUBJECT: &str = "evt.knowledge.deletion.acknowledged
 ///
 /// Each service hard-codes the same name and filter and verifies them at startup; none creates one.
 /// Ingest durables wait 120 seconds because an LLM call sits between delivery and acknowledgement.
-pub const DOMAIN_CONSUMERS: [FixedConsumerSpec; 26] = [
+pub const DOMAIN_CONSUMERS: [FixedConsumerSpec; 30] = [
     FixedConsumerSpec::standard(
         COMMAND_STREAM,
         "ratatoskr_extractor_capture",
@@ -408,6 +408,32 @@ pub const DOMAIN_CONSUMERS: [FixedConsumerSpec; 26] = [
         ack_wait_seconds: 30,
         max_deliver: -1,
     },
+    // SITE-025: the sites service reads the build command that Edge publishes, the note changes and
+    // vault disconnections of notes, and the site approvals of Platform. A build can take minutes,
+    // so its command waits 300 seconds for the acknowledgement; a note change waits 120 seconds, as
+    // the ingest of Knowledge does.
+    FixedConsumerSpec::standard(
+        COMMAND_STREAM,
+        "ratatoskr_sites_release_builds",
+        "cmd.sites.release.build_requested.v1",
+    )
+    .with_ack_wait_seconds(300),
+    FixedConsumerSpec::standard(
+        EVENT_STREAM,
+        "ratatoskr_sites_note_changes",
+        "evt.notes.file.changed.v1",
+    )
+    .with_ack_wait_seconds(120),
+    FixedConsumerSpec::standard(
+        EVENT_STREAM,
+        "ratatoskr_sites_vault_disconnections",
+        "evt.notes.vault.disconnected.v1",
+    ),
+    FixedConsumerSpec::standard(
+        EVENT_STREAM,
+        "ratatoskr_sites_approvals",
+        "evt.platform.site_approval.changed.v1",
+    ),
 ];
 
 /// The durable through which Edge projects the conflict events of notes onto the

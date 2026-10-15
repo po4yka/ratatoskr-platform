@@ -1,8 +1,9 @@
 # Bus credentials
 
-`ratatoskr.conf` is the only deployed ACL and it holds fourteen nkey identities. `ratatoskr-edge`
+`ratatoskr.conf` is the only deployed ACL and it holds fifteen nkey identities. `ratatoskr-edge`
 is the only one that creates anything: it declares both streams, every fixed durable below and the
-completion bucket, and it publishes every command the outbox pump emits. Every other identity can
+completion bucket, and it publishes every command the outbox pump emits and the one event of
+Platform's own, `evt.platform.site_approval.changed.v1` (SITE-025). Every other identity can
 inspect, pull from and acknowledge only the durables it owns, publish only the subjects it
 produces, and receive only replies on its own inbox prefix (below). None of them holds `$JS.API.>`,
 `cmd.>` or `evt.>`: an identity allowed to create a consumer could pick a foreign filter and read
@@ -30,6 +31,7 @@ Each service that is not Platform carries a byte-equal copy of its own stanza in
 | `VAULT` | `/etc/ratatoskr/vault.nkey` | `RATATOSKR__BUS__NKEY_SEED_PATH` | `ratatoskr-vault` |
 | `CHANNEL_DIGESTS` | `/etc/ratatoskr/channel-digests.nkey` | `RATATOSKR__BUS__NKEY_SEED_PATH` (worker role only) | `ratatoskr-channel-digests` |
 | `NOTES` | `/etc/ratatoskr/notes.nkey` | `RATATOSKR__BUS__NKEY_SEED_PATH` | `ratatoskr-notes` |
+| `SITES` | `/etc/ratatoskr/sites.nkey` | `RATATOSKR__BUS__NKEY_SEED_PATH` | `ratatoskr-sites` |
 
 The seed file name is the identity name in lowercase with dashes, which is also what
 `render-nats-config` writes (see below).
@@ -79,6 +81,10 @@ or a filter here stops matching them.
 | `ratatoskr_instagram_deletion_acks` | `ratatoskr_events` | `evt.knowledge.deletion.acknowledged.v1` | 30 s | -1 | `INSTAGRAM` |
 | `ratatoskr_threads_deletion_acks` | `ratatoskr_events` | `evt.knowledge.deletion.acknowledged.v1` | 30 s | -1 | `THREADS` |
 | `ratatoskr_extractor_render_awaits` | `ratatoskr_events` | `evt.content.render.>` | 30 s, no acks, deliver new | -1 | `EXTRACTOR` |
+| `ratatoskr_sites_release_builds` | `ratatoskr_commands` | `cmd.sites.release.build_requested.v1` | 300 s | -1 | `SITES` |
+| `ratatoskr_sites_note_changes` | `ratatoskr_events` | `evt.notes.file.changed.v1` | 120 s | -1 | `SITES` |
+| `ratatoskr_sites_vault_disconnections` | `ratatoskr_events` | `evt.notes.vault.disconnected.v1` | 30 s | -1 | `SITES` |
+| `ratatoskr_sites_approvals` | `ratatoskr_events` | `evt.platform.site_approval.changed.v1` | 30 s | -1 | `SITES` |
 
 The five `*_deletion_acks` durables (XR-021 R5-11) carry Knowledge's acknowledgement of a deletion fact. `ratatoskr_events` drops its oldest message at 7 days or 1 GiB, so a tombstone that Knowledge did not consume in time would be lost silently, and the producer marks it published at the PubAck. Knowledge therefore publishes `evt.knowledge.deletion.acknowledged.v1` (only `KNOWLEDGE` may), each of the five producers reads it on a cursor of its own and re-sends its deletion fact until the acknowledgement for it arrives. Every producer sees every acknowledgement: event ids, tenant references and a subject reference, no content. An acknowledgement that names no row of the reader is acknowledged and ignored.
 
@@ -142,6 +148,7 @@ side. NATS compares whole tokens, so `_INBOX_x.>` does not match `_INBOX.>`.
 | `VAULT` | `_INBOX_vault` |
 | `CHANNEL_DIGESTS` | `_INBOX_channel_digests` |
 | `NOTES` | `_INBOX_notes` |
+| `SITES` | `_INBOX_sites` |
 
 Every service MUST open each of its NATS connections with
 `async_nats::ConnectOptions::custom_inbox_prefix("<its prefix>")`. A service that does not keeps the
@@ -160,8 +167,8 @@ fresh broker, and whenever this file changes:
    (`nats-server --signal reload`). The extractor's old broad stanza is replaced in the same reload.
 2. Restart Edge. It creates or verifies both streams, every durable and the bucket.
 3. Start everything else: the extractor and its browser worker, Knowledge, channel-digests, GitHub,
-   Vault, the social services, the AI archive importers and notes. Start notes before Knowledge, so
-   that Knowledge finds note events to read (OBS-023).
+   Vault, the social services, the AI archive importers, notes and sites. Start notes before
+   Knowledge and sites, so that both find note events to read (OBS-023, SITE-025).
 
 In short: reload NATS, restart Edge, then start the services. Stop in the reverse order. Never
 delete a provisioned durable to roll back: its cursor is the delivery state.
@@ -170,7 +177,7 @@ delete a provisioned durable to roll back: its cursor is the delivery state.
 
 `evt.platform.operation.reported.v1` is one shared subject and the receiver trusts the envelope's
 `producer` field, so the identities allowed to publish it (`EXTRACTOR`, `X`, `INSTAGRAM`,
-`THREADS`, `CHANNEL_DIGESTS` and `NOTES`) can forge a report for each other, and `X` can read every
+`THREADS`, `CHANNEL_DIGESTS`, `NOTES` and `SITES`) can forge a report for each other, and `X` can read every
 tenant's operation-report metadata through `ratatoskr_x_extractor_reports`. Per-producer report
 subjects would need a contract change.
 
@@ -217,12 +224,12 @@ sets the primary group and does not add the user's other memberships, so a unit 
 `Group=ratatoskr` produces a process that cannot read this file. That is not hypothetical — it is
 how milestone 10's first start failed, with "the bus credential could not be read".
 
-Generate all fourteen seeds in one loop (the names are the seed file names of the table above),
+Generate all fifteen seeds in one loop (the names are the seed file names of the table above),
 then install each one as shown above with its own service group:
 
 ```bash
 for identity in edge telegram chatgpt claude x instagram threads extractor \
-                extractor-browser-worker knowledge github vault channel-digests notes; do
+                extractor-browser-worker knowledge github vault channel-digests notes sites; do
   nk -gen user -pubout > "$identity.pair"   # first line SU... (seed), second line U... (public)
   sed -n 1p "$identity.pair" > "$identity.nkey"
   printf '%s  %s\n' "$identity" "$(sed -n 2p "$identity.pair")"

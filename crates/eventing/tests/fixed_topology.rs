@@ -173,10 +173,37 @@ fn table() -> Vec<Expected> {
             30,
         ),
     ];
-    rows.push(notes_write_row());
-    rows.push(render_awaits_row());
+    rows.extend([notes_write_row(), render_awaits_row()]);
     rows.extend(deletion_ack_rows());
+    rows.extend(sites_rows());
     rows
+}
+
+/// The four durables of the sites service (SITE-025).
+fn sites_rows() -> [Expected; 4] {
+    [
+        command(
+            "ratatoskr_sites_release_builds",
+            "cmd.sites.release.build_requested.v1",
+            300,
+            -1,
+        ),
+        event(
+            "ratatoskr_sites_note_changes",
+            "evt.notes.file.changed.v1",
+            120,
+        ),
+        event(
+            "ratatoskr_sites_vault_disconnections",
+            "evt.notes.vault.disconnected.v1",
+            30,
+        ),
+        event(
+            "ratatoskr_sites_approvals",
+            "evt.platform.site_approval.changed.v1",
+            30,
+        ),
+    ]
 }
 
 /// The durable through which notes reads the write command (OBS-024).
@@ -239,8 +266,8 @@ async fn ensure_domain_topology_creates_every_fixed_consumer_and_the_kv_bucket()
     );
     assert_eq!(
         table().len(),
-        26,
-        "R5-11 rule 3 takes the table from 18 to 23, OBS-023 to 25, and OBS-024 to 26"
+        30,
+        "R5-11 rule 3 takes the table from 18 to 23, OBS-023 to 25, OBS-024 to 26 and SITE-025 to 30"
     );
 
     for row in table() {

@@ -386,10 +386,10 @@ fn sorted(mut list: Vec<String>) -> Vec<String> {
     list
 }
 
-/// S03 and OBS-023. Fourteen identities, each with exactly the publish list of the contract,
-/// subscribing to replies only, and only EDGE carrying a deny list.
+/// S03, OBS-023 and SITE-025. Fifteen identities, each with exactly the publish list of the
+/// contract, subscribing to replies only, and only EDGE carrying a deny list.
 #[test]
-fn the_deployed_acl_has_the_fourteen_identities_with_exactly_the_contract_grants() {
+fn the_deployed_acl_has_the_fifteen_identities_with_exactly_the_contract_grants() {
     let identities = deployed_identities();
     let mut names: Vec<&str> = identities
         .iter()
@@ -403,9 +403,9 @@ fn the_deployed_acl_has_the_fourteen_identities_with_exactly_the_contract_grants
     expected.sort_unstable();
     assert_eq!(
         names, expected,
-        "the deployed identities are not the fourteen of S03 and OBS-023"
+        "the deployed identities are not the fifteen of S03, OBS-023 and SITE-025"
     );
-    assert_eq!(identities.len(), 14);
+    assert_eq!(identities.len(), 15);
 
     for (name, allow) in expected_publish_allow() {
         let identity = identities
@@ -586,6 +586,10 @@ fn every_fixed_consumer_has_exactly_one_owner_identity() {
         ("GITHUB", EVT, "ratatoskr_github_policy_acknowledged"),
         ("VAULT", CMD, "ratatoskr_vault_backup_policy"),
         ("NOTES", CMD, "ratatoskr_notes_write_requests"),
+        ("SITES", CMD, "ratatoskr_sites_release_builds"),
+        ("SITES", EVT, "ratatoskr_sites_note_changes"),
+        ("SITES", EVT, "ratatoskr_sites_vault_disconnections"),
+        ("SITES", EVT, "ratatoskr_sites_approvals"),
         (
             "CHANNEL_DIGESTS",
             CMD,
@@ -648,10 +652,11 @@ fn every_fixed_consumer_has_exactly_one_owner_identity() {
     }
     assert_eq!(
         platform_eventing::DOMAIN_CONSUMERS.len(),
-        26,
-        "S04 has eight command durables (seven, and the notes write durable of OBS-024) and \
-         eighteen event durables (eleven, the five deletion-acknowledgement durables of R5-11 and \
-         the two note durables of OBS-023)"
+        30,
+        "S04 has nine command durables (seven, the notes write durable of OBS-024 and the sites \
+         build durable of SITE-025) and twenty-one event durables (eleven, the five \
+         deletion-acknowledgement durables of R5-11, the two note durables of OBS-023 and the \
+         three sites event durables of SITE-025)"
     );
 }
 
@@ -675,6 +680,7 @@ fn the_operator_guide_documents_every_identity_and_the_rollout_order() {
         "vault.nkey",
         "channel-digests.nkey",
         "notes.nkey",
+        "sites.nkey",
     ] {
         assert!(readme.contains(seed), "the NATS guide does not name {seed}");
     }

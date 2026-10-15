@@ -38,7 +38,7 @@ const EVT: &str = "ratatoskr_events";
 
 /// Every durable, the identity that owns it and the stream it lives on. EDGE owns the three that
 /// Platform consumes itself, listed separately because no other identity may even describe them.
-const OWNERS: [(&str, &str, &str); 32] = [
+const OWNERS: [(&str, &str, &str); 36] = [
     ("TELEGRAM", EVT, "ratatoskr_telegram_notifications"),
     ("X", CMD, "ratatoskr_x_browser_capture"),
     ("X", EVT, "ratatoskr_x_extractor_reports"),
@@ -59,6 +59,10 @@ const OWNERS: [(&str, &str, &str); 32] = [
     ("GITHUB", EVT, "ratatoskr_github_policy_acknowledged"),
     ("VAULT", CMD, "ratatoskr_vault_backup_policy"),
     ("NOTES", CMD, "ratatoskr_notes_write_requests"),
+    ("SITES", CMD, "ratatoskr_sites_release_builds"),
+    ("SITES", EVT, "ratatoskr_sites_note_changes"),
+    ("SITES", EVT, "ratatoskr_sites_vault_disconnections"),
+    ("SITES", EVT, "ratatoskr_sites_approvals"),
     (
         "CHANNEL_DIGESTS",
         CMD,
@@ -111,6 +115,9 @@ fn source_of(durable: &str) -> (&'static str, &'static str) {
         }
         "ratatoskr_vault_backup_policy" => ("EDGE", "cmd.vault.backup_policy.apply_requested.v1"),
         "ratatoskr_notes_write_requests" => ("EDGE", "cmd.notes.file.write_requested.v1"),
+        "ratatoskr_sites_release_builds" => ("EDGE", "cmd.sites.release.build_requested.v1"),
+        "ratatoskr_sites_approvals" => ("EDGE", "evt.platform.site_approval.changed.v1"),
+        "ratatoskr_sites_vault_disconnections" => ("NOTES", "evt.notes.vault.disconnected.v1"),
         "ratatoskr_channel_digest_subscriptions" => {
             ("EDGE", "cmd.channel_digest.subscription.set_requested.v1")
         }
@@ -130,7 +137,9 @@ fn source_of(durable: &str) -> (&'static str, &'static str) {
         "ratatoskr_knowledge_repository_requests" => {
             ("GITHUB", "evt.knowledge.repository_analysis.requested.v1")
         }
-        "ratatoskr_knowledge_notes_files" => ("NOTES", "evt.notes.file.changed.v1"),
+        "ratatoskr_knowledge_notes_files" | "ratatoskr_sites_note_changes" => {
+            ("NOTES", "evt.notes.file.changed.v1")
+        }
         "ratatoskr_knowledge_notes_vaults" => ("NOTES", "evt.notes.vault.connected.v1"),
         "ratatoskr_github_analysis_completed" => (
             "KNOWLEDGE",
@@ -575,6 +584,7 @@ async fn only_knowledge_publishes_the_deletion_acknowledgement() {
         "VAULT",
         "CHANNEL_DIGESTS",
         "NOTES",
+        "SITES",
         "EDGE",
     ] {
         let client = broker.client(identity).await;
@@ -613,6 +623,18 @@ async fn notes_identity_matrix() {
             "evt.notes.file.changed.v1",
             "evt.notes.conflict.raised.v1",
             "evt.notes.conflict.resolved.v1",
+            "evt.platform.operation.reported.v1",
+        ],
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn sites_identity_matrix() {
+    exercise(
+        "SITES",
+        &[
+            "evt.sites.release.published.v1",
             "evt.platform.operation.reported.v1",
         ],
     )
@@ -779,6 +801,7 @@ async fn only_chatgpt_and_claude_publish_the_erasure_command() {
         "VAULT",
         "CHANNEL_DIGESTS",
         "NOTES",
+        "SITES",
         "TELEGRAM",
     ] {
         let client = broker.client(identity).await;

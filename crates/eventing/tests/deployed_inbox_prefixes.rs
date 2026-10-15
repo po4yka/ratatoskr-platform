@@ -33,7 +33,7 @@ const EVT: &str = "ratatoskr_events";
 
 /// One durable each identity owns, to describe on its own prefix. CHATGPT, CLAUDE and NOTES own
 /// none.
-const OWN_DURABLE: [(&str, &str, &str); 10] = [
+const OWN_DURABLE: [(&str, &str, &str); 11] = [
     ("TELEGRAM", EVT, "ratatoskr_telegram_notifications"),
     ("X", CMD, "ratatoskr_x_browser_capture"),
     ("INSTAGRAM", CMD, "ratatoskr_instagram_browser_capture"),
@@ -48,12 +48,13 @@ const OWN_DURABLE: [(&str, &str, &str); 10] = [
         CMD,
         "ratatoskr_channel_digest_subscriptions",
     ),
+    ("SITES", CMD, "ratatoskr_sites_release_builds"),
 ];
 
 /// XR-021 R3-01: each non-Edge identity's inbox prefix, the only namespace it may subscribe to. The
 /// prefix is `_INBOX_` and the identity name in lower case, underscores kept. Written out rather
 /// than derived, so the table is the contract and the deployed file is what is checked against it.
-const INBOX_PREFIXES: [(&str, &str); 13] = [
+const INBOX_PREFIXES: [(&str, &str); 14] = [
     ("TELEGRAM", "_INBOX_telegram"),
     ("CHATGPT", "_INBOX_chatgpt"),
     ("CLAUDE", "_INBOX_claude"),
@@ -70,6 +71,7 @@ const INBOX_PREFIXES: [(&str, &str); 13] = [
     ("VAULT", "_INBOX_vault"),
     ("CHANNEL_DIGESTS", "_INBOX_channel_digests"),
     ("NOTES", "_INBOX_notes"),
+    ("SITES", "_INBOX_sites"),
 ];
 
 /// The prefix an identity connects with: its own, or the library default for EDGE.

@@ -67,7 +67,13 @@ fn expected_platform_and_social() -> Vec<(&'static str, Vec<String>)> {
     vec![
         (
             "EDGE",
-            join(vec![subjects(&["cmd.>", "$JS.API.>", "$JS.ACK.>"])]),
+            // SITE-025: the site approval is the one event of Platform's own.
+            join(vec![subjects(&[
+                "cmd.>",
+                "evt.platform.site_approval.changed.v1",
+                "$JS.API.>",
+                "$JS.ACK.>",
+            ])]),
         ),
         (
             "TELEGRAM",
@@ -226,9 +232,27 @@ fn expected_notes() -> (&'static str, Vec<String>) {
     ("NOTES", allow)
 }
 
+/// The SITES identity of SITE-025: the release event, the report subject and its four durables.
+fn expected_sites() -> (&'static str, Vec<String>) {
+    let mut allow: Vec<String> = [
+        subjects(&[
+            "evt.sites.release.published.v1",
+            "evt.platform.operation.reported.v1",
+        ]),
+        trio(CMD, "ratatoskr_sites_release_builds"),
+        trio(EVT, "ratatoskr_sites_note_changes"),
+        trio(EVT, "ratatoskr_sites_vault_disconnections"),
+        trio(EVT, "ratatoskr_sites_approvals"),
+    ]
+    .concat();
+    allow.sort();
+    ("SITES", allow)
+}
+
 pub(crate) fn expected_publish_allow() -> Vec<(&'static str, Vec<String>)> {
     let mut all = expected_platform_and_social();
     all.extend(expected_domain_services());
     all.push(expected_notes());
+    all.push(expected_sites());
     all
 }

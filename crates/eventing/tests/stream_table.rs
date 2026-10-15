@@ -20,11 +20,6 @@ fn named(table: &[FixedConsumerSpec], durable: &str) -> Option<FixedConsumerSpec
 #[test]
 fn notes_write_durables_are_provisioned() {
     assert_eq!(
-        DOMAIN_CONSUMERS.len(),
-        26,
-        "25 rows after OBS-023, plus ratatoskr_notes_write_requests"
-    );
-    assert_eq!(
         named(&DOMAIN_CONSUMERS, "ratatoskr_notes_write_requests"),
         Some(FixedConsumerSpec {
             stream: COMMAND_STREAM,
