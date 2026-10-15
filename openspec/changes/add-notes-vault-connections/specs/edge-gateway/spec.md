@@ -71,6 +71,20 @@ The generic proxy SHALL answer a redirect of a domain service (`301`, `302`, `30
 - **WHEN** the owner reads the capabilities of a deployment with the notes route, of one without it, and of one with the route and an unreachable database
 - **THEN** only the first answer lists `notes.vaults`, verified by `crates/public-api/tests/capabilities.rs::notes_vaults_follows_the_notes_route`
 
+### Requirement: Edge forwards a notes read unchanged and streams its bytes
+
+The generic proxy SHALL forward the path and the query of a notes read to notes as the client sent them: no percent-decoding, no change of `%2F` into `/`, and no removal of a dot segment. It SHALL stream the bytes of a file to the client as notes sends them, and SHALL NOT wait for the end of the body.
+
+#### Scenario: A file path with encoded and nested segments
+
+- **WHEN** the owner reads `files/A%20B/Note%201.md`, `files/A%20B/C%2FD/%2E%2E/Caf%C3%A9%20%25%2B.md?revision=<sha256>`, a path of five segments, and `index/A%20B/C%2FD/Note%201.md`
+- **THEN** the stub upstream receives each path and query byte for byte, verified by `crates/public-api/tests/notes_device_routes.rs::file_path_segments_reach_notes_unchanged`
+
+#### Scenario: Notes holds the rest of a file
+
+- **WHEN** the stub upstream sends the first bytes of a file and holds the rest
+- **THEN** the client receives the first bytes before the stub sends the rest, verified by `crates/public-api/tests/notes_device_routes.rs::file_bytes_stream_without_buffering`
+
 ### Requirement: The connect proxy keeps no part of the body
 
 `POST /v1/notes/connections` SHALL mint an operation of kind `notes.connection.connect`, forward the body to the notes upstream unchanged with `x-ratatoskr-operation-id`, and answer `202` with the operation id. Edge SHALL NOT write any part of the body to its database, its outbox, its idempotency records, its audit records or its logs.

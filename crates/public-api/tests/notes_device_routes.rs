@@ -260,3 +260,110 @@ async fn redirect_from_a_notes_route_is_not_relayed() {
     }
     harness.cleanup().await.expect("cleanup");
 }
+
+#[tokio::test]
+async fn file_path_segments_reach_notes_unchanged() {
+    let (address, mut seen, task) = stub().await;
+    let harness = TestDatabase::create().await.expect("a test database");
+    seed_owner(harness.pool()).await;
+    let app = app(&harness, &notes_route(address));
+    let revision = "b".repeat(64);
+
+    for (path, query) in [
+        (format!("{CONNECTION}/files/A%20B/Note%201.md"), None),
+        (
+            format!("{CONNECTION}/files/A%20B/C%2FD/%2E%2E/Caf%C3%A9%20%25%2B.md"),
+            Some(format!("revision={revision}")),
+        ),
+        (
+            format!("{CONNECTION}/files/Deep/er/still/deeper/x.md"),
+            None,
+        ),
+        (format!("{CONNECTION}/index/A%20B/C%2FD/Note%201.md"), None),
+    ] {
+        let uri = query
+            .as_ref()
+            .map_or_else(|| path.clone(), |query| format!("{path}?{query}"));
+        let (status, body) = send(
+            &app,
+            Request::builder()
+                .method("GET")
+                .uri(&uri)
+                .header("authorization", format!("Bearer {OWNER_CREDENTIAL}"))
+                .body(Body::empty())
+                .expect("a request"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{uri}: {body}");
+        let forwarded = seen.recv().await.expect("the read is forwarded");
+        assert_eq!(forwarded.path, path, "Edge changed the path of a file read");
+        assert_eq!(forwarded.query, query);
+    }
+    task.abort();
+    harness.cleanup().await.expect("cleanup");
+}
+
+#[tokio::test]
+async fn file_bytes_stream_without_buffering() {
+    let release = std::sync::Arc::new(tokio::sync::Notify::new());
+    let held = release.clone();
+    let router = axum::Router::new().fallback(move || {
+        let held = held.clone();
+        async move {
+            let first = futures_util::stream::once(async {
+                Ok::<_, std::io::Error>(axum::body::Bytes::from_static(b"first"))
+            });
+            let rest = futures_util::stream::once(async move {
+                held.notified().await;
+                Ok::<_, std::io::Error>(axum::body::Bytes::from_static(b"rest"))
+            });
+            Body::from_stream(futures_util::StreamExt::chain(first, rest))
+        }
+    });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("a loopback listener");
+    let address = listener.local_addr().expect("a listener address");
+    let task = tokio::spawn(async move {
+        axum::serve(listener, router)
+            .await
+            .expect("the notes stub serves");
+    });
+    let harness = TestDatabase::create().await.expect("a test database");
+    seed_owner(harness.pool()).await;
+    let app = app(&harness, &notes_route(address));
+
+    let response = tower::ServiceExt::oneshot(
+        app,
+        Request::builder()
+            .method("GET")
+            .uri(format!("{CONNECTION}/files/Large.pdf"))
+            .header("authorization", format!("Bearer {OWNER_CREDENTIAL}"))
+            .body(Body::empty())
+            .expect("a request"),
+    )
+    .await
+    .expect("a response");
+    assert_eq!(response.status(), StatusCode::OK);
+    let mut body = response.into_body();
+    let first = tokio::time::timeout(
+        Duration::from_secs(5),
+        http_body_util::BodyExt::frame(&mut body),
+    )
+    .await
+    .expect("the first bytes arrive while notes holds the rest")
+    .expect("a frame")
+    .expect("a body frame")
+    .into_data()
+    .expect("data");
+    assert_eq!(first.as_ref(), b"first");
+
+    release.notify_one();
+    let rest = http_body_util::BodyExt::collect(body)
+        .await
+        .expect("the rest of the body")
+        .to_bytes();
+    assert_eq!(rest.as_ref(), b"rest");
+    task.abort();
+    harness.cleanup().await.expect("cleanup");
+}
