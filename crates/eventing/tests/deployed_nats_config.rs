@@ -38,7 +38,7 @@ const EVT: &str = "ratatoskr_events";
 
 /// Every durable, the identity that owns it and the stream it lives on. EDGE owns the three that
 /// Platform consumes itself, listed separately because no other identity may even describe them.
-const OWNERS: [(&str, &str, &str); 31] = [
+const OWNERS: [(&str, &str, &str); 32] = [
     ("TELEGRAM", EVT, "ratatoskr_telegram_notifications"),
     ("X", CMD, "ratatoskr_x_browser_capture"),
     ("X", EVT, "ratatoskr_x_extractor_reports"),
@@ -58,6 +58,7 @@ const OWNERS: [(&str, &str, &str); 31] = [
     ("GITHUB", EVT, "ratatoskr_github_analysis_failed"),
     ("GITHUB", EVT, "ratatoskr_github_policy_acknowledged"),
     ("VAULT", CMD, "ratatoskr_vault_backup_policy"),
+    ("NOTES", CMD, "ratatoskr_notes_write_requests"),
     (
         "CHANNEL_DIGESTS",
         CMD,
@@ -105,6 +106,7 @@ fn source_of(durable: &str) -> (&'static str, &'static str) {
             ("EDGE", "cmd.knowledge.channel_digest_recap.requested.v1")
         }
         "ratatoskr_vault_backup_policy" => ("EDGE", "cmd.vault.backup_policy.apply_requested.v1"),
+        "ratatoskr_notes_write_requests" => ("EDGE", "cmd.notes.file.write_requested.v1"),
         "ratatoskr_channel_digest_subscriptions" => {
             ("EDGE", "cmd.channel_digest.subscription.set_requested.v1")
         }

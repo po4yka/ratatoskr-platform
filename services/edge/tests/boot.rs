@@ -153,8 +153,8 @@ fn edge_preprovisions_the_telegram_notification_consumer() {
         .expect("the fixture database must drop");
 }
 
-/// Every durable of the domain table (S04, R5-11 and OBS-023), by stream.
-const DOMAIN_DURABLES: [(&str, &str); 25] = [
+/// Every durable of the domain table (S04, R5-11, OBS-023 and OBS-024), by stream.
+const DOMAIN_DURABLES: [(&str, &str); 26] = [
     ("ratatoskr_commands", "ratatoskr_extractor_capture"),
     ("ratatoskr_commands", "ratatoskr_browser_worker"),
     ("ratatoskr_commands", "ratatoskr_knowledge_channel_recap"),
@@ -168,6 +168,7 @@ const DOMAIN_DURABLES: [(&str, &str); 25] = [
         "ratatoskr_channel_digest_schedule_occurrences",
     ),
     ("ratatoskr_commands", "ratatoskr_vault_backup_policy"),
+    ("ratatoskr_commands", "ratatoskr_notes_write_requests"),
     ("ratatoskr_events", "ratatoskr_knowledge_documents"),
     ("ratatoskr_events", "ratatoskr_knowledge_social_sources"),
     ("ratatoskr_events", "ratatoskr_knowledge_ai_archive"),

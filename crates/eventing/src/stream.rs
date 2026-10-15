@@ -258,7 +258,7 @@ const DELETION_ACKNOWLEDGED_SUBJECT: &str = "evt.knowledge.deletion.acknowledged
 ///
 /// Each service hard-codes the same name and filter and verifies them at startup; none creates one.
 /// Ingest durables wait 120 seconds because an LLM call sits between delivery and acknowledgement.
-pub const DOMAIN_CONSUMERS: [FixedConsumerSpec; 25] = [
+pub const DOMAIN_CONSUMERS: [FixedConsumerSpec; 26] = [
     FixedConsumerSpec::standard(
         COMMAND_STREAM,
         "ratatoskr_extractor_capture",
@@ -296,6 +296,12 @@ pub const DOMAIN_CONSUMERS: [FixedConsumerSpec; 25] = [
         COMMAND_STREAM,
         "ratatoskr_vault_backup_policy",
         "cmd.vault.backup_policy.apply_requested.v1",
+    ),
+    // OBS-024: notes reads the write command that Edge publishes for a write or a resolution.
+    FixedConsumerSpec::standard(
+        COMMAND_STREAM,
+        "ratatoskr_notes_write_requests",
+        "cmd.notes.file.write_requested.v1",
     ),
     FixedConsumerSpec::standard(
         EVENT_STREAM,
@@ -404,12 +410,20 @@ pub const DOMAIN_CONSUMERS: [FixedConsumerSpec; 25] = [
     },
 ];
 
+/// The durable through which Edge projects the conflict events of notes onto the
+/// `notes.file.write` operations (OBS-024).
+pub const NOTES_CONFLICT_CONSUMER: &str = "platform_notes_conflict_projection";
+
+/// The filter of [`NOTES_CONFLICT_CONSUMER`]: `notes.conflict.raised.v1` and
+/// `notes.conflict.resolved.v1`.
+pub const NOTES_CONFLICT_SUBJECTS: &str = "evt.notes.conflict.>";
+
 /// Edge's own consumers, which `consumer::run` creates when each one first runs.
 ///
 /// They are NOT created from this table, and no service verifies them. They are listed here so that
 /// the lag sampler (`observe::sample_bus`) describes them with the same name, stream and filter the
 /// consumers use, in one place that a rename cannot miss (XR-021 CONTRACTS.md R5-13).
-pub const EDGE_INTERNAL_CONSUMERS: [FixedConsumerSpec; 3] = [
+pub const EDGE_INTERNAL_CONSUMERS: [FixedConsumerSpec; 4] = [
     FixedConsumerSpec::standard(
         EVENT_STREAM,
         EDGE_PROJECTION_CONSUMER,
@@ -424,6 +438,11 @@ pub const EDGE_INTERNAL_CONSUMERS: [FixedConsumerSpec; 3] = [
         COMMAND_STREAM,
         crate::stream_erasure::DURABLE,
         crate::stream_erasure::SUBJECT,
+    ),
+    FixedConsumerSpec::standard(
+        EVENT_STREAM,
+        NOTES_CONFLICT_CONSUMER,
+        NOTES_CONFLICT_SUBJECTS,
     ),
 ];
 

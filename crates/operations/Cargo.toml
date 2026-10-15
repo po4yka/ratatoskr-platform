@@ -20,6 +20,7 @@ ratatoskr-platform-eventing.workspace    = true
 ratatoskr-identifiers.workspace          = true
 ratatoskr-operation-contracts.workspace  = true
 ratatoskr-error-contracts.workspace      = true
+ratatoskr-notes-contracts.workspace      = true
 sqlx.workspace      = true
 serde.workspace      = true
 serde_json.workspace = true

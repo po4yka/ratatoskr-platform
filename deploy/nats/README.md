@@ -60,6 +60,7 @@ or a filter here stops matching them.
 | `ratatoskr_channel_digest_runs` | `ratatoskr_commands` | `cmd.channel_digest.run.requested.v1` | 30 s | -1 | `CHANNEL_DIGESTS` |
 | `ratatoskr_channel_digest_schedule_occurrences` | `ratatoskr_commands` | `cmd.channel_digest.schedule.occurrence_requested.v1` | 30 s | -1 | `CHANNEL_DIGESTS` |
 | `ratatoskr_vault_backup_policy` | `ratatoskr_commands` | `cmd.vault.backup_policy.apply_requested.v1` | 30 s | -1 | `VAULT` |
+| `ratatoskr_notes_write_requests` | `ratatoskr_commands` | `cmd.notes.file.write_requested.v1` | 30 s | -1 | `NOTES` |
 | `ratatoskr_knowledge_documents` | `ratatoskr_events` | `evt.content.document.extracted.v1` | 120 s | -1 | `KNOWLEDGE` |
 | `ratatoskr_knowledge_social_sources` | `ratatoskr_events` | `evt.social.source.>` | 120 s | -1 | `KNOWLEDGE` |
 | `ratatoskr_knowledge_ai_archive` | `ratatoskr_events` | `evt.ai_archive.>` | 120 s | -1 | `KNOWLEDGE` |
@@ -83,10 +84,13 @@ The five `*_deletion_acks` durables (XR-021 R5-11) carry Knowledge's acknowledge
 
 The durable `ratatoskr_telegram_notifications` is provisioned by Edge and consumed by the Telegram dispatcher, but no identity in `ratatoskr.conf` is allowed to publish `evt.platform.notification.raised.v1` today and nothing in the fleet raises a notification, so the dispatcher is expected to stay ready and idle with zero pending messages on that durable. Seeing it ready and idle is the healthy state, not a fault. Raising a notification is a future capability that needs a publisher stanza in `ratatoskr.conf`, a spec and a harness expectation.
 
-`platform_schedule_registration` (filter `cmd.platform.schedule.registration_requested.v1`) and
+`platform_schedule_registration` (filter `cmd.platform.schedule.registration_requested.v1`),
 `platform_stream_erasure` (filter `cmd.platform.stream_erasure.requested.v1`, explicit
-acknowledgements, 30 s, unlimited redelivery, XR-021 R5-12) are created by Edge's own consumers
-when it starts, so they are not in the fixed table. The second one erases single messages from
+acknowledgements, 30 s, unlimited redelivery, XR-021 R5-12) and
+`platform_notes_conflict_projection` (filter `evt.notes.conflict.>`, the same shape, OBS-024) are
+created by Edge's own consumers when it starts, so they are not in the fixed table. The third one
+records each conflict that notes raises or resolves as a result reference
+(`notes_conflict:<id>`) of the `notes.file.write` operation that the event names. The second one erases single messages from
 `ratatoskr_events` at the request of `CHATGPT` or `CLAUDE`: the command names an owner and stream
 sequences, and Edge erases a sequence only when its subject is one of the seven content-bearing
 `evt.ai_archive.*` subjects (never the tombstone), its envelope names the requesting producer as

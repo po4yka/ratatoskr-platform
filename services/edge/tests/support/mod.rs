@@ -206,12 +206,15 @@ fn expected_domain_services() -> Vec<(&'static str, Vec<String>)> {
         ),
         (
             "NOTES",
-            join(vec![subjects(&[
-                "evt.notes.vault.connected.v1",
-                "evt.notes.vault.disconnected.v1",
-                "evt.notes.file.changed.v1",
-                "evt.platform.operation.reported.v1",
-            ])]),
+            join(vec![
+                subjects(&[
+                    "evt.notes.vault.connected.v1",
+                    "evt.notes.vault.disconnected.v1",
+                    "evt.notes.file.changed.v1",
+                    "evt.platform.operation.reported.v1",
+                ]),
+                trio(CMD, "ratatoskr_notes_write_requests"),
+            ]),
         ),
     ]
 }

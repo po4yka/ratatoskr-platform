@@ -565,21 +565,36 @@ async fn sweep(pool: &PgPool, windows: &RetentionConfig) {
     }
 }
 
-/// Apply inbound progress events to the operation projection, forever.
+/// Apply inbound progress events, and the conflict events of notes (OBS-024), to the operation
+/// projection, forever. The conflict durable is created by its consumer, like
+/// `platform_schedule_registration`.
 fn spawn_projection(pool: PgPool, publisher: NatsPublisher) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        let outcome = platform_eventing::consumer::run(
+        let events = StreamSpec::event_stream();
+        let reports = platform_eventing::consumer::run(
             publisher.context(),
-            &StreamSpec::event_stream(),
+            &events,
             EDGE_PROJECTION_CONSUMER,
             "evt.platform.operation.reported.v1",
             &pool,
             &ProgressProjection,
             std::future::pending::<()>(),
-        )
-        .await;
-        if let Err(error) = outcome {
+        );
+        let conflicts = platform_eventing::consumer::run(
+            publisher.context(),
+            &events,
+            platform_eventing::NOTES_CONFLICT_CONSUMER,
+            platform_eventing::NOTES_CONFLICT_SUBJECTS,
+            &pool,
+            &platform_operations::NotesConflictProjection,
+            std::future::pending::<()>(),
+        );
+        let (reports, conflicts) = tokio::join!(reports, conflicts);
+        if let Err(error) = reports {
             tracing::error!(%error, "the operation-event consumer stopped");
+        }
+        if let Err(error) = conflicts {
+            tracing::error!(%error, "the notes conflict consumer stopped");
         }
     })
 }

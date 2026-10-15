@@ -2382,6 +2382,7 @@ dependencies = [
  "ratatoskr-ai-archive-contracts",
  "ratatoskr-error-contracts",
  "ratatoskr-identifiers",
+ "ratatoskr-notes-contracts",
  "ratatoskr-operation-contracts",
  "ratatoskr-platform-core",
  "ratatoskr-platform-eventing",

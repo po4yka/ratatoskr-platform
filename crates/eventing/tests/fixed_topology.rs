@@ -173,9 +173,20 @@ fn table() -> Vec<Expected> {
             30,
         ),
     ];
+    rows.push(notes_write_row());
     rows.push(render_awaits_row());
     rows.extend(deletion_ack_rows());
     rows
+}
+
+/// The durable through which notes reads the write command (OBS-024).
+const fn notes_write_row() -> Expected {
+    command(
+        "ratatoskr_notes_write_requests",
+        "cmd.notes.file.write_requested.v1",
+        30,
+        -1,
+    )
 }
 
 /// The one durable that takes no acknowledgements and starts at the end of the stream.
@@ -228,8 +239,8 @@ async fn ensure_domain_topology_creates_every_fixed_consumer_and_the_kv_bucket()
     );
     assert_eq!(
         table().len(),
-        25,
-        "R5-11 rule 3 takes the table from 18 to 23, and OBS-023 to 25"
+        26,
+        "R5-11 rule 3 takes the table from 18 to 23, OBS-023 to 25, and OBS-024 to 26"
     );
 
     for row in table() {

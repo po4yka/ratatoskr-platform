@@ -584,6 +584,7 @@ fn every_fixed_consumer_has_exactly_one_owner_identity() {
         ("GITHUB", EVT, "ratatoskr_github_analysis_failed"),
         ("GITHUB", EVT, "ratatoskr_github_policy_acknowledged"),
         ("VAULT", CMD, "ratatoskr_vault_backup_policy"),
+        ("NOTES", CMD, "ratatoskr_notes_write_requests"),
         (
             "CHANNEL_DIGESTS",
             CMD,
@@ -646,9 +647,10 @@ fn every_fixed_consumer_has_exactly_one_owner_identity() {
     }
     assert_eq!(
         platform_eventing::DOMAIN_CONSUMERS.len(),
-        25,
-        "S04 has seven command durables and eighteen event durables (eleven, the five \
-         deletion-acknowledgement durables of R5-11 and the two note durables of OBS-023)"
+        26,
+        "S04 has eight command durables (seven, and the notes write durable of OBS-024) and \
+         eighteen event durables (eleven, the five deletion-acknowledgement durables of R5-11 and \
+         the two note durables of OBS-023)"
     );
 }
 
