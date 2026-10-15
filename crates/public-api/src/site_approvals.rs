@@ -313,6 +313,24 @@ async fn withdraw_stored(
     .execute(&mut *transaction)
     .await
     .map_err(|error| failed(&error))?;
+    // The site's owner sessions end with its approval, in the same transaction (workspace spec
+    // `site-owner-session`).
+    let revoked =
+        platform_identity::session::revoke_site_sessions(&mut *transaction, None, site, now)
+            .await
+            .map_err(|_| FailureKind::RequestTimeout)?;
+    for session_id in revoked {
+        platform_identity::record_revocation(
+            &mut *transaction,
+            platform_identity::RevocationSubject::Session,
+            session_id,
+            platform_identity::RevocationReason::UserRequest,
+            Some(principal.user_id),
+            now,
+        )
+        .await
+        .map_err(|_| FailureKind::RequestTimeout)?;
+    }
     announce(&mut transaction, principal, correlation, &change, now).await?;
     transaction.commit().await.map_err(|error| failed(&error))?;
     "withdrawn".clone_into(&mut stored.state);

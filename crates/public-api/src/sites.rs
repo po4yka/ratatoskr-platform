@@ -21,13 +21,17 @@ use platform_identity::SessionKind;
 use uuid::Uuid;
 
 use crate::auth::{DeployRoute, DeployerSite};
-use crate::{ApiState, Principal, gateway, site_approvals, site_releases};
+use crate::{ApiState, Principal, gateway, site_approvals, site_releases, site_sessions};
 
 /// The name of the sites route in the gateway route table.
 pub const SERVICE: &str = "sites";
 
 /// The approval route below `/v1/sites/`, which Edge serves itself (workspace spec `site-manifest`).
 const APPROVAL_PATH: &str = "{site}/manifest/approval";
+
+/// The sign-in code route below `/v1/sites/`, which Edge serves itself (workspace spec
+/// `site-owner-session`).
+const SIGN_IN_CODES_PATH: &str = "{site}/sign-in-codes";
 
 /// The header that names the client of a public request. The sites gateway sets it, and Edge reads
 /// it only on a connection from the gateway's address ([`client_key`]).
@@ -52,7 +56,8 @@ pub enum SiteRouteClass {
     Management,
     /// The site itself. In this change, only the anonymous `public` class of the content routes.
     SiteOrigin,
-    /// The sign-in exchange of a site owner session. No route has it yet (SITE-027).
+    /// The sign-in exchange of a site owner session: an anonymous request that the PKCE code and
+    /// verifier authenticate (workspace spec `site-owner-session`).
     SignIn,
     /// The build request: the guard of `Management`, or a `site_owner` session of the site with
     /// `notes.edit`. No route issues a `site_owner` session yet (SITE-027), so only the first
@@ -115,6 +120,16 @@ pub const ROUTES: &[SiteRoute] = &[
         methods: &[Method::POST],
         path: "/{site}/releases",
         class: Some(SiteRouteClass::Release),
+    },
+    SiteRoute {
+        methods: &[Method::POST],
+        path: "/{site}/sign-in-codes",
+        class: Some(SiteRouteClass::Management),
+    },
+    SiteRoute {
+        methods: &[Method::POST],
+        path: "/{site}/sessions",
+        class: Some(SiteRouteClass::SignIn),
     },
     SiteRoute {
         methods: &[Method::POST],
@@ -222,6 +237,17 @@ pub async fn dispatch(
     match class {
         SiteRouteClass::SiteOrigin => content(&state, &context, &site, &parts).await,
         SiteRouteClass::Management | SiteRouteClass::Release => {
+            // A release from the site's page comes with the site cookie and no bearer.
+            if class == SiteRouteClass::Release
+                && !parts.headers.contains_key(http::header::AUTHORIZATION)
+            {
+                match site_sessions::site_owner(&state, &parts, &site).await {
+                    // The guard of a site owner session on this class arrives with task 6.4.
+                    Ok(Some(_)) => return platform_http::reject(FailureKind::Forbidden),
+                    Ok(None) => {}
+                    Err(refusal) => return refusal,
+                }
+            }
             let principal = match owner(&state, &mut parts).await {
                 Ok(principal) => principal,
                 Err(refusal) => return refusal,
@@ -243,6 +269,9 @@ pub async fn dispatch(
                 .path()
                 .strip_prefix("/v1/sites/")
                 .unwrap_or_default();
+            if gateway::is_under(SIGN_IN_CODES_PATH, below) {
+                return site_sessions::issue_code(&state, principal, &context, &site, body).await;
+            }
             if gateway::is_under(APPROVAL_PATH, below) {
                 return if parts.method == Method::DELETE {
                     site_approvals::withdraw(&state, principal, &correlation, &site).await
@@ -278,7 +307,9 @@ pub async fn dispatch(
             )
             .await
         }
-        SiteRouteClass::SignIn => platform_http::reject(FailureKind::RouteNotFound),
+        SiteRouteClass::SignIn => {
+            site_sessions::open_session(&state, &site, &parts.headers, body).await
+        }
     }
 }
 

@@ -37,7 +37,7 @@ fn now() -> jiff::Timestamp {
 /// The class table of the spec, as `(methods, path below /v1/sites, class)`. `GET /v1/sites` and
 /// `GET .../manifest` are the two reads of the web client (workspace task 6.14).
 fn listed() -> Vec<(Vec<Method>, &'static str, SiteRouteClass)> {
-    use SiteRouteClass::{Deploy, Management, Release, SiteOrigin};
+    use SiteRouteClass::{Deploy, Management, Release, SignIn, SiteOrigin};
     let read_write = vec![Method::GET, Method::PUT, Method::DELETE];
     vec![
         (vec![Method::GET], "", Management),
@@ -55,6 +55,8 @@ fn listed() -> Vec<(Vec<Method>, &'static str, SiteRouteClass)> {
         (read_write, "/{site}/publications/{publication}", Management),
         (vec![Method::GET], "/{site}/releases", Management),
         (vec![Method::POST], "/{site}/releases", Release),
+        (vec![Method::POST], "/{site}/sign-in-codes", Management),
+        (vec![Method::POST], "/{site}/sessions", SignIn),
         (vec![Method::POST], "/{site}/deploys", Deploy),
         (
             vec![Method::POST],

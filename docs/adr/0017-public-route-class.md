@@ -84,6 +84,8 @@ whose path a row holds, with a method that the row does not hold, gets `405`.
 | `GET .../releases` | management | sites |
 | `POST .../releases` | release | Edge |
 | `POST .../deploys`, `POST .../deploys/{commit}/activate` | deploy | sites |
+| `POST .../sign-in-codes` | management | Edge |
+| `POST .../sessions` | sign-in | Edge |
 | `GET`, `HEAD .../content/*` | site-origin, in the class `public` | sites |
 
 The guard of each class:
@@ -102,7 +104,13 @@ The guard of each class:
   every route that is not of this class. The upload body of `.../deploys` streams under the
   `transfer` budget of ADR-0015; the bundle size limit belongs to the sites service.
 - **site-origin**: the `public` class above. SITE-027 adds site owner sessions to this class.
-- **sign-in**: no route has it in this change. SITE-027 adds the sign-in exchange.
+- **sign-in**: `POST .../sessions` only (SITE-027). An anonymous request that the single-use
+  PKCE code and its verifier authenticate, from the `Origin` of the approved hostname. It opens a
+  `site_owner` session at the audience `site:<site id>` and sets the host-only cookie
+  `__Host-ratatoskr-site` (`HttpOnly`, `Secure`, `SameSite=Strict`, `Path=/`). Edge reads that cookie
+  only on the routes of its own site that take a site owner session, and an unsafe method there
+  needs `X-Ratatoskr-Site-Request: 1` and the `Origin` of the approved hostname. Withdrawing the
+  approval revokes the site's owner sessions in the same transaction.
 
 The sites service is the second line. It refuses the anonymous claim on every route that is not
 under `/v1/sites/{site}/content/`.

@@ -412,6 +412,35 @@ where
     Ok(result.rows_affected())
 }
 
+/// Revoke every live `site_owner` session of `site` of the user `user_id`. Returns the revoked
+/// sessions, so that the caller can record why for each.
+///
+/// # Errors
+///
+/// [`PersistenceError::Query`] if the statement fails.
+pub async fn revoke_site_sessions<'e, E>(
+    executor: E,
+    user_id: Option<Uuid>,
+    site: &str,
+    revoked_at: jiff::Timestamp,
+) -> Result<Vec<Uuid>, PersistenceError>
+where
+    E: PgExecutor<'e>,
+{
+    sqlx::query_scalar(
+        "update identity.sessions set revoked_at = $3
+          where kind = 'site_owner' and audience = $2 and revoked_at is null
+            and ($1::uuid is null or user_id = $1)
+         returning session_id",
+    )
+    .bind(user_id)
+    .bind(site_audience(site))
+    .bind(to_offset(revoked_at))
+    .fetch_all(executor)
+    .await
+    .map_err(PersistenceError::Query)
+}
+
 /// A session as the lifecycle listing presents it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ListedSession {

@@ -48,6 +48,7 @@ pub mod sessions;
 pub mod site_approvals;
 pub mod site_reads;
 pub mod site_releases;
+pub mod site_sessions;
 pub mod sites;
 pub mod status;
 pub mod stream;
