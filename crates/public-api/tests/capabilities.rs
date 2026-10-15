@@ -428,19 +428,21 @@ fn the_vocabulary_is_sorted() {
 #[tokio::test]
 async fn every_documented_path_is_served() {
     let harness = TestDatabase::create().await.expect("a test database");
-    // The notes connect is served only where the deployment routes the notes service.
+    // The notes connect and the site routes of Edge are served only where the deployment routes
+    // the notes and the sites service.
     let mut state = deployment(&harness, true, true);
+    let route = |prefix: &str, listener: &str| GatewayRouteConfig {
+        prefix: prefix.to_owned(),
+        listener: listener.parse().expect("a socket address"),
+        class: Some(GatewayRouteClass::Control),
+        capabilities_path: "/v1/capabilities".to_owned(),
+        archive_receipt_path: "/v1/ai-archives/receipt".to_owned(),
+    };
     state.gateway = platform_public_api::gateway::Gateway::from_config(&GatewayConfig {
-        routes: BTreeMap::from([(
-            "notes".to_owned(),
-            GatewayRouteConfig {
-                prefix: "/v1/notes".to_owned(),
-                listener: "127.0.0.1:8099".parse().expect("a socket address"),
-                class: Some(GatewayRouteClass::Control),
-                capabilities_path: "/v1/capabilities".to_owned(),
-                archive_receipt_path: "/v1/ai-archives/receipt".to_owned(),
-            },
-        )]),
+        routes: BTreeMap::from([
+            ("notes".to_owned(), route("/v1/notes", "127.0.0.1:8099")),
+            ("sites".to_owned(), route("/v1/sites", "127.0.0.1:8100")),
+        ]),
         ..GatewayConfig::default()
     });
     let app = app(state);
@@ -452,7 +454,8 @@ async fn every_documented_path_is_served() {
             .replace("{relay_id}", "01a018ae-b4e5-7f90-a17f-1e60c8ce61be")
             .replace("{provider}", "github")
             .replace("{token}", "rst_0v8k4a2j9pm1d7n5tp3es6uab")
-            .replace("{index}", "0");
+            .replace("{index}", "0")
+            .replace("{site}", "demo-site");
         let method = match route.method {
             platform_api_doc::Method::Get => "GET",
             platform_api_doc::Method::Post => "POST",

@@ -2,7 +2,7 @@
 
 ## Owned schemas
 
-`identity.*`: users, sessions, devices, grants, revocations, assertion nonces, and audit context.
+`identity.*`: users, sessions, devices, grants, revocations, assertion nonces, audit context, and site approvals (`identity.site_approvals`, the only store of the approval of a site manifest, workspace spec `site-manifest`).
 
 `operations.*`: operations, attempts, progress entries, results, safe errors, idempotency records, projections, outbox, inbox, schedules, and schedule occurrences.
 

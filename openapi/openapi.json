@@ -2578,6 +2578,56 @@
         ],
         "type": "object"
       },
+      "SiteApproval": {
+        "description": "The approval of one site, as Platform stores it.",
+        "properties": {
+          "capabilities": {
+            "description": "The capabilities of the approved manifest.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "hostname": {
+            "description": "The hostname of the approved manifest.",
+            "type": "string"
+          },
+          "manifest_sha256": {
+            "description": "The approved manifest digest.",
+            "type": "string"
+          },
+          "site_id": {
+            "description": "The site.",
+            "type": "string"
+          },
+          "state": {
+            "description": "`approved` or `withdrawn`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "site_id",
+          "manifest_sha256",
+          "capabilities",
+          "hostname",
+          "state"
+        ],
+        "type": "object"
+      },
+      "SiteApprovalRequest": {
+        "additionalProperties": false,
+        "description": "The body of an approval: the digest of the manifest that the owner read.",
+        "properties": {
+          "manifest_sha256": {
+            "description": "The lowercase hex SHA-256 of the manifest bytes that the owner approves.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "manifest_sha256"
+        ],
+        "type": "object"
+      },
       "SocialCaptureProvenance": {
         "description": "The social provenance a browser extension must assert explicitly.",
         "properties": {
@@ -6788,6 +6838,200 @@
         "summary": "Revoke one of your sessions",
         "tags": [
           "sessions"
+        ]
+      }
+    },
+    "/v1/sites/{site}/manifest/approval": {
+      "delete": {
+        "description": "Withdraws the approval of the site. The site then serves nothing. Platform stores the state `withdrawn` and announces it to the sites service with the digest, the capabilities and the hostname of the approval it ends. A withdrawal of a withdrawn approval changes nothing and announces nothing. Only a primary session whose user holds the live `platform.owner` grant may call this route (class `management`, ADR-0017).",
+        "operationId": "withdrawSiteManifest",
+        "parameters": [
+          {
+            "description": "The site id: 3 to 40 lower-case ASCII letters, digits and `-`.",
+            "in": "path",
+            "name": "site",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SiteApproval"
+                }
+              }
+            },
+            "description": "The approval of the site, now withdrawn."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No credential, or one that does not authenticate here."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The session is not a primary session whose user holds the live `platform.owner` grant."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The site has no approval."
+          }
+        },
+        "security": [
+          {
+            "sessionBearer": []
+          }
+        ],
+        "summary": "Withdraw the approval of a site",
+        "tags": [
+          "sites"
+        ]
+      },
+      "post": {
+        "description": "Approves the manifest that the sites service holds as the active manifest of the site. The body names the SHA-256 of the manifest bytes that the owner read; Edge reads the active manifest from the sites service and refuses a digest that is not the active one with `platform.manifest_digest_stale`. A hostname belongs to one approved site: an approval that would give a hostname to a second site is refused with `platform.site_hostname_taken`.\n\nPlatform stores the approval and announces it to the sites service in the same transaction. An approval of the digest that is approved already changes nothing and announces nothing. Only a primary session whose user holds the live `platform.owner` grant may call this route (class `management`, ADR-0017).",
+        "operationId": "approveSiteManifest",
+        "parameters": [
+          {
+            "description": "The site id: 3 to 40 lower-case ASCII letters, digits and `-`.",
+            "in": "path",
+            "name": "site",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SiteApprovalRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SiteApproval"
+                }
+              }
+            },
+            "description": "The approval of the site."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The body is not one `manifest_sha256` of 64 lower-case hex digits."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No credential, or one that does not authenticate here."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The session is not a primary session whose user holds the live `platform.owner` grant."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The sites service holds no manifest for the site."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "`platform.manifest_digest_stale`: the digest is not the active manifest. `platform.site_hostname_taken`: another approved site has the hostname."
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The sites service answered something that is not an active manifest."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The sites service could not be reached."
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The sites service did not answer in time."
+          }
+        },
+        "security": [
+          {
+            "sessionBearer": []
+          }
+        ],
+        "summary": "Approve the active manifest of a site",
+        "tags": [
+          "sites"
         ]
       }
     },

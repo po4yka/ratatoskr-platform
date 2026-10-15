@@ -45,6 +45,7 @@ pub mod notes_writes;
 pub mod oauth;
 pub mod operations;
 pub mod sessions;
+pub mod site_approvals;
 pub mod sites;
 pub mod status;
 pub mod stream;
@@ -461,6 +462,8 @@ pub fn surface() -> ApiSurface {
                 notes_writes::WRITES_DOC,
                 notes_writes::RESOLUTION_DOC,
                 notes_writes::WRITE_MODE_DOC,
+                site_approvals::APPROVE_DOC,
+                site_approvals::WITHDRAW_DOC,
             ])
             .collect(),
         register: register_schemas,
@@ -498,6 +501,8 @@ fn register_schemas(generator: &mut schemars::SchemaGenerator) {
     generator.subschema_for::<devices::Paired>();
     generator.subschema_for::<devices::DeviceList>();
     generator.subschema_for::<oauth::RelayedCallback>();
+    generator.subschema_for::<site_approvals::ApproveManifest>();
+    generator.subschema_for::<site_approvals::SiteApproval>();
     generator.subschema_for::<ratatoskr_operation_contracts::OperationSnapshot>();
     generator.subschema_for::<ratatoskr_error_contracts::ErrorEnvelope>();
     generator.subschema_for::<operations::OperationList>();

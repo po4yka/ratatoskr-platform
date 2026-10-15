@@ -49,8 +49,16 @@ fn every_failure_kind_has_a_parsable_error_code_in_the_platform_context() {
             fault.code.as_str()
         );
         let segments = fault.code.as_str().split('.').count();
+        // The two codes of the site approval, which the workspace spec `site-manifest` names with two
+        // segments, so the web client and the sites service read the same code as the spec.
+        let site_approval = matches!(
+            fault.code.as_str(),
+            "platform.manifest_digest_stale" | "platform.site_hostname_taken"
+        );
         assert!(
-            segments == 3 || (fault.code.bounded_context() == "edge" && segments == 2),
+            segments == 3
+                || (fault.code.bounded_context() == "edge" && segments == 2)
+                || site_approval,
             "{} must be a platform three-segment or Edge two-segment code",
             fault.code.as_str()
         );
@@ -161,6 +169,22 @@ fn the_status_and_retryability_table_is_pinned() {
             "platform.request.idempotency_conflict",
             false,
             "That idempotency key is in use for a different request.",
+        ),
+        (
+            // Not retryable: the digest stays stale until the owner approves the active manifest.
+            FailureKind::ManifestDigestStale,
+            StatusCode::CONFLICT,
+            "platform.manifest_digest_stale",
+            false,
+            "The manifest is not the active manifest of the site.",
+        ),
+        (
+            // Not retryable: the hostname stays taken until the other approval is withdrawn.
+            FailureKind::SiteHostnameTaken,
+            StatusCode::CONFLICT,
+            "platform.site_hostname_taken",
+            false,
+            "Another approved site has this hostname.",
         ),
         (
             // Retryable, and the wait is the point: the allowance refills on its own, so the same

@@ -190,6 +190,11 @@ pub enum FailureKind {
     /// in flight. `ARCHITECTURE.md` S8.1 rejects the first outright; the second would start the
     /// duplicate work the key exists to prevent.
     IdempotencyConflict,
+    /// A site approval names a manifest digest that is not the active manifest of the site
+    /// (workspace spec `site-manifest`). The owner reads the active manifest and approves that.
+    ManifestDigestStale,
+    /// Another approved site has the hostname of the manifest (workspace spec `site-manifest`).
+    SiteHostnameTaken,
     /// This actor has spent its allowance. `ARCHITECTURE.md` S14: "Edge applies request, body,
     /// concurrency, and per-actor limits."
     ///
@@ -213,7 +218,7 @@ pub enum FailureKind {
 impl FailureKind {
     /// Every kind, in status order. The array length is the documented count, so adding a variant
     /// without updating it does not compile.
-    pub const ALL: [Self; 15] = [
+    pub const ALL: [Self; 17] = [
         Self::RouteNotFound,
         Self::MethodNotAllowed,
         Self::PayloadTooLarge,
@@ -224,6 +229,8 @@ impl FailureKind {
         Self::InvalidRequest,
         Self::MissingIdempotencyKey,
         Self::IdempotencyConflict,
+        Self::ManifestDigestStale,
+        Self::SiteHostnameTaken,
         Self::RateLimited,
         Self::Overloaded,
         Self::UpstreamUnavailable,
@@ -263,6 +270,8 @@ impl FailureKind {
             Self::InvalidRequest => &INVALID_REQUEST,
             Self::MissingIdempotencyKey => &MISSING_IDEMPOTENCY_KEY,
             Self::IdempotencyConflict => &IDEMPOTENCY_CONFLICT,
+            Self::ManifestDigestStale => &MANIFEST_DIGEST_STALE,
+            Self::SiteHostnameTaken => &SITE_HOSTNAME_TAKEN,
             Self::RateLimited => &RATE_LIMITED,
             Self::Overloaded => &OVERLOADED,
             Self::UpstreamUnavailable => &UPSTREAM_UNAVAILABLE,
@@ -425,6 +434,28 @@ static IDEMPOTENCY_CONFLICT: LazyLock<PublicFault> = LazyLock::new(|| {
         StatusCode::CONFLICT,
         "platform.request.idempotency_conflict",
         "That idempotency key is in use for a different request.",
+        false,
+    )
+});
+
+/// `platform.manifest_digest_stale` — 409. Not retryable: the same digest stays stale until the
+/// owner approves the active manifest.
+static MANIFEST_DIGEST_STALE: LazyLock<PublicFault> = LazyLock::new(|| {
+    entry(
+        StatusCode::CONFLICT,
+        "platform.manifest_digest_stale",
+        "The manifest is not the active manifest of the site.",
+        false,
+    )
+});
+
+/// `platform.site_hostname_taken` — 409. Not retryable: the hostname stays taken until the other
+/// site's approval is withdrawn.
+static SITE_HOSTNAME_TAKEN: LazyLock<PublicFault> = LazyLock::new(|| {
+    entry(
+        StatusCode::CONFLICT,
+        "platform.site_hostname_taken",
+        "Another approved site has this hostname.",
         false,
     )
 });

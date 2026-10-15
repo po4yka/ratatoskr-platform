@@ -548,6 +548,11 @@ pub(crate) struct Claims<'a> {
     pub(crate) correlation_id: &'a str,
 }
 
+/// The claim headers alone, for a typed request that Edge sends to a domain service for a caller.
+pub(crate) fn claim_headers(claims: Claims<'_>) -> HeaderMap {
+    forwarded_headers(&HeaderMap::new(), claims)
+}
+
 /// The stored kind of the authenticated device, or `None` when the principal is not a device.
 ///
 /// A device that is gone, revoked or owned by someone else since its session authenticated is

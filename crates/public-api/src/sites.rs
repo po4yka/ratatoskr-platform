@@ -16,10 +16,13 @@ use platform_http::{ActorLimiter, RequestContext};
 use platform_identity::SessionKind;
 use uuid::Uuid;
 
-use crate::{ApiState, Principal, gateway};
+use crate::{ApiState, Principal, gateway, site_approvals};
 
 /// The name of the sites route in the gateway route table.
 pub const SERVICE: &str = "sites";
+
+/// The approval route below `/v1/sites/`, which Edge serves itself (workspace spec `site-manifest`).
+const APPROVAL_PATH: &str = "{site}/manifest/approval";
 
 /// The header that names the client of a public request. The sites gateway of SITE-026 sets it.
 const CLIENT_HEADER: &str = "x-ratatoskr-client-ip";
@@ -196,6 +199,19 @@ pub async fn dispatch(
                 Ok(principal) => principal,
                 Err(refusal) => return refusal,
             };
+            let correlation = context.correlation_id.to_string();
+            let below = parts
+                .uri
+                .path()
+                .strip_prefix("/v1/sites/")
+                .unwrap_or_default();
+            if gateway::is_under(APPROVAL_PATH, below) {
+                return if parts.method == Method::DELETE {
+                    site_approvals::withdraw(&state, principal, &correlation, &site).await
+                } else {
+                    site_approvals::approve(&state, principal, &correlation, &site, body).await
+                };
+            }
             gateway::proxy(
                 State(state),
                 principal,

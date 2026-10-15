@@ -550,6 +550,48 @@ create unique index pairing_codes_one_pending_per_user_key
     on identity.pairing_codes (user_id)
     where consumed_at is null and superseded_at is null;
 
+-- Site approvals (SITE-025, workspace change `add-site-publications`, spec `site-manifest`). The
+-- approval of a site manifest is an authorisation decision, so Platform holds it and the sites service
+-- keeps only a projection of `evt.platform.site_approval.changed.v1`. One row for each site, bound to
+-- the approved manifest digest. A withdrawal keeps the row, with the digest, capabilities and hostname
+-- that it ended.
+
+create table identity.site_approvals (
+    site_id          text        primary key,
+    changed_by       uuid        not null references identity.users (user_id),
+    manifest_sha256  text        not null,
+    capabilities     text[]      not null,
+    hostname         text        not null,
+    state            text        not null,
+    changed_at       timestamptz not null,
+
+    constraint site_approvals_site_id_is_a_site_id
+        check (site_id ~ '^[a-z0-9-]{3,40}$'),
+    constraint site_approvals_manifest_sha256_is_a_digest
+        check (manifest_sha256 ~ '^[0-9a-f]{64}$'),
+    -- The closed capability set of `sites/site-manifest.v1`.
+    constraint site_approvals_capabilities_are_known
+        check (capabilities <@ array['pages.read', 'assets.read', 'search.publication',
+                                     'live.release', 'draft.read', 'notes.edit', 'library.read',
+                                     'knowledge.search']::text[]),
+    constraint site_approvals_hostname_is_bounded
+        check (length(hostname) between 1 and 253),
+    constraint site_approvals_state_is_known
+        check (state in ('approved', 'withdrawn'))
+);
+
+comment on table identity.site_approvals is
+    'The only store of site approvals (workspace spec site-manifest): one row for each site, bound to '
+    'the manifest digest the owner approved. Edge writes the row and the approval event in one '
+    'transaction.';
+comment on column identity.site_approvals.changed_by is
+    'The owner whose request made the last change; the tenant of the approval event.';
+
+-- A hostname belongs to one approved site. A withdrawn row frees its hostname.
+create unique index site_approvals_hostname_is_unique_while_approved
+    on identity.site_approvals (hostname)
+    where state = 'approved';
+
 -- =================================================================================================
 -- operations
 -- =================================================================================================

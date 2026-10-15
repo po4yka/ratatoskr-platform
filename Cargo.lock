@@ -2446,6 +2446,7 @@ dependencies = [
  "ratatoskr-platform-persistence",
  "ratatoskr-platform-scheduling",
  "ratatoskr-platform-telemetry",
+ "ratatoskr-sites-contracts",
  "ratatoskr-social-contracts",
  "ring",
  "schemars",
@@ -2526,6 +2527,20 @@ dependencies = [
  "sqlx",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "ratatoskr-sites-contracts"
+version = "0.1.0"
+source = "git+https://github.com/po4yka/ratatoskr-contracts.git?rev=df646b0b08ab9f63bee92d1067d39427114b8727#df646b0b08ab9f63bee92d1067d39427114b8727"
+dependencies = [
+ "ratatoskr-event-envelope",
+ "ratatoskr-identifiers",
+ "regex",
+ "schemars",
+ "serde",
+ "serde_json",
+ "thiserror",
 ]
 
 [[package]]
