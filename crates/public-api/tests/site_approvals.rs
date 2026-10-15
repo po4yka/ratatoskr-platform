@@ -290,7 +290,7 @@ async fn stale_digest_is_refused() {
     let (status, body) = approve(&app, "demo-site", FIRST).await;
     assert_eq!(
         (status, body["code"].as_str()),
-        (409, Some("platform.manifest_digest_stale")),
+        (409, Some("platform.site.manifest_digest_stale")),
         "{body}"
     );
     assert!(approvals(harness.pool()).await.is_empty(), "no row changes");
@@ -324,7 +324,7 @@ async fn hostname_is_unique_across_approved_sites() {
     let (status, body) = approve(&app, "site-b", SECOND).await;
     assert_eq!(
         (status, body["code"].as_str()),
-        (409, Some("platform.site_hostname_taken")),
+        (409, Some("platform.site.hostname_taken")),
         "{body}"
     );
     let stored = approvals(harness.pool()).await;
