@@ -466,3 +466,94 @@ async fn streamed_change_batch_and_manifest_past_the_notes_maximum_are_refused_w
     task.abort();
     harness.cleanup().await.expect("cleanup");
 }
+
+/// Workspace OBS-024 task 10.11: the plugin and the export agent read the write queue of their
+/// connection and report each result through Edge, in the `control` budget. A browser session is
+/// refused on both routes, because the queue belongs to the connection's device.
+#[tokio::test]
+async fn device_reads_its_operation_queue() {
+    let (address, mut seen, task) = stub().await;
+    let harness = TestDatabase::create().await.expect("a test database");
+    let (owner, device) = seed_plugin(harness.pool()).await;
+    seed_owner(harness.pool()).await;
+    let app = app(&harness, &notes_route(address));
+    let credential = device_credential(&app, device).await;
+    let queue = format!("{CONNECTION}/device-operations");
+    let result =
+        format!("{CONNECTION}/device-operations/018f0000-0000-7000-8000-0000000000d1/result");
+    let request = |bearer: &str, method: Method, uri: &str, body: String| {
+        Request::builder()
+            .method(method)
+            .uri(uri)
+            .header("authorization", format!("Bearer {bearer}"))
+            .header("content-type", "application/json")
+            .body(Body::from(body))
+            .expect("a request")
+    };
+
+    let (status, body) = send(
+        &app,
+        request(
+            &credential,
+            Method::GET,
+            &format!("{queue}?after=7"),
+            String::new(),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "the device reads its queue: {body}");
+    let read = seen.recv().await.expect("the queue read reaches notes");
+    assert_eq!(read.path, queue);
+    assert_eq!(read.query.as_deref(), Some("after=7"));
+    assert_eq!(
+        values(&read.headers, "x-ratatoskr-user-id"),
+        [owner.to_string()]
+    );
+    assert_eq!(
+        values(&read.headers, "x-ratatoskr-device-id"),
+        [device.to_string()]
+    );
+
+    let (status, body) = send(
+        &app,
+        request(
+            &credential,
+            Method::POST,
+            &result,
+            r#"{"outcome":"applied"}"#.to_owned(),
+        ),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "the device reports a result: {body}"
+    );
+    let report = seen.recv().await.expect("the result reaches notes");
+    assert_eq!(report.method, Method::POST);
+    assert_eq!(report.path, result);
+    assert_eq!(&report.body[..], br#"{"outcome":"applied"}"#);
+
+    // The control budget of the test route is 1 KiB.
+    let padded = "x".repeat(2048);
+    let (status, body) = send(&app, request(&credential, Method::POST, &result, padded)).await;
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE, "{body}");
+
+    for (method, uri) in [(Method::GET, queue.clone()), (Method::POST, result.clone())] {
+        let (status, body) = send(
+            &app,
+            request(OWNER_CREDENTIAL, method, &uri, "{}".to_owned()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{uri}: {body}");
+        assert_eq!(body["code"], "platform.auth.forbidden");
+    }
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), seen.recv())
+            .await
+            .is_err(),
+        "a request to the queue without a device reached the notes service"
+    );
+    task.abort();
+    harness.cleanup().await.expect("cleanup");
+}
