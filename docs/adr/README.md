@@ -50,6 +50,10 @@ request that writes it.
 - [ADR-0016](0016-device-credential-model.md): Device credential model — primary-session pairing,
   device-root and rotating session credentials, lifecycle visibility, revocation, and pairing abuse
   limits. **Accepted**, and closes the authentication half milestone 8 left open.
+- [ADR-0017](0017-public-route-class.md): The `public` route class and the site route classes — an
+  anonymous, cacheable class for the Content Delivery API of `ratatoskr-sites`, rate-limited at
+  Edge before the proxy, and one class (`management`, `site-origin`, `sign-in`, `release`) for every
+  route under `/v1/sites/{site}/`, without which Edge refuses to start. **Accepted** (SITE-025).
 
 Still unwritten, and deliberately unnumbered until somebody writes one: idempotency retention, which
 should be written in the same pull request as the retention loop rather than left here.
