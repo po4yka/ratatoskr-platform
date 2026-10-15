@@ -27,6 +27,9 @@ use crate::{ApiState, Principal};
 /// The kind of the operation that a build request mints.
 const BUILD_KIND: &str = "sites.release.build";
 
+/// The one service that reports on a build (XR-021 R3-02).
+const SITES_PRODUCER: &str = "ratatoskr-sites";
+
 /// The route string that the idempotency ledger stores: plain segments, because the ledger refuses
 /// a template. The site in the path is the fingerprint instead.
 const BUILD_LEDGER_ROUTE: &str = "/v1/sites/releases";
@@ -81,7 +84,7 @@ pub(crate) async fn request_build(
         key,
         fingerprint: site.as_str().as_bytes(),
         correlation,
-        reporter: None,
+        reporter: Some(SITES_PRODUCER),
     };
     accept(state, principal, &intake, accepted, |operation, now| {
         command(&site, operation.operation_id, principal.user_id, now)

@@ -49,6 +49,9 @@ const CHANNEL_DIGEST_PRODUCERS: &[&str] = &["ratatoskr-channel-digests"];
 /// notes write and of a write-mode change (workspace change `add-notes-write-back`).
 const NOTES_PRODUCERS: &[&str] = &["ratatoskr-notes"];
 
+/// The one producer of a site release build (workspace change `add-site-publications`).
+const SITES_PRODUCERS: &[&str] = &["ratatoskr-sites"];
+
 /// Every operation kind Platform mints, and who may report for it.
 ///
 /// `channel_digest.schedule.occurrence` is the `operation_kind` that channel-digests registers with
@@ -80,6 +83,7 @@ pub const AUTHORITY: &[(&str, Producers)] = &[
         "notes.connection.write_mode",
         Producers::Listed(NOTES_PRODUCERS),
     ),
+    ("sites.release.build", Producers::Listed(SITES_PRODUCERS)),
 ];
 
 /// The row for `kind`, if the table has one.

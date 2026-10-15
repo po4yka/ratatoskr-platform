@@ -403,8 +403,9 @@ A report is applied only when the operation it names belongs to the report's ten
 service the operation was dispatched to is the one reporting. `operations.operations.reporter`
 records that service when the operation is accepted: the extractor for a URL capture, a blob capture
 and the webhook content-capture target, `ratatoskr-x`, `ratatoskr-instagram` or `ratatoskr-threads`
-for a social capture of that provider, `ratatoskr-channel-digests` for the channel-digest routes, and
-the schedule's `service_name` for a scheduled occurrence. `platform_operations::accept` refuses a
+for a social capture of that provider, `ratatoskr-channel-digests` for the channel-digest routes,
+`ratatoskr-sites` for a site release build (`sites.release.build`), and the schedule's
+`service_name` for a scheduled occurrence. `platform_operations::accept` refuses a
 reporter that is not in the kind's row of the table in `crates/operations/src/authority.rs`. The
 projection loads the operation first, then requires the envelope `tenant_id` to equal `user:<owner>`
 and, for a kind with a listed row, the envelope `producer` to equal the recorded reporter; an
