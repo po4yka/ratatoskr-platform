@@ -41,6 +41,15 @@ const MAX_ANSWER_BYTES: usize = 16_384;
 /// The path of the connect call.
 pub const CONNECT_ROUTE: &str = "/v1/notes/connections";
 
+/// The paths below the notes route that only a paired device calls: the change batch, the manifest
+/// and the uploads (workspace spec `notes-device-channels`). Notes answers a request without the
+/// device claims with `401`, which Edge does not relay, so Edge refuses it with `403` first.
+pub(crate) const DEVICE_PATHS: [&str; 3] = [
+    "/connections/{connection}/changes",
+    "/connections/{connection}/manifest",
+    "/connections/{connection}/blobs",
+];
+
 /// The body of a connect. The notes service owns its members, and Edge sends it to the notes service
 /// unread.
 #[derive(Debug, schemars::JsonSchema)]

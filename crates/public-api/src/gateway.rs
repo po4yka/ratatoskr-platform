@@ -615,6 +615,15 @@ pub async fn proxy(
         Ok(kind) => kind,
         Err(rejection) => return rejection,
     };
+    let below = request.uri().path().strip_prefix(route.prefix.as_str());
+    if device_kind.is_none()
+        && service == "notes"
+        && crate::notes::DEVICE_PATHS
+            .iter()
+            .any(|pattern| below.is_some_and(|below| is_under(pattern, below)))
+    {
+        return platform_http::reject(FailureKind::Forbidden);
+    }
     let path_and_query = request
         .uri()
         .path_and_query()
