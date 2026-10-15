@@ -211,3 +211,53 @@ async fn client_ip_header_is_used_from_the_gateway_peer() {
 
     harness.cleanup().await.expect("cleanup");
 }
+
+/// One request from `peer` with each of `values` as an `X-Ratatoskr-Client-IP` header.
+async fn from_peer_with(app: &Router, peer: &str, values: &[&str]) -> u16 {
+    let mut builder = Request::builder().uri(PAGE);
+    for value in values {
+        builder = builder.header("x-ratatoskr-client-ip", *value);
+    }
+    let mut request = builder.body(Body::empty()).expect("a request");
+    let peer: SocketAddr = peer.parse().expect("a peer address");
+    request.extensions_mut().insert(ConnectInfo(peer));
+    app.clone()
+        .oneshot(request)
+        .await
+        .expect("a response")
+        .status()
+        .as_u16()
+}
+
+/// From the gateway address, Edge keys the client bucket on the header only when the request
+/// carries exactly one value and that value is an IP address. A value that is not an address, and
+/// two values, key the bucket on the peer, as on any other connection.
+#[tokio::test]
+async fn client_ip_header_needs_one_valid_address() {
+    let harness = TestDatabase::create().await.expect("a test database");
+    let (sites, _) = stub_sites().await;
+    let app = app(&harness, sites);
+
+    assert_eq!(
+        from_peer_with(&app, GATEWAY_PEER, &["not-an-address"]).await,
+        200,
+        "the first request"
+    );
+    assert_eq!(
+        from_peer_with(&app, GATEWAY_PEER, &["4.4.4.4", "5.5.5.5"]).await,
+        429,
+        "two values key on the peer, like a value that is not an address"
+    );
+    assert_eq!(
+        from_peer_with(&app, GATEWAY_PEER, &["127.0.0.83"]).await,
+        429,
+        "the spent bucket is the bucket of the peer address 127.0.0.83"
+    );
+    assert_eq!(
+        from_peer_with(&app, GATEWAY_PEER, &["4.4.4.4"]).await,
+        200,
+        "one valid address keeps its own bucket"
+    );
+
+    harness.cleanup().await.expect("cleanup");
+}

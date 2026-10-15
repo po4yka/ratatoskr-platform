@@ -362,3 +362,121 @@ async fn a_deployer_device_deploys_its_site() {
 
     harness.cleanup().await.expect("cleanup");
 }
+
+const OWNER: &str = "deploy-routes-owner-credential-00";
+
+/// A primary browser session whose user holds the live owner grant.
+async fn owner(pool: &sqlx::PgPool) {
+    let (user, _) = browser_session(pool, OWNER).await;
+    platform_identity::grant::grant(
+        pool,
+        user,
+        ratatoskr_operational_contracts::PLATFORM_OWNER_GRANT,
+        now(),
+        None,
+    )
+    .await
+    .expect("the owner grant");
+}
+
+/// The activation takes no body: Edge refuses a request that declares one, before the sites
+/// service, so the activation never streams under the transfer budget.
+#[tokio::test]
+async fn an_activation_with_a_body_never_reaches_the_sites_service() {
+    let harness = TestDatabase::create().await.expect("a test database");
+    owner(harness.pool()).await;
+    let (sites, seen) = stub("/v1/sites").await;
+    let (notes, _) = stub("/v1/notes").await;
+    let app = app(&harness, sites, notes);
+
+    assert_eq!(
+        call(&app, "POST", &activate(SITE), OWNER, BUNDLE).await,
+        (400, "platform.request.invalid".to_owned()),
+        "POST {} with a body",
+        activate(SITE)
+    );
+    assert_eq!(
+        count(&seen),
+        0,
+        "an activation with a body reached the sites service"
+    );
+    assert_eq!(
+        call(&app, "POST", &activate(SITE), OWNER, b"").await.0,
+        200,
+        "an activation without a body is served"
+    );
+
+    harness.cleanup().await.expect("cleanup");
+}
+
+/// A pin of the claim hygiene: a site claim that a client sends never reaches the sites service. The
+/// owner's deploy carries no site claim at all, because the owner is not a deployer device.
+#[tokio::test]
+async fn a_forged_site_claim_never_reaches_the_sites_service() {
+    let harness = TestDatabase::create().await.expect("a test database");
+    owner(harness.pool()).await;
+    let (sites, seen) = stub("/v1/sites").await;
+    let (notes, _) = stub("/v1/notes").await;
+    let app = app(&harness, sites, notes);
+
+    let request = Request::builder()
+        .method("POST")
+        .uri(deploys(SITE))
+        .header("content-type", "application/x-tar")
+        .header("authorization", format!("Bearer {OWNER}"))
+        .header("x-ratatoskr-site-id", OTHER_SITE)
+        .body(Body::from(BUNDLE))
+        .expect("a request");
+    let status = app
+        .clone()
+        .oneshot(request)
+        .await
+        .expect("a response")
+        .status();
+    assert_eq!(status, StatusCode::OK, "the owner's deploy is served");
+    let seen = seen.lock().expect("the record").clone();
+    assert_eq!(seen.len(), 1, "one downstream request");
+    assert_eq!(
+        seen[0].1.get("x-ratatoskr-site-id"),
+        None,
+        "the forged site claim was forwarded"
+    );
+
+    harness.cleanup().await.expect("cleanup");
+}
+
+/// A device session whose device row cannot be read is not a principal: Edge answers the stable
+/// unauthenticated error. The row is removed with the foreign keys switched off, which no code path
+/// of Platform can do; the test only proves the extractor's answer.
+#[tokio::test]
+async fn a_session_without_its_device_is_unauthenticated() {
+    let harness = TestDatabase::create().await.expect("a test database");
+    let device_id = deployer(harness.pool()).await;
+    let mut connection = harness.pool().acquire().await.expect("a connection");
+    sqlx::query("set session_replication_role = replica")
+        .execute(&mut *connection)
+        .await
+        .expect("foreign keys off for this connection");
+    sqlx::query("delete from identity.registered_devices where device_id = $1")
+        .bind(device_id)
+        .execute(&mut *connection)
+        .await
+        .expect("the device row is removed");
+    sqlx::query("set session_replication_role = origin")
+        .execute(&mut *connection)
+        .await
+        .expect("foreign keys on again");
+    drop(connection);
+    let (sites, seen) = stub("/v1/sites").await;
+    let (notes, _) = stub("/v1/notes").await;
+    let app = app(&harness, sites, notes);
+
+    assert_eq!(
+        call(&app, "POST", &deploys(SITE), DEPLOYER, BUNDLE).await,
+        (401, "platform.auth.unauthenticated".to_owned()),
+        "a session whose device is gone"
+    );
+    assert_eq!(count(&seen), 0);
+
+    harness.cleanup().await.expect("cleanup");
+}
