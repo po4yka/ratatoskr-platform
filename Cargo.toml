@@ -56,18 +56,18 @@ platform-nats-profile          = { version = "0.1.0", path = "crates/nats-profil
 # distinct packages, so `EntityRef` from one would not unify with `EntityRef` from the other and the
 # compiler error would be baffling.
 # Replaced by a version requirement when contracts milestone 10 publishes.
-ratatoskr-identifiers     = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "df646b0b08ab9f63bee92d1067d39427114b8727" }
-ratatoskr-error-contracts = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "df646b0b08ab9f63bee92d1067d39427114b8727" }
-ratatoskr-event-envelope  = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "df646b0b08ab9f63bee92d1067d39427114b8727" }
-ratatoskr-operation-contracts = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "df646b0b08ab9f63bee92d1067d39427114b8727" }
-ratatoskr-operational-contracts = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "df646b0b08ab9f63bee92d1067d39427114b8727" }
-ratatoskr-social-contracts = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "df646b0b08ab9f63bee92d1067d39427114b8727" }
-ratatoskr-blob-transfer-contracts = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "df646b0b08ab9f63bee92d1067d39427114b8727" }
-ratatoskr-ai-archive-contracts = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "df646b0b08ab9f63bee92d1067d39427114b8727" }
-ratatoskr-document-contracts = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "df646b0b08ab9f63bee92d1067d39427114b8727" }
-ratatoskr-channel-digest-contracts = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "df646b0b08ab9f63bee92d1067d39427114b8727" }
-ratatoskr-notes-contracts = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "df646b0b08ab9f63bee92d1067d39427114b8727" }
-ratatoskr-sites-contracts = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "df646b0b08ab9f63bee92d1067d39427114b8727" }
+ratatoskr-identifiers     = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "2c726027da79e0e899ad482afead0a2000b03e61" }
+ratatoskr-error-contracts = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "2c726027da79e0e899ad482afead0a2000b03e61" }
+ratatoskr-event-envelope  = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "2c726027da79e0e899ad482afead0a2000b03e61" }
+ratatoskr-operation-contracts = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "2c726027da79e0e899ad482afead0a2000b03e61" }
+ratatoskr-operational-contracts = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "2c726027da79e0e899ad482afead0a2000b03e61" }
+ratatoskr-social-contracts = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "2c726027da79e0e899ad482afead0a2000b03e61" }
+ratatoskr-blob-transfer-contracts = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "2c726027da79e0e899ad482afead0a2000b03e61" }
+ratatoskr-ai-archive-contracts = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "2c726027da79e0e899ad482afead0a2000b03e61" }
+ratatoskr-document-contracts = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "2c726027da79e0e899ad482afead0a2000b03e61" }
+ratatoskr-channel-digest-contracts = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "2c726027da79e0e899ad482afead0a2000b03e61" }
+ratatoskr-notes-contracts = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "2c726027da79e0e899ad482afead0a2000b03e61" }
+ratatoskr-sites-contracts = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "2c726027da79e0e899ad482afead0a2000b03e61" }
 
 # ---- persistence ----
 # No `migrate` feature: the schema is one file, `include_str!`d into the binary by
