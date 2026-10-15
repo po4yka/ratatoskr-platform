@@ -706,3 +706,59 @@ async fn site_upload_claim_is_not_relabelled_as_primary() {
 
     harness.cleanup().await.expect("cleanup");
 }
+
+/// Review M1 of SITE-027: the row of an edit commits in the transaction of its operation and its
+/// command. When the row cannot be written, nothing is admitted, and a retry with the same key is
+/// a clean first attempt.
+#[tokio::test]
+async fn failed_edit_record_admits_nothing() {
+    let harness = TestDatabase::create().await.expect("a test database");
+    let edge = edge(&harness).await;
+    for statement in [
+        "create function operations.refuse_site_edit() returns trigger language plpgsql
+           as $$ begin raise exception 'the site edit is refused'; end $$",
+        "create trigger refuse_site_edit before insert on operations.site_edits
+           for each row execute function operations.refuse_site_edit()",
+    ] {
+        sqlx::query(statement)
+            .execute(harness.pool())
+            .await
+            .expect("the fault");
+    }
+
+    let body = edit_body(SOURCE, 'a', "edit-m1");
+    let (status, answer) = post_edit(&edge, &body).await;
+    assert_eq!(
+        (status, answer["code"].as_str()),
+        (504, Some("platform.request.timeout")),
+        "{answer}"
+    );
+    assert!(
+        outbox(harness.pool(), WRITE).await.is_empty(),
+        "a write command was admitted without its edit row"
+    );
+    let operations: i64 = sqlx::query_scalar(
+        "select count(*) from operations.operations where kind = 'notes.file.write'",
+    )
+    .fetch_one(harness.pool())
+    .await
+    .expect("a count");
+    assert_eq!(
+        operations, 0,
+        "an operation was admitted without its edit row"
+    );
+
+    sqlx::query("drop trigger refuse_site_edit on operations.site_edits")
+        .execute(harness.pool())
+        .await
+        .expect("the fault is removed");
+    let (status, answer) = post_edit(&edge, &body).await;
+    assert_eq!(status, 202, "{answer}");
+    let rows: i64 = sqlx::query_scalar("select count(*) from operations.site_edits")
+        .fetch_one(harness.pool())
+        .await
+        .expect("a count");
+    assert_eq!((rows, outbox(harness.pool(), WRITE).await.len()), (1, 1));
+
+    harness.cleanup().await.expect("cleanup");
+}
