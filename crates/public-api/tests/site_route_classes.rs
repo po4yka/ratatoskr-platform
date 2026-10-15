@@ -28,6 +28,8 @@ use ratatoskr_operational_contracts::PLATFORM_OWNER_GRANT;
 use tokio::net::TcpListener;
 use tower::ServiceExt as _;
 
+mod site_owner_support;
+
 const AUDIENCE: &str = "edge";
 
 fn now() -> jiff::Timestamp {
@@ -69,6 +71,84 @@ fn listed() -> Vec<(Vec<Method>, &'static str, SiteRouteClass)> {
             SiteOrigin,
         ),
     ]
+    .into_iter()
+    .chain(
+        site_owner_origin_rows()
+            .into_iter()
+            .map(|(method, path)| (vec![method], path, SiteOrigin)),
+    )
+    .collect()
+}
+
+/// The routes of the site owner session on the site origin (workspace change
+/// `add-site-owner-editing-and-live`, spec `site-route-classes`).
+fn site_owner_origin_rows() -> Vec<(Method, &'static str)> {
+    vec![
+        (Method::GET, "/{site}/events"),
+        (Method::GET, "/{site}/drafts/pages/{*slug}"),
+        (Method::GET, "/{site}/drafts/sources/{source_ref}"),
+        (Method::POST, "/{site}/drafts/sources/{source_ref}/blobs"),
+        (Method::POST, "/{site}/edits"),
+        (Method::GET, "/{site}/conflicts/{conflict_id}"),
+        (Method::GET, "/{site}/library"),
+        (Method::GET, "/{site}/knowledge/search"),
+    ]
+}
+
+/// Spec `site-route-classes`, "The sign-in rows have their classes".
+#[test]
+fn sign_in_routes_have_their_classes() {
+    let class_of = |method: &Method, path: &str| -> Vec<Option<SiteRouteClass>> {
+        ROUTES
+            .iter()
+            .filter(|row| row.path == path && row.methods.contains(method))
+            .map(|row| row.class)
+            .collect()
+    };
+    assert_eq!(
+        class_of(&Method::POST, "/{site}/sign-in-codes"),
+        [Some(SiteRouteClass::Management)]
+    );
+    assert_eq!(
+        class_of(&Method::POST, "/{site}/sessions"),
+        [Some(SiteRouteClass::SignIn)]
+    );
+    let sign_in: Vec<&str> = ROUTES
+        .iter()
+        .filter(|row| row.class == Some(SiteRouteClass::SignIn))
+        .map(|row| row.path)
+        .collect();
+    assert_eq!(
+        sign_in,
+        ["/{site}/sessions"],
+        "no other row has the class sign-in"
+    );
+}
+
+/// Spec `site-route-classes`, "The site-origin rows have their class": each route of the site owner
+/// session on the site origin has the class `site-origin`, and the draft upload takes the
+/// `transfer` budget.
+#[test]
+fn site_owner_origin_routes_have_the_site_origin_class() {
+    for (method, path) in site_owner_origin_rows() {
+        let rows: Vec<Option<SiteRouteClass>> = ROUTES
+            .iter()
+            .filter(|row| row.path == path && row.methods.contains(&method))
+            .map(|row| row.class)
+            .collect();
+        assert_eq!(
+            rows,
+            [Some(SiteRouteClass::SiteOrigin)],
+            "{method} /v1/sites{path} must have exactly the class SiteOrigin"
+        );
+    }
+    assert!(
+        platform_core::config::GATEWAY_TRANSFER_PATHS
+            .iter()
+            .any(|(service, path, _)| *service == "sites"
+                && *path == "/{site}/drafts/sources/{source_ref}/blobs"),
+        "the draft upload takes the transfer budget"
+    );
 }
 
 /// Spec `site-route-classes`, "A route without a class stops Edge": the start-up check refuses a
@@ -138,6 +218,61 @@ fn deploy_routes_have_the_deploy_class() {
             "POST /v1/sites{path} must have exactly the class Deploy, and not Management"
         );
     }
+}
+
+/// Spec `site-route-classes`, "A site session on a management route": a `site_owner` session is
+/// no credential on a management route, and the stub sites service receives no request.
+#[tokio::test]
+async fn management_route_refuses_site_owner_session() {
+    use site_owner_support as support;
+    let harness = TestDatabase::create().await.expect("a test database");
+    let stub = support::Stub::start().await;
+    stub.manifest(
+        support::SITE,
+        support::HOSTNAME,
+        &["pages.read", "notes.edit"],
+    );
+    let owner = support::primary(harness.pool(), support::OWNER, true).await;
+    support::approval(
+        harness.pool(),
+        owner,
+        support::SITE,
+        support::HOSTNAME,
+        &["pages.read", "notes.edit"],
+        "approved",
+    )
+    .await;
+    let app = support::app(support::state(&harness, stub.address, &[]));
+    let cookie = support::sign_in(&app, support::SITE, support::HOSTNAME).await;
+    let before = stub.count();
+
+    let origin = format!("https://{}", support::HOSTNAME);
+    for (method, path) in [
+        ("PUT", "/v1/sites/site-a/manifest"),
+        ("POST", "/v1/sites/site-a/sign-in-codes"),
+    ] {
+        let request = support::from_site(
+            method,
+            path,
+            &cookie,
+            true,
+            Some(&origin),
+            &serde_json::json!({}),
+        );
+        assert_eq!(
+            support::status_and_code(&app, request).await,
+            (401, "platform.auth.unauthenticated".to_owned()),
+            "{method} {path} with a site_owner session"
+        );
+    }
+    assert_eq!(stub.count(), before, "the sites service received a request");
+    let codes: i64 = sqlx::query_scalar("select count(*) from identity.site_sign_in_codes")
+        .fetch_one(harness.pool())
+        .await
+        .expect("a count");
+    assert_eq!(codes, 1, "only the code of the sign-in itself was issued");
+
+    harness.cleanup().await.expect("cleanup");
 }
 
 /// A session of `kind` for a new user, optionally with the owner grant.
