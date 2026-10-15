@@ -198,12 +198,34 @@ pub struct GatewayRouteBudget {
     pub response_timeout_seconds: u64,
 }
 
-/// The sub-paths of a route that carry bytes, as `(service, path below the route prefix)`. They use
-/// the `transfer` budget whatever the class of their route: Edge registers each one with the
-/// transfer body limit and waits for its answer under the transfer timeout, and the validation
-/// checks the public limits against the transfer budget for each service named here.
-pub const GATEWAY_TRANSFER_PATHS: [(&str, &str); 1] =
-    [("notes", "/connections/{connection}/blobs")];
+/// The sub-paths of a route that carry bytes, as `(service, path below the route prefix, body
+/// limit)`. They use the `transfer` budget whatever the class of their route: Edge serves each one
+/// with the transfer body limit and waits for its answer under the transfer timeout, and the
+/// validation checks the public limits against the transfer budget for each service named here.
+///
+/// A body limit is the largest body that the service takes at that path and below it. The proxy
+/// refuses a larger body with `413`, so the service never answers it with a refusal that is not an
+/// error envelope. The limit is never above the transfer budget. The notes limits are
+/// `MAX_BATCH_BYTES` and `MAX_MANIFEST_BYTES` of its channel routes, and `CHUNK_SIZE_MAX_BYTES` of
+/// the shared transfer contract.
+pub const GATEWAY_TRANSFER_PATHS: [(&str, &str, Option<u64>); 4] = [
+    ("notes", "/connections/{connection}/blobs", None),
+    (
+        "notes",
+        "/connections/{connection}/blobs/{token}/chunks/{index}",
+        Some(16 * 1024 * 1024),
+    ),
+    (
+        "notes",
+        "/connections/{connection}/changes",
+        Some(2 * 1024 * 1024),
+    ),
+    (
+        "notes",
+        "/connections/{connection}/manifest",
+        Some(32 * 1024 * 1024),
+    ),
+];
 
 impl GatewayRouteBudgets {
     /// The budget selected by one route class.

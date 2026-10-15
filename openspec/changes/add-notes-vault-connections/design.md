@@ -19,12 +19,24 @@ name; the header belongs in the shared claim constants when the contracts change
 Alternative: put the kind in the session row. Rejected: the kind is a fact of the device, and a
 second copy can disagree with it.
 
-### D2. `/blobs` uses the transfer budget inside a control route
+### D2. The device routes use the transfer budget inside a control route
 
-The notes route is `control`. Edge registers the sub-path `/v1/notes/connections/{id}/blobs` (and
-the paths below it) with the `transfer` body limit, and the proxy selects the `transfer` response
-budget for it. One table, `platform_core::config::GATEWAY_TRANSFER_PATHS`, holds the sub-path, so a
-second one is one row. The configuration validation reads the same table: for a service named there,
+The notes route is `control`. Edge registers the sub-paths `/v1/notes/connections/{id}/blobs` (and
+the paths below it), `/changes` and `/manifest` with the `transfer` body limit, and the proxy
+selects the `transfer` response budget for them. A change batch of 2 MiB and a manifest of 32 MiB
+do not fit in the `control` body budget, and a manifest of 100 000 entries does not arrive and get
+reconciled within the `control` response budget on a slow link. One table,
+`platform_core::config::GATEWAY_TRANSFER_PATHS`, holds the sub-paths, so a next one is one row.
+
+A row can also name the largest body that the service takes there: 2 MiB for `/changes`, 32 MiB
+for `/manifest` (`MAX_BATCH_BYTES` and `MAX_MANIFEST_BYTES` of notes), and 16 MiB for
+`/blobs/{token}/chunks/{index}` (`CHUNK_SIZE_MAX_BYTES` of the transfer contract). The proxy refuses
+a larger body with `413` before it forwards: by its declared length, or while it streams. Without
+the limit a chunk above 16 MiB reaches notes, whose axum `413` is not an error envelope, and Edge
+answers `502`. A row below another row is served by the route of the outer row, because the router
+cannot hold a parameter and a catch-all at one segment; the proxy still takes the smaller limit.
+The limits are copies of the limits of notes, so a change to one of them in notes needs the same
+change here. The configuration validation reads the same table: for a service named there,
 `public.max_body_bytes` and `public.request_timeout_seconds` must hold the `transfer` budget as well
 as the budget of the route class.
 

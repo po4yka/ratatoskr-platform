@@ -46,9 +46,10 @@ RATATOSKR__ARCHIVE_STAGING__SWEEP_INTERVAL_SECONDS=300
 # github 8092 is GitHub's API listener, chatgpt 8096 and claude 8097 are the receipt listeners
 # (RATATOSKR__RECEIPT__LISTEN_ADDRESS), and notes 8099 is the domain API listener of ratatoskr-notes
 # (RATATOSKR__API__LISTEN_ADDRESS). The notes route is control; Edge gives
-# /v1/notes/connections/{id}/blobs the transfer budget, and it handles POST /v1/notes/connections
-# itself: it mints the operation and forwards the body, which holds Obsidian secrets, without
-# keeping any part of it. Vault 8093, social 8094 and ai 8095 have no implementing
+# /v1/notes/connections/{id}/blobs, .../changes and .../manifest the transfer budget, with the body
+# limits of notes (16 MiB an upload chunk, 2 MiB a change batch, 32 MiB a manifest), and it handles
+# POST /v1/notes/connections itself: it mints the operation and forwards the body, which holds
+# Obsidian secrets, without keeping any part of it. Vault 8093, social 8094 and ai 8095 have no implementing
 # service yet, so nothing listens there and Edge reports those capabilities stale on purpose: that is
 # the truthful answer, and a route is not removed to hide it.
 RATATOSKR__GATEWAY__ROUTES__KNOWLEDGE__PREFIX=/v1/k

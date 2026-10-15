@@ -356,10 +356,20 @@ pub fn routes(state: Arc<ApiState>) -> Router {
                 .route(&route.prefix, handler.clone())
                 .route(&format!("{}/{{*tail}}", route.prefix), handler)
         });
-    // A sub-path that carries bytes takes the transfer body limit inside its route.
-    let router = platform_core::config::GATEWAY_TRANSFER_PATHS
+    // A sub-path that carries bytes takes the transfer body limit inside its route. A sub-path below
+    // another one is served by the route of that one, and the proxy applies its smaller limit.
+    let transfer_paths = platform_core::config::GATEWAY_TRANSFER_PATHS;
+    let router = transfer_paths
         .iter()
-        .filter_map(|(service, sub_path)| {
+        .filter(|(service, sub_path, _)| {
+            !transfer_paths.iter().any(|(owner, outer, _)| {
+                owner == service
+                    && sub_path
+                        .strip_prefix(outer)
+                        .is_some_and(|rest| rest.starts_with('/'))
+            })
+        })
+        .filter_map(|(service, sub_path, _)| {
             state
                 .gateway
                 .routes()

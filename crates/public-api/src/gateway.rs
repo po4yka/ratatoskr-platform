@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use axum::body::Body;
+use axum::body::{Body, HttpBody as _};
 use axum::extract::{Extension, Request, State};
 use axum::response::Response;
 use http::header::{AUTHORIZATION, CONNECTION, COOKIE, HOST};
@@ -370,7 +370,8 @@ impl Gateway {
             .map(|(service, route)| (service.as_str(), route))
     }
 
-    /// The budget of one request: the class of its route, or `transfer` under a transfer sub-path.
+    /// The budget of one request: the class of its route, or `transfer` under a transfer sub-path,
+    /// with the smallest body limit of the sub-paths that hold the request.
     fn budget_for(
         &self,
         service: &str,
@@ -378,13 +379,19 @@ impl Gateway {
         path: &str,
     ) -> Option<GatewayRouteBudget> {
         let below = path.strip_prefix(route.prefix.as_str()).unwrap_or_default();
-        if GATEWAY_TRANSFER_PATHS
+        GATEWAY_TRANSFER_PATHS
             .iter()
-            .any(|(owner, sub_path)| *owner == service && is_under(sub_path, below))
-        {
-            return Some(self.budgets.transfer);
-        }
-        self.budget(route)
+            .filter(|(owner, sub_path, _)| *owner == service && is_under(sub_path, below))
+            .map(|(_, _, limit)| limit.unwrap_or(u64::MAX))
+            .min()
+            .map_or_else(
+                || self.budget(route),
+                |limit| {
+                    let mut budget = self.budgets.transfer;
+                    budget.max_body_bytes = budget.max_body_bytes.min(limit);
+                    Some(budget)
+                },
+            )
     }
 
     /// Send `POST /v1/notes/connections` to the notes listener, with the client's body and headers
@@ -617,6 +624,12 @@ pub async fn proxy(
         Err(_) => return platform_http::reject(FailureKind::UpstreamUnavailable),
     };
     let (parts, body) = request.into_parts();
+    // The route layer holds the limit of the route, and a sub-path can take less.
+    if body.size_hint().lower() > budget.max_body_bytes {
+        return platform_http::reject(FailureKind::PayloadTooLarge);
+    }
+    let limit = usize::try_from(budget.max_body_bytes).unwrap_or(usize::MAX);
+    let body = Body::new(http_body_util::Limited::new(body, limit));
     let Ok(mut upstream) = hyper::Request::builder()
         .method(parts.method)
         .uri(uri)

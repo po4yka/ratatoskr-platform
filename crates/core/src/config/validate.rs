@@ -393,7 +393,7 @@ fn gateway_route_violations(
         // A sub-path that carries bytes takes the transfer budget inside a route of another class.
         if crate::config::GATEWAY_TRANSFER_PATHS
             .iter()
-            .any(|(owner, _)| *owner == service)
+            .any(|(owner, _, _)| *owner == service)
         {
             let transfer = config.gateway.budgets.transfer;
             budget.max_body_bytes = budget.max_body_bytes.max(transfer.max_body_bytes);
