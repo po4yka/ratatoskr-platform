@@ -30,6 +30,9 @@ pub enum SessionKind {
     Service,
     /// A personal API token.
     ApiToken,
+    /// The owner on the origin of one site (workspace change `add-site-owner-editing-and-live`,
+    /// design D2): audience `site:<site id>`, a cookie only, 12 hours at most and 1 hour idle.
+    SiteOwner,
 }
 
 impl SessionKind {
@@ -42,6 +45,7 @@ impl SessionKind {
             Self::TelegramMiniApp => "telegram_mini_app",
             Self::Service => "service",
             Self::ApiToken => "api_token",
+            Self::SiteOwner => "site_owner",
         }
     }
 
@@ -54,6 +58,7 @@ impl SessionKind {
             "telegram_mini_app" => Some(Self::TelegramMiniApp),
             "service" => Some(Self::Service),
             "api_token" => Some(Self::ApiToken),
+            "site_owner" => Some(Self::SiteOwner),
             _ => None,
         }
     }
@@ -121,6 +126,40 @@ pub struct NewSession<'a> {
     pub issued_at: jiff::Timestamp,
     /// When it stops being valid on its own.
     pub expires_at: jiff::Timestamp,
+}
+
+/// The absolute lifetime of a `site_owner` session.
+pub const SITE_OWNER_LIFETIME: jiff::SignedDuration = jiff::SignedDuration::from_hours(12);
+
+/// How long a `site_owner` session may stay unused.
+pub const SITE_OWNER_IDLE: jiff::SignedDuration = jiff::SignedDuration::from_hours(1);
+
+/// The audience of a `site_owner` session of `site`: the only audience at which it authenticates.
+#[must_use]
+pub fn site_audience(site: &str) -> String {
+    format!("site:{site}")
+}
+
+impl<'a> NewSession<'a> {
+    /// A `site_owner` session of `user_id` for the site whose audience is `audience`, issued at
+    /// `now`, that ends after [`SITE_OWNER_LIFETIME`] whatever its use.
+    #[must_use]
+    pub fn site_owner(
+        user_id: Uuid,
+        audience: &'a str,
+        token: SecretDigest,
+        now: jiff::Timestamp,
+    ) -> Self {
+        Self {
+            user_id,
+            kind: SessionKind::SiteOwner,
+            device_id: None,
+            audience,
+            token: Some(token),
+            issued_at: now,
+            expires_at: now + SITE_OWNER_LIFETIME,
+        }
+    }
 }
 
 /// A fresh session credential, and its digest.
