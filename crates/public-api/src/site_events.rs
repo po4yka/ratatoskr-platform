@@ -403,3 +403,43 @@ impl Handler for SiteEventProjection {
         Ok(Outcome::Applied)
     }
 }
+
+/// Applies the reports of `ratatoskr-notes` on the write operations, and sends `edit.completed`
+/// to the owner sessions of the site of an edit when its operation succeeds.
+#[derive(Debug, Clone)]
+pub struct SiteEditReports {
+    /// The hub that the streams read.
+    pub hub: Arc<SiteEventHub>,
+}
+
+impl Handler for SiteEditReports {
+    async fn handle(
+        &self,
+        _transaction: &mut sqlx::PgTransaction<'_>,
+        _message: &Incoming,
+        _now: jiff::Timestamp,
+    ) -> Result<Outcome, EventingError> {
+        // A stub for workspace task 8.1.
+        Ok(Outcome::Applied)
+    }
+}
+
+/// Applies the conflict events of `ratatoskr-notes`, and sends `edit.conflicted` to the owner
+/// sessions of the site of an edit that met a conflict.
+#[derive(Debug, Clone)]
+pub struct SiteEditConflicts {
+    /// The hub that the streams read.
+    pub hub: Arc<SiteEventHub>,
+}
+
+impl Handler for SiteEditConflicts {
+    async fn handle(
+        &self,
+        _transaction: &mut sqlx::PgTransaction<'_>,
+        _message: &Incoming,
+        _now: jiff::Timestamp,
+    ) -> Result<Outcome, EventingError> {
+        // A stub for workspace task 8.1.
+        Ok(Outcome::Applied)
+    }
+}
