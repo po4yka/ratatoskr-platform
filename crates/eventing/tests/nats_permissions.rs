@@ -1,6 +1,6 @@
 //! Real-broker proof for the least-privilege Telegram notification identity, and for the `NOTES`
 //! identity of the deployed ACL with the two Knowledge durables that read note events and the
-//! conflict events of the notes write path.
+//! conflict events of the notes write path, and for the `SITES` identity of the site publications.
 
 #![allow(
     clippy::expect_used,
@@ -13,7 +13,7 @@ use async_nats::jetstream;
 use futures_util::StreamExt as _;
 use nkeys::KeyPair;
 use platform_eventing::{
-    DOMAIN_CONSUMERS, EVENT_STREAM, StreamSpec, TELEGRAM_NOTIFICATION_CONSUMER,
+    COMMAND_STREAM, DOMAIN_CONSUMERS, EVENT_STREAM, StreamSpec, TELEGRAM_NOTIFICATION_CONSUMER,
     TELEGRAM_NOTIFICATION_SUBJECT, ensure_fixed_topology,
 };
 use std::time::Duration;
@@ -431,4 +431,138 @@ async fn notes_publishes_conflicts_and_no_command() {
         outcome.is_ok(),
         "EDGE could not publish the write command: {outcome:?}"
     );
+}
+
+/// Workspace SITE-025 task 6.12 (spec `fleet-bus-topology`, "The sites service tries to publish a
+/// command"): on a broker that runs the rendered deployed ACL, `SITES` reads its four durables, which
+/// Edge provisions and EDGE and NOTES feed, publishes its two events, and is refused the build
+/// command that only EDGE publishes.
+#[tokio::test]
+async fn sites_identity_reads_its_durables_and_publishes_only_its_events() {
+    const COMMAND: &str = "cmd.sites.release.build_requested.v1";
+    // (durable, stream, the identity that feeds it, a subject that matches its filter)
+    const DURABLES: [(&str, &str, &str, &str); 4] = [
+        (
+            "ratatoskr_sites_release_builds",
+            COMMAND_STREAM,
+            "EDGE",
+            COMMAND,
+        ),
+        (
+            "ratatoskr_sites_note_changes",
+            EVENT_STREAM,
+            "NOTES",
+            "evt.notes.file.changed.v1",
+        ),
+        (
+            "ratatoskr_sites_vault_disconnections",
+            EVENT_STREAM,
+            "NOTES",
+            "evt.notes.vault.disconnected.v1",
+        ),
+        (
+            "ratatoskr_sites_approvals",
+            EVENT_STREAM,
+            "EDGE",
+            "evt.platform.site_approval.changed.v1",
+        ),
+    ];
+    let rendered =
+        platform_nats_profile::render(include_str!("../../../deploy/nats/ratatoskr.conf"))
+            .expect("the deployed ACL renders");
+    let seed = |identity: &str| {
+        rendered
+            .seeds
+            .iter()
+            .find(|seed| seed.name == identity)
+            .map(|seed| seed.seed.clone())
+    };
+    assert!(
+        seed("SITES").is_some(),
+        "SITES cannot connect: the deployed ACL has no SITES identity"
+    );
+    let broker = Container::start("sites-permissions", &rendered.conf, &["--user", "root"]);
+    let edge = connect(&broker.url, &seed("EDGE").expect("the EDGE seed"), None)
+        .await
+        .0;
+    let provisioning = jetstream::new(edge.clone());
+    for spec in [StreamSpec::command_stream(), StreamSpec::event_stream()] {
+        provisioning
+            .get_or_create_stream(spec.config())
+            .await
+            .expect("EDGE creates the streams");
+    }
+    ensure_fixed_topology(&provisioning)
+        .await
+        .expect("EDGE provisions every fixed durable");
+    let notes = connect(
+        &broker.url,
+        &seed("NOTES").expect("the NOTES seed"),
+        Some("_INBOX_notes"),
+    )
+    .await
+    .0;
+    for (durable, _, feeder, subject) in DURABLES {
+        let client = if feeder == "EDGE" { &edge } else { &notes };
+        let outcome = acknowledged(client, subject).await;
+        assert!(
+            outcome.is_ok(),
+            "{feeder} could not feed {durable} with {subject}: {outcome:?}"
+        );
+    }
+
+    let sites = connect(
+        &broker.url,
+        &seed("SITES").expect("the SITES seed"),
+        Some("_INBOX_sites"),
+    )
+    .await
+    .0;
+    for (durable, stream, _, _) in DURABLES {
+        fetch_one_and_acknowledge(&sites, "SITES", stream, durable).await;
+    }
+    for subject in [
+        "evt.sites.release.published.v1",
+        "evt.platform.operation.reported.v1",
+    ] {
+        let outcome = acknowledged(&sites, subject).await;
+        assert!(
+            outcome.is_ok(),
+            "SITES could not publish {subject}: {outcome:?}"
+        );
+    }
+    assert!(
+        acknowledged(&sites, COMMAND).await.is_err(),
+        "SITES published the build command"
+    );
+}
+
+/// Describe `durable` on `stream` as `identity`, fetch one message and acknowledge it, or panic with
+/// the step that `identity` may not take.
+async fn fetch_one_and_acknowledge(
+    client: &async_nats::Client,
+    identity: &str,
+    stream: &str,
+    durable: &str,
+) {
+    let consumer: jetstream::consumer::PullConsumer = jetstream::new(client.clone())
+        .get_consumer_from_stream(durable, stream)
+        .await
+        .unwrap_or_else(|error| panic!("{identity} cannot describe {durable}: {error}"));
+    let mut batch = consumer
+        .fetch()
+        .max_messages(1)
+        .expires(Duration::from_secs(2))
+        .messages()
+        .await
+        .unwrap_or_else(|error| panic!("{identity} cannot fetch from {durable}: {error}"));
+    let message = batch
+        .next()
+        .await
+        .unwrap_or_else(|| panic!("{durable} delivered nothing"))
+        .unwrap_or_else(|error| panic!("{durable} delivery: {error}"));
+    message
+        .double_ack()
+        .await
+        .unwrap_or_else(|error| panic!("{identity} cannot acknowledge on {durable}: {error}"));
 }
