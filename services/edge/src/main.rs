@@ -265,6 +265,8 @@ fn configure_state(
         ));
     }
     state.gateway = platform_public_api::gateway::Gateway::from_config(&config.gateway);
+    // ADR-0017: a site route without a class has no decided caller, so Edge does not start.
+    platform_public_api::sites::check_routes(platform_public_api::sites::ROUTES)?;
     state.archive_staging_root = Arc::new(config.archive_staging.root.clone());
     state.archive_max_bytes = config.archive_staging.max_archive_bytes;
     state.channel_digests = config.channel_digests.as_ref().map(|digests| {
