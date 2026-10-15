@@ -111,7 +111,7 @@ The generic proxy SHALL forward the path and the query of a notes read to notes 
 #### Scenario: Edge handles a connect request with marker secrets
 
 - **WHEN** a test sends a connect request whose password fields hold known markers through Edge to a stub notes upstream, and then searches every Platform table and the captured log output for the markers
-- **THEN** no marker is found, and the stub received the body unchanged with the minted operation id, verified by `crates/public-api/tests/notes_routes.rs::connect_body_is_not_persisted_or_logged`
+- **THEN** no marker is found, and the stub received the body unchanged with the minted operation id, verified by `crates/public-api/tests/notes_connect_log.rs::connect_body_is_not_persisted_or_logged`
 
 ### Requirement: A connect that notes does not take ends its operation
 
