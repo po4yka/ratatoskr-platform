@@ -30,7 +30,7 @@ use ratatoskr_sites_contracts::{
     DraftChanged, DraftNotice, EditCompletedNotice, EditConflictedNotice, ReleaseNotice,
     ReleasePublished, SiteEvent, SourceRef,
 };
-use tokio::sync::broadcast;
+use tokio::sync::watch;
 
 /// Edge's durable that feeds the hub, and its two filters (`platform_eventing::stream`).
 pub use platform_eventing::{SITE_EVENTS_CONSUMER, SITE_EVENTS_SUBJECTS};
@@ -90,6 +90,9 @@ struct SiteLog {
     anonymous: usize,
     clients: HashMap<String, usize>,
     owners: usize,
+    /// The sequence of the last event, for the connections of this site only: a connection
+    /// wakes for the events of its own site (review L7).
+    wake: watch::Sender<u64>,
 }
 
 /// An event of a delivery that has not settled: its site, the event, and the event's time.
@@ -102,17 +105,14 @@ pub struct SiteEventHub {
     sites: Mutex<HashMap<String, SiteLog>>,
     /// The events of deliveries whose transaction has not settled yet, by message id.
     staged: Mutex<HashMap<uuid::Uuid, Vec<Staged>>>,
-    wake: broadcast::Sender<String>,
 }
 
 impl Default for SiteEventHub {
     fn default() -> Self {
-        let (wake, _) = broadcast::channel(1024);
         Self {
             epoch: uuid::Uuid::now_v7().simple().to_string(),
             sites: Mutex::new(HashMap::new()),
             staged: Mutex::new(HashMap::new()),
-            wake,
         }
     }
 }
@@ -188,8 +188,14 @@ impl SiteEventHub {
             {
                 log.events.pop_front();
             }
+            log.wake.send_replace(sequence);
         }
-        let _ = self.wake.send(site.to_owned());
+    }
+
+    /// The wake of the connections of `site`.
+    fn subscribe(&self, site: &str) -> watch::Receiver<u64> {
+        let mut sites = self.sites.lock().unwrap_or_else(PoisonError::into_inner);
+        sites.entry(site.to_owned()).or_default().wake.subscribe()
     }
 
     fn id(&self, sequence: u64) -> String {
@@ -329,12 +335,14 @@ impl OwnerWatch {
         )
     }
 
-    /// How long to wait for the next check: `every`, or less when the session ends sooner.
-    fn pause(&self, every: Duration) -> Duration {
+    /// When the next check is due: at `next_check`, or sooner when the session ends sooner.
+    fn due(
+        &self,
+        next_check: tokio::time::Instant,
+        now: tokio::time::Instant,
+    ) -> tokio::time::Instant {
         let left = self.ends_at.duration_since(jiff::Timestamp::now());
-        Duration::try_from(left)
-            .unwrap_or(Duration::ZERO)
-            .min(every)
+        next_check.min(now + Duration::try_from(left).unwrap_or(Duration::ZERO))
     }
 }
 
@@ -364,7 +372,8 @@ pub(crate) fn stream(
         owner: connection.owner.is_some(),
         watch: connection.owner.clone(),
         check_every: limits.owner_check,
-        wake: hub.wake.subscribe(),
+        wake: hub.subscribe(connection.site),
+        next_check: tokio::time::Instant::now() + limits.owner_check,
         pending: VecDeque::new(),
         cursor: 0,
         _admitted: admitted,
@@ -392,7 +401,9 @@ struct Reader {
     owner: bool,
     watch: Option<OwnerWatch>,
     check_every: Duration,
-    wake: broadcast::Receiver<String>,
+    wake: watch::Receiver<u64>,
+    /// When an owner connection checks its session next. An event does not move it (review M-A).
+    next_check: tokio::time::Instant,
     pending: VecDeque<Event>,
     cursor: u64,
     _admitted: Admitted,
@@ -402,6 +413,9 @@ impl Reader {
     fn events(self) -> impl Stream<Item = Result<Event, Infallible>> + Send {
         futures_util::stream::unfold(self, |mut reader| async move {
             loop {
+                if !reader.still_live().await {
+                    return None;
+                }
                 if let Some(event) = reader.pending.pop_front() {
                     return Some((Ok(event), reader));
                 }
@@ -409,32 +423,36 @@ impl Reader {
                 if !reader.pending.is_empty() {
                     continue;
                 }
-                let woken = match reader
-                    .watch
-                    .as_ref()
-                    .map(|watch| watch.pause(reader.check_every))
-                {
-                    None => reader.wake.recv().await,
-                    Some(pause) => tokio::select! {
-                        woken = reader.wake.recv() => woken,
-                        () = tokio::time::sleep(pause) => {
-                            let live = match &reader.watch {
-                                Some(watch) => watch.live().await,
-                                None => true,
-                            };
-                            if !live {
-                                return None;
-                            }
-                            continue;
+                let woken = match &reader.watch {
+                    None => reader.wake.changed().await,
+                    Some(watch) => {
+                        let due = watch.due(reader.next_check, tokio::time::Instant::now());
+                        tokio::select! {
+                            woken = reader.wake.changed() => woken,
+                            () = tokio::time::sleep_until(due) => continue,
                         }
-                    },
+                    }
                 };
-                match woken {
-                    Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) => {}
-                    Err(broadcast::error::RecvError::Closed) => return None,
+                if woken.is_err() {
+                    return None;
                 }
             }
         })
+    }
+
+    /// Whether an owner connection's session is still live, checked when the check is due and
+    /// whatever events arrived since the last one; an anonymous connection always is.
+    async fn still_live(&mut self) -> bool {
+        let Some(watch) = &self.watch else {
+            return true;
+        };
+        let now = tokio::time::Instant::now();
+        if now < watch.due(self.next_check, now) {
+            return true;
+        }
+        let live = watch.live().await;
+        self.next_check = tokio::time::Instant::now() + self.check_every;
+        live
     }
 
     fn last(&self) -> u64 {
