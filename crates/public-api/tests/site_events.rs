@@ -195,7 +195,7 @@ async fn anonymous_sees_only_release_published() {
     let (mut owner, mut anonymous) = (owner.into_body(), anonymous.into_body());
 
     deliver(harness.pool(), &hub, &draft('d')).await;
-    deliver(harness.pool(), &hub, &released('r')).await;
+    deliver(harness.pool(), &hub, &released('e')).await;
 
     let (mut seen, mut buffer) = (Vec::new(), String::new());
     for _ in 0..2 {
@@ -226,7 +226,7 @@ async fn release_payload_holds_only_id_and_time() {
     assert_eq!(response.status(), 200, "the anonymous stream");
     let mut body = response.into_body();
 
-    deliver(harness.pool(), &hub, &released('r')).await;
+    deliver(harness.pool(), &hub, &released('e')).await;
 
     let event = next_event(&mut body, &mut String::new())
         .await
@@ -235,7 +235,7 @@ async fn release_payload_holds_only_id_and_time() {
         event.data,
         json!({
             "type": "release.published",
-            "payload": {"release_id": "r".repeat(64), "published_at": "2026-10-15T08:00:00Z"},
+            "payload": {"release_id": "e".repeat(64), "published_at": "2026-10-15T08:00:00Z"},
         })
     );
 

@@ -23,7 +23,8 @@ use uuid::Uuid;
 
 use crate::auth::{DeployRoute, DeployerSite};
 use crate::{
-    ApiState, Principal, gateway, site_approvals, site_capabilities, site_releases, site_sessions,
+    ApiState, Principal, gateway, site_approvals, site_capabilities, site_events, site_releases,
+    site_sessions,
 };
 
 /// The name of the sites route in the gateway route table.
@@ -439,12 +440,27 @@ async fn site_origin(
     }
     let correlation = context.correlation_id.to_string();
     if capability.is_public() {
-        // The event stream arrives with task 7.2.
-        return match site_capabilities::public(state, &correlation, site, capability).await {
-            Ok(true) => platform_http::reject(FailureKind::RouteNotFound),
-            Ok(false) => site_sessions::site_not_found(context),
-            Err(refusal) => platform_http::reject(refusal),
+        // The one public route outside the content rows is the event stream.
+        match site_capabilities::public(state, &correlation, site, capability).await {
+            Ok(true) => {}
+            Ok(false) => return site_sessions::site_not_found(context),
+            Err(refusal) => return platform_http::reject(refusal),
+        }
+        let owner = match site_sessions::site_owner(state, &parts, site).await {
+            Ok(principal) => principal.is_some(),
+            Err(refusal) => return refusal,
         };
+        let client = client_key(state, &parts);
+        let connection = site_events::Connection {
+            site,
+            owner,
+            client: &client,
+            last_event_id: parts
+                .headers
+                .get("last-event-id")
+                .and_then(|value| value.to_str().ok()),
+        };
+        return site_events::stream(&state.site_events, state.site_stream_limits, &connection);
     }
     // An owner-only capability: a site owner session of the site, whose effective set
     // holds the capability. The handlers arrive with tasks 8.2 and 8.4.

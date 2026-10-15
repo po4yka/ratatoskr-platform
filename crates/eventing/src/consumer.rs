@@ -113,6 +113,34 @@ pub async fn run<H: Handler>(
     handler: &H,
     stop: impl Future<Output = ()> + Send,
 ) -> Result<ConsumerReport, EventingError> {
+    run_filters(
+        context,
+        spec,
+        durable_name,
+        &[filter_subject],
+        pool,
+        handler,
+        stop,
+    )
+    .await
+}
+
+/// [`run`] for a durable with several filter subjects, such as `platform_site_events`
+/// (workspace change `add-site-owner-editing-and-live`). One filter is set as the filter subject;
+/// more are set as the filter subjects of the consumer, which NATS 2.10 introduced.
+///
+/// # Errors
+///
+/// [`EventingError::Persistence`] if the stream or consumer cannot be created.
+pub async fn run_filters<H: Handler>(
+    context: &jetstream::Context,
+    spec: &StreamSpec,
+    durable_name: &str,
+    filters: &[&str],
+    pool: &PgPool,
+    handler: &H,
+    stop: impl Future<Output = ()> + Send,
+) -> Result<ConsumerReport, EventingError> {
     // The same spec the publisher would declare, for the same reason: whichever process reaches the
     // broker first creates the stream, and a stream created from `Config::default()` retains
     // everything and then silently drops the oldest. Two declaration sites, one policy.
@@ -137,7 +165,14 @@ pub async fn run<H: Handler>(
             durable_name,
             jetstream::consumer::pull::Config {
                 durable_name: Some(durable_name.to_owned()),
-                filter_subject: filter_subject.to_owned(),
+                filter_subject: match filters {
+                    [one] => (*one).to_owned(),
+                    _ => String::new(),
+                },
+                filter_subjects: match filters {
+                    [_] => Vec::new(),
+                    many => many.iter().map(|filter| (*filter).to_owned()).collect(),
+                },
                 ..jetstream::consumer::pull::Config::default()
             },
         )

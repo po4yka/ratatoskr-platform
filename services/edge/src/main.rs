@@ -196,7 +196,7 @@ impl platform_http::PublicRoutes for EdgeRoutes {
         let state = Arc::new(state);
         let mut tasks = vec![
             spawn_publisher(database.pool().clone(), publisher.clone()),
-            spawn_projection(database.pool().clone(), publisher.clone()),
+            spawn_projection(database.pool().clone(), publisher.clone(), &state),
             spawn_archive_projections(
                 database.pool().clone(),
                 publisher.clone(),
@@ -569,9 +569,19 @@ async fn sweep(pool: &PgPool, windows: &RetentionConfig) {
 }
 
 /// Apply inbound progress events, and the conflict events of notes (OBS-024), to the operation
-/// projection, forever. The conflict durable is created by its consumer, like
-/// `platform_schedule_registration`.
-fn spawn_projection(pool: PgPool, publisher: NatsPublisher) -> tokio::task::JoinHandle<()> {
+/// projection, and the site events (SITE-027) to the site event stream, forever. The conflict and
+/// site event durables are created by their consumers, like `platform_schedule_registration`.
+fn spawn_projection(
+    pool: PgPool,
+    publisher: NatsPublisher,
+    state: &platform_public_api::ApiState,
+) -> tokio::task::JoinHandle<()> {
+    use platform_public_api::site_events::{
+        SITE_EVENTS_CONSUMER, SITE_EVENTS_SUBJECTS, SiteEventProjection,
+    };
+    let site_events = SiteEventProjection {
+        hub: Arc::clone(&state.site_events),
+    };
     tokio::spawn(async move {
         let events = StreamSpec::event_stream();
         let reports = platform_eventing::consumer::run(
@@ -592,12 +602,24 @@ fn spawn_projection(pool: PgPool, publisher: NatsPublisher) -> tokio::task::Join
             &platform_operations::NotesConflictProjection,
             std::future::pending::<()>(),
         );
-        let (reports, conflicts) = tokio::join!(reports, conflicts);
+        let sites = platform_eventing::consumer::run_filters(
+            publisher.context(),
+            &events,
+            SITE_EVENTS_CONSUMER,
+            &SITE_EVENTS_SUBJECTS,
+            &pool,
+            &site_events,
+            std::future::pending::<()>(),
+        );
+        let (reports, conflicts, sites) = tokio::join!(reports, conflicts, sites);
         if let Err(error) = reports {
             tracing::error!(%error, "the operation-event consumer stopped");
         }
         if let Err(error) = conflicts {
             tracing::error!(%error, "the notes conflict consumer stopped");
+        }
+        if let Err(error) = sites {
+            tracing::error!(%error, "the site event consumer stopped");
         }
     })
 }
