@@ -23,8 +23,10 @@ use futures_util::stream::Stream;
 use platform_core::FailureKind;
 use platform_eventing::inbox::Outcome;
 use platform_eventing::{EventingError, Handler, Incoming};
+use ratatoskr_identifiers::{DigestHex, NotesConflictId, OperationId};
 use ratatoskr_sites_contracts::{
-    DraftChanged, DraftNotice, ReleaseNotice, ReleasePublished, SiteEvent,
+    DraftChanged, DraftNotice, EditCompletedNotice, EditConflictedNotice, ReleaseNotice,
+    ReleasePublished, SiteEvent, SourceRef,
 };
 use tokio::sync::broadcast;
 
@@ -404,8 +406,9 @@ impl Handler for SiteEventProjection {
     }
 }
 
-/// Applies the reports of `ratatoskr-notes` on the write operations, and sends `edit.completed`
-/// to the owner sessions of the site of an edit when its operation succeeds.
+/// Applies the reports of every producer to the operation projection, as Edge always did, and
+/// sends `edit.completed` to the owner sessions of the site of an edit when its operation succeeds:
+/// the vault has the write, and the edit's content is the note's revision.
 #[derive(Debug, Clone)]
 pub struct SiteEditReports {
     /// The hub that the streams read.
@@ -415,17 +418,41 @@ pub struct SiteEditReports {
 impl Handler for SiteEditReports {
     async fn handle(
         &self,
-        _transaction: &mut sqlx::PgTransaction<'_>,
-        _message: &Incoming,
-        _now: jiff::Timestamp,
+        transaction: &mut sqlx::PgTransaction<'_>,
+        message: &Incoming,
+        now: jiff::Timestamp,
     ) -> Result<Outcome, EventingError> {
-        // A stub for workspace task 8.1.
-        Ok(Outcome::Applied)
+        let outcome = platform_operations::ProgressProjection
+            .handle(transaction, message, now)
+            .await?;
+        if outcome != Outcome::Applied {
+            return Ok(outcome);
+        }
+        let Some(operation_id) = operation_of(message) else {
+            return Ok(outcome);
+        };
+        let completed: Option<(String, String, String)> = sqlx::query_as(
+            "select e.site_id, e.source_ref, e.revision
+               from operations.site_edits e
+               join operations.operations o on o.operation_id = e.operation_id
+              where e.operation_id = $1 and o.status = 'succeeded'",
+        )
+        .bind(operation_id)
+        .fetch_optional(&mut **transaction)
+        .await
+        .map_err(query_failed)?;
+        if let Some((site, source_ref, revision)) = completed
+            && let Some(event) = edit_completed(operation_id, &source_ref, &revision)
+        {
+            self.hub.push(&site, event, now);
+        }
+        Ok(outcome)
     }
 }
 
-/// Applies the conflict events of `ratatoskr-notes`, and sends `edit.conflicted` to the owner
-/// sessions of the site of an edit that met a conflict.
+/// Applies the conflict events of `ratatoskr-notes` to the operation projection, as Edge always
+/// did, and sends `edit.conflicted` to the owner sessions of the site of an edit that met a
+/// conflict.
 #[derive(Debug, Clone)]
 pub struct SiteEditConflicts {
     /// The hub that the streams read.
@@ -435,11 +462,65 @@ pub struct SiteEditConflicts {
 impl Handler for SiteEditConflicts {
     async fn handle(
         &self,
-        _transaction: &mut sqlx::PgTransaction<'_>,
-        _message: &Incoming,
-        _now: jiff::Timestamp,
+        transaction: &mut sqlx::PgTransaction<'_>,
+        message: &Incoming,
+        now: jiff::Timestamp,
     ) -> Result<Outcome, EventingError> {
-        // A stub for workspace task 8.1.
-        Ok(Outcome::Applied)
+        let outcome = platform_operations::NotesConflictProjection
+            .handle(transaction, message, now)
+            .await?;
+        if outcome != Outcome::Applied || message.subject.as_str() != "evt.notes.conflict.raised.v1"
+        {
+            return Ok(outcome);
+        }
+        let payload = message.payload.get("payload");
+        let conflict = payload
+            .and_then(|payload| payload.get("conflict_id"))
+            .cloned()
+            .and_then(|id| serde_json::from_value::<NotesConflictId>(id).ok());
+        let (Some(operation_id), Some(conflict_id)) = (operation_of(message), conflict) else {
+            return Ok(outcome);
+        };
+        let edit: Option<(String, String)> = sqlx::query_as(
+            "select site_id, source_ref from operations.site_edits where operation_id = $1",
+        )
+        .bind(operation_id)
+        .fetch_optional(&mut **transaction)
+        .await
+        .map_err(query_failed)?;
+        if let Some((site, source_ref)) = edit
+            && let Ok(source_ref) = SourceRef::parse(&source_ref)
+        {
+            let event = SiteEvent::EditConflicted(EditConflictedNotice {
+                operation_id: OperationId(operation_id),
+                conflict_id,
+                source_ref,
+            });
+            self.hub.push(&site, event, now);
+        }
+        Ok(outcome)
     }
+}
+
+/// The operation that a report or a conflict event names.
+fn operation_of(message: &Incoming) -> Option<uuid::Uuid> {
+    message
+        .payload
+        .get("payload")?
+        .get("operation_id")?
+        .as_str()?
+        .parse()
+        .ok()
+}
+
+fn edit_completed(operation_id: uuid::Uuid, source_ref: &str, revision: &str) -> Option<SiteEvent> {
+    Some(SiteEvent::EditCompleted(EditCompletedNotice {
+        operation_id: OperationId(operation_id),
+        source_ref: SourceRef::parse(source_ref).ok()?,
+        revision: DigestHex::parse(revision).ok()?,
+    }))
+}
+
+fn query_failed(error: sqlx::Error) -> EventingError {
+    EventingError::Persistence(platform_persistence::PersistenceError::Query(error))
 }

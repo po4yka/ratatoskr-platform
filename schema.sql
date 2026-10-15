@@ -769,6 +769,25 @@ create table operations.operations (
         check (terminated_at is null or terminated_at >= accepted_at)
 );
 
+-- The edits of a site owner session (workspace change add-site-owner-editing-and-live, design D6):
+-- the operation of each edit, its site and note, and the revision that the vault holds when the
+-- operation succeeds. Edge sends edit.completed and edit.conflicted to the site's owner sessions
+-- from this row; it holds no content.
+create table operations.site_edits (
+    operation_id uuid        primary key references operations.operations (operation_id),
+    site_id      text        not null,
+    source_ref   text        not null,
+    revision     text        not null,
+    created_at   timestamptz not null,
+
+    constraint site_edits_site_id_is_a_site_id
+        check (site_id ~ '^[a-z0-9-]{3,40}$'),
+    constraint site_edits_source_ref_is_bounded
+        check (source_ref ~ '^[A-Za-z0-9_-]{1,128}$'),
+    constraint site_edits_revision_is_a_digest
+        check (revision ~ '^[0-9a-f]{64}$')
+);
+
 comment on table operations.operations is
     'The durable user-visible record of asynchronous work (DOMAIN.md, Operation). It is the source '
     'from which `ratatoskr_operation_contracts::OperationSnapshot` is projected; every column here '

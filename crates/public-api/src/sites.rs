@@ -23,8 +23,8 @@ use uuid::Uuid;
 
 use crate::auth::{DeployRoute, DeployerSite};
 use crate::{
-    ApiState, Principal, gateway, site_approvals, site_capabilities, site_events, site_releases,
-    site_sessions,
+    ApiState, Principal, gateway, site_approvals, site_capabilities, site_edits, site_events,
+    site_releases, site_sessions,
 };
 
 /// The name of the sites route in the gateway route table.
@@ -423,15 +423,11 @@ fn is_content(path: &str) -> bool {
 /// A `site-origin` route: the content routes are the `public` class; every other route needs its
 /// capability in the site's effective set, and an owner-only capability also needs a site owner
 /// session of the site (workspace spec `site-capability-enforcement`).
-#[allow(
-    clippy::needless_pass_by_value,
-    reason = "the handlers of tasks 7.2, 8.2 and 8.4 take them"
-)]
 async fn site_origin(
     state: &Arc<ApiState>,
     context: &RequestContext,
     parts: http::request::Parts,
-    _body: axum::body::Body,
+    body: axum::body::Body,
     site: &str,
     capability: SiteCapability,
 ) -> Response {
@@ -463,24 +459,57 @@ async fn site_origin(
         return site_events::stream(&state.site_events, state.site_stream_limits, &connection);
     }
     // An owner-only capability: a site owner session of the site, whose effective set
-    // holds the capability. The handlers arrive with tasks 8.2 and 8.4.
-    match site_sessions::site_owner(state, &parts, site).await {
-        Ok(Some(principal)) => {
-            match site_capabilities::require(
-                state,
+    // holds the capability.
+    let principal = match site_sessions::site_owner(state, &parts, site).await {
+        Ok(Some(principal)) => principal,
+        Ok(None) => return platform_http::reject(FailureKind::Unauthenticated),
+        Err(refusal) => return refusal,
+    };
+    let granted =
+        site_capabilities::require(state, principal, &correlation, site, capability.as_str()).await;
+    if let Err(refusal) = granted {
+        return platform_http::reject(refusal);
+    }
+    owner_route(state, context, parts, body, site, principal).await
+}
+
+/// A route of the site owner session, after the capability check.
+async fn owner_route(
+    state: &Arc<ApiState>,
+    context: &RequestContext,
+    parts: http::request::Parts,
+    body: axum::body::Body,
+    site: &str,
+    principal: Principal,
+) -> Response {
+    let below: Vec<String> = parts
+        .uri
+        .path()
+        .split('/')
+        .skip(4)
+        .map(str::to_owned)
+        .collect();
+    let below: Vec<&str> = below.iter().map(String::as_str).collect();
+    match below.as_slice() {
+        ["drafts", "sources", source_ref, "blobs"] => {
+            site_edits::upload(state, context, principal, site, source_ref, body).await
+        }
+        ["drafts", ..] => {
+            // The sites service answers the source of a note in scope.
+            gateway::proxy(
+                State(Arc::clone(state)),
                 principal,
-                &correlation,
-                site,
-                capability.as_str(),
+                Extension(context.clone()),
+                Request::from_parts(parts, body),
             )
             .await
-            {
-                Ok(()) => platform_http::reject(FailureKind::RouteNotFound),
-                Err(refusal) => platform_http::reject(refusal),
-            }
         }
-        Ok(None) => platform_http::reject(FailureKind::Unauthenticated),
-        Err(refusal) => refusal,
+        ["edits"] => site_edits::edit(state, context, principal, site, body).await,
+        ["conflicts", conflict_id] => {
+            site_edits::conflict(state, context, principal, site, conflict_id).await
+        }
+        // The library and the knowledge search arrive with task 8.4.
+        _ => platform_http::reject(FailureKind::RouteNotFound),
     }
 }
 

@@ -577,9 +577,17 @@ fn spawn_projection(
     state: &platform_public_api::ApiState,
 ) -> tokio::task::JoinHandle<()> {
     use platform_public_api::site_events::{
-        SITE_EVENTS_CONSUMER, SITE_EVENTS_SUBJECTS, SiteEventProjection,
+        SITE_EVENTS_CONSUMER, SITE_EVENTS_SUBJECTS, SiteEditConflicts, SiteEditReports,
+        SiteEventProjection,
     };
     let site_events = SiteEventProjection {
+        hub: Arc::clone(&state.site_events),
+    };
+    // The two projections of operations also send the edit events of a site (SITE-027).
+    let reports_projection = SiteEditReports {
+        hub: Arc::clone(&state.site_events),
+    };
+    let conflicts_projection = SiteEditConflicts {
         hub: Arc::clone(&state.site_events),
     };
     tokio::spawn(async move {
@@ -590,7 +598,7 @@ fn spawn_projection(
             EDGE_PROJECTION_CONSUMER,
             "evt.platform.operation.reported.v1",
             &pool,
-            &ProgressProjection,
+            &reports_projection,
             std::future::pending::<()>(),
         );
         let conflicts = platform_eventing::consumer::run(
@@ -599,7 +607,7 @@ fn spawn_projection(
             platform_eventing::NOTES_CONFLICT_CONSUMER,
             platform_eventing::NOTES_CONFLICT_SUBJECTS,
             &pool,
-            &platform_operations::NotesConflictProjection,
+            &conflicts_projection,
             std::future::pending::<()>(),
         );
         let sites = platform_eventing::consumer::run_filters(

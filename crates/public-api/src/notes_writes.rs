@@ -58,17 +58,20 @@ pub(crate) const WRITE_MODE_PATH: &str = "/v1/notes/connections/{connection}/wri
 /// deduplicates a write by its key and connection, and the operations table holds one key per owner
 /// and kind. So a key that one route took is refused on the other as a conflict, and never becomes a
 /// second operation.
-const FILE_WRITE_LEDGER_ROUTE: &str = "/v1/notes/writes";
+pub(crate) const FILE_WRITE_LEDGER_ROUTE: &str = "/v1/notes/writes";
 const WRITE_MODE_LEDGER_ROUTE: &str = "/v1/notes/connections/write-mode";
 
 /// The kind of the operation that a write or a resolution mints.
 const WRITE_KIND: &str = "notes.file.write";
 
+/// [`WRITE_KIND`], for the edit of a site owner session, which is one notes write too.
+pub(crate) const FILE_WRITE_KIND: &str = WRITE_KIND;
+
 /// The kind of the operation that a write-mode change mints.
 const WRITE_MODE_KIND: &str = "notes.connection.write_mode";
 
 /// The one service that reports on the operations of these routes (XR-021 R3-02).
-const NOTES_PRODUCER: &str = "ratatoskr-notes";
+pub(crate) const NOTES_PRODUCER: &str = "ratatoskr-notes";
 
 /// The header `INTERFACES.md` requires on a replayable mutation.
 const IDEMPOTENCY_KEY: &str = "idempotency-key";
@@ -155,7 +158,7 @@ pub async fn write(
             NotesConnectionId::parse(&connection).map_err(|_| FailureKind::InvalidRequest)?;
         let request = serde_json::from_slice::<WriteRequest>(&body)
             .map_err(|_| FailureKind::InvalidRequest)?;
-        let command = command(connection_id, request.operation, &key)?;
+        let command = command(connection_id, request.operation, &key, "platform")?;
         Ok((key, command))
     });
     let (key, command) = match prepared {
@@ -189,7 +192,7 @@ pub async fn resolve(
             choice: request.choice,
             blob: request.blob,
         });
-        let command = command(request.connection_id, operation, &key)?;
+        let command = command(request.connection_id, operation, &key, "platform")?;
         Ok((key, command))
     });
     let (key, command) = match prepared {
@@ -282,16 +285,17 @@ fn fingerprint(selector: &str, body: &[u8]) -> Vec<u8> {
 
 /// The command payload of a write, checked against every rule of `notes/write-request.v1` before
 /// any operation exists. The operation id is set once the operation is minted.
-fn command(
+pub(crate) fn command(
     connection_id: NotesConnectionId,
     operation: WriteOperation,
     key: &str,
+    origin: &str,
 ) -> Result<FileWriteRequested, FailureKind> {
     let command = FileWriteRequested {
         operation_id: OperationId(Uuid::nil()),
         idempotency_key: key_digest(key)?,
         connection_id,
-        origin: WriteOrigin::parse("platform").map_err(|_| FailureKind::RequestTimeout)?,
+        origin: WriteOrigin::parse(origin).map_err(|_| FailureKind::InvalidRequest)?,
         operation,
     };
     command
@@ -342,7 +346,7 @@ fn key_digest(key: &str) -> Result<ContentDigest, FailureKind> {
 }
 
 /// The `CommandEnvelope` of a write: aggregate and correlation `operation:<id>`, tenant the user.
-fn envelope(
+pub(crate) fn envelope(
     command: &FileWriteRequested,
     user: Uuid,
     now: jiff::Timestamp,

@@ -92,7 +92,7 @@ pub(crate) async fn mint(
 
 /// The one transaction of [`accept`] and [`mint`]. `prepare` returns the command to enqueue, or
 /// `None` when the route enqueues none. `Err` is the refusal to answer.
-async fn admit<F>(
+pub(crate) async fn admit<F>(
     state: &ApiState,
     principal: Principal,
     intake: &Intake<'_>,

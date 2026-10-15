@@ -48,6 +48,7 @@ pub mod sessions;
 pub mod site_approvals;
 pub mod site_capabilities;
 pub mod site_docs;
+mod site_edits;
 pub mod site_events;
 pub mod site_reads;
 pub mod site_releases;
