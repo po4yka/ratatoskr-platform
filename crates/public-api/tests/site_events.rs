@@ -26,6 +26,7 @@ use platform_eventing::{Incoming, Subject};
 use platform_persistence::test_support::TestDatabase;
 use platform_public_api::ApiState;
 use platform_public_api::site_events::{SiteEventHub, SiteEventProjection, SiteStreamLimits};
+use platform_public_api::sites::PublicLimits;
 use serde_json::{Value, json};
 use site_owner_support::{COOKIE, HOSTNAME, OWNER, SITE, Stub, approval, primary, sign_in};
 use tower::ServiceExt as _;
@@ -452,6 +453,48 @@ async fn anonymous_bound_spares_owner() {
         "the owner stream counts against neither bound"
     );
     drop((first, second, owner));
+
+    harness.cleanup().await.expect("cleanup");
+}
+
+/// Review M2 of SITE-027: an anonymous stream request takes a token of the public rate limit
+/// before Edge asks the sites service for the manifest, as a content request does.
+#[tokio::test]
+async fn anonymous_stream_is_rate_limited_before_the_manifest_read() {
+    let harness = TestDatabase::create().await.expect("a test database");
+    let stub = Stub::start().await;
+    stub.manifest(SITE, HOSTNAME, CAPABILITIES);
+    let owner = primary(harness.pool(), OWNER, true).await;
+    approval(
+        harness.pool(),
+        owner,
+        SITE,
+        HOSTNAME,
+        CAPABILITIES,
+        "approved",
+    )
+    .await;
+    let mut state: ApiState = site_owner_support::state(&harness, stub.address, &[]);
+    state.site_limits = Arc::new(PublicLimits::new(1, 1000));
+    let app = site_owner_support::app(state);
+
+    let first = open(&app, None, "5.5.5.5", None).await;
+    assert_eq!(first.status(), 200, "the first stream of the client");
+    let reads = stub.count();
+    let second = open(&app, None, "5.5.5.5", None).await;
+    assert_eq!(
+        second.status(),
+        429,
+        "the second request of the client in one minute"
+    );
+    let (_, body) = refusal(second).await;
+    assert_eq!(body["code"], "platform.limit.rate_exceeded", "{body}");
+    assert_eq!(
+        stub.count(),
+        reads,
+        "a refused request made Edge read the manifest"
+    );
+    drop(first);
 
     harness.cleanup().await.expect("cleanup");
 }
