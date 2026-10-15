@@ -101,6 +101,9 @@ pub struct ApiState {
     pub channel_digests: Option<Arc<channel_digests::ChannelDigestsClient>>,
     /// The client and site buckets of the `public` route class (ADR-0017).
     pub site_limits: Arc<sites::PublicLimits>,
+    /// The source address of the sites gateway. Only a connection from it sets the client key of
+    /// the `public` class with `X-Ratatoskr-Client-IP` (`sites.gateway_peer`).
+    pub sites_gateway_peer: std::net::IpAddr,
 }
 
 impl ApiState {
@@ -134,6 +137,7 @@ impl ApiState {
             archive_max_bytes: platform_core::config::DEFAULT_MAX_ARCHIVE_BYTES,
             channel_digests: None,
             site_limits: Arc::new(sites::PublicLimits::default()),
+            sites_gateway_peer: platform_core::config::DEFAULT_SITES_GATEWAY_PEER,
         }
     }
 

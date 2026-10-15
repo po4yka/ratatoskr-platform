@@ -78,6 +78,16 @@ Answering the question the transfer contract waits on: client uploads flow throu
 - Public base URLs do not change for existing clients; new prefixes appear alongside new capability names in the pull requests that add the routes behind them, per ADR-0008.
 - How the generated public OpenAPI document (ADR-0006) represents proxied surfaces is an open question owned by the implementing change, not silently decided here.
 
+## Follow-up
+
+- SITE-026 (workspace change `add-site-gateway-hosting`, spec `site-gateway`): Edge trusts
+  `X-Ratatoskr-Client-IP` only on a connection whose peer address is `sites.gateway_peer`
+  (`RATATOSKR__SITES__GATEWAY_PEER`, default `127.0.0.83`), the loopback source address of the sites
+  gateway. On every other connection Edge ignores the header and keys the client bucket of the
+  `public` class (ADR-0017) on the peer address. The header carries the reserved `x-ratatoskr-`
+  prefix, so it is removed on every forward and never reaches a domain service. It selects a rate
+  limit bucket only, never an identity.
+
 ## Security and privacy
 
 Identity crosses the hop only as the minted minimum: user id, device id when applicable, correlation id. No credentials, tokens, cookies or provider secrets are forwarded, and stripping inbound reserved headers closes the replay path the tunnel would otherwise leave open. Services refusing claimless requests means only edge can originate an authorized call, and the audit trail records proxied calls at edge where the principal is actually known. Error normalization keeps topology, storage paths and provider diagnostics out of client-visible envelopes in both the conforming and replaced paths. Uploaded bytes are untrusted references end to end: edge bounds them, receiving services quarantine or validate them per their own contracts, and neither treats transport arrival as content approval.

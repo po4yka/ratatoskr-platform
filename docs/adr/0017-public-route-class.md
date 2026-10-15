@@ -58,9 +58,11 @@ A route of the class `public`:
   requests for each minute for a client and 1200 for each minute for a site. Each bucket table
   holds at most 10 000 keys, as the per-actor limiter of milestone 8 does.
 
-The sites gateway of SITE-026 sets `X-Ratatoskr-Client-IP`. When Edge trusts that header, and from
-which peer, is the rule of SITE-026 (`site-gateway`). Until that rule exists, every request without
-the header shares one client bucket, so a missing header cannot get a new bucket for each request.
+The sites gateway of SITE-026 sets `X-Ratatoskr-Client-IP`. Edge reads the header only on a
+connection from the gateway's address (`sites.gateway_peer`, default `127.0.0.83`), and keys the
+client bucket on the peer address of every other connection (SITE-026, spec `site-gateway`; the
+rule is in the follow-up of ADR-0015). A request from the gateway without the header has the empty
+key, so a missing header cannot get a new bucket for each request.
 
 In this change, the only `public` routes are `GET` and `HEAD /v1/sites/{site}/content/*`, proxied
 to the sites listener `127.0.0.1:8100`.
@@ -113,8 +115,8 @@ under `/v1/sites/{site}/content/`.
   authorisation decision (`identity.site_approvals`) and only Edge publishes commands.
 - An anonymous request costs Edge two bucket checks and one loopback request. It costs no session
   lookup and no database query in Edge.
-- A client that cannot set `X-Ratatoskr-Client-IP` shares one bucket with every other such client
-  until SITE-026 adds the sites gateway.
+- Each peer that is not the sites gateway has one client bucket, whatever header it sends. Behind
+  the gateway, each value of `X-Ratatoskr-Client-IP` has one (SITE-026).
 
 ## Security and privacy
 
@@ -140,7 +142,7 @@ API version, so there is no version negotiation and no deprecation window.
 ## Follow-up
 
 - SITE-026 (`add-site-gateway-hosting`) states when and from which peer Edge trusts
-  `X-Ratatoskr-Client-IP`.
+  `X-Ratatoskr-Client-IP`: done, see "The `public` class" above and the follow-up of ADR-0015.
 - SITE-027 (`add-site-owner-editing-and-live`) issues `site_owner` sessions, adds the `sign-in`
   routes and the second guard of `release`.
 - The two bucket sizes are constants in this change. They become validated configuration when an

@@ -29,7 +29,7 @@ use platform_core::config::{self, ConfigError, LogFormat, PlatformConfig};
 /// configuration variable, and milestones 5 to 8 added the database, the bus and the identity keys
 /// without touching it — so the claim had been false for four milestones, and this list is what
 /// makes it checkable again.
-const DOCUMENTED: [(&str, &str); 31] = [
+const DOCUMENTED: [(&str, &str); 32] = [
     ("RATATOSKR__ADMIN__BIND", "127.0.0.1:19464"),
     ("RATATOSKR__PUBLIC__BIND", "127.0.0.1:18080"),
     ("RATATOSKR__PUBLIC__REQUEST_TIMEOUT_SECONDS", "17"),
@@ -77,6 +77,7 @@ const DOCUMENTED: [(&str, &str); 31] = [
         "RATATOSKR__SCHEDULING__ALLOWED_REGISTRARS",
         "[\"ratatoskr-github\",\"ratatoskr-channel-digests\"]",
     ),
+    ("RATATOSKR__SITES__GATEWAY_PEER", "127.0.0.84"),
     ("RATATOSKR__SHUTDOWN__DRAIN_SECONDS", "7"),
     ("RATATOSKR__SHUTDOWN__GRACE_SECONDS", "11"),
     ("RATATOSKR__TELEMETRY__LOG_FORMAT", "pretty"),

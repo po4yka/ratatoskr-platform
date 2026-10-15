@@ -8,9 +8,10 @@
 //! routes, which reads no credential. A request that no row holds is
 //! `404` at Edge, and a row without a class stops Edge at start-up ([`check_routes`]).
 
+use std::net::SocketAddr;
 use std::sync::Arc;
 
-use axum::extract::{Extension, FromRequestParts as _, Request, State};
+use axum::extract::{ConnectInfo, Extension, FromRequestParts as _, Request, State};
 use axum::response::Response;
 use http::{HeaderValue, Method};
 use platform_core::FailureKind;
@@ -27,7 +28,8 @@ pub const SERVICE: &str = "sites";
 /// The approval route below `/v1/sites/`, which Edge serves itself (workspace spec `site-manifest`).
 const APPROVAL_PATH: &str = "{site}/manifest/approval";
 
-/// The header that names the client of a public request. The sites gateway of SITE-026 sets it.
+/// The header that names the client of a public request. The sites gateway sets it, and Edge reads
+/// it only on a connection from the gateway's address ([`client_key`]).
 const CLIENT_HEADER: &str = "x-ratatoskr-client-ip";
 
 /// The requests of one client in a minute, across every site (ADR-0017).
@@ -352,6 +354,27 @@ async fn deployer(
     }
 }
 
+/// The client key of a `public` request (workspace spec `site-gateway`): the value of
+/// `X-Ratatoskr-Client-IP` on a connection from the sites gateway's address, and the peer address
+/// on every other connection, whatever header it sends. A request whose connection is not known
+/// has the empty key, so every such request shares one bucket. The header never reaches the sites
+/// service: the reserved `x-ratatoskr-` prefix is removed on every forward.
+fn client_key(state: &ApiState, request: &http::request::Parts) -> String {
+    let Some(ConnectInfo(peer)) = request.extensions.get::<ConnectInfo<SocketAddr>>() else {
+        return String::new();
+    };
+    if peer.ip() == state.sites_gateway_peer {
+        request
+            .headers
+            .get(CLIENT_HEADER)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_owned()
+    } else {
+        peer.ip().to_string()
+    }
+}
+
 /// `GET` and `HEAD /v1/sites/{site}/content/*`: the `public` class.
 ///
 /// A request that declares a body is `400`. The buckets are checked before the proxy, and a
@@ -370,12 +393,10 @@ async fn content(
     if declares_body {
         return platform_http::reject(FailureKind::InvalidRequest);
     }
-    let client = headers
-        .get(CLIENT_HEADER)
-        .map_or(&b""[..], HeaderValue::as_bytes);
+    let client = client_key(state, request);
     if !state
         .site_limits
-        .admit(client, site, jiff::Timestamp::now())
+        .admit(client.as_bytes(), site, jiff::Timestamp::now())
     {
         let mut refused = platform_http::reject(FailureKind::RateLimited);
         refused.headers_mut().insert(

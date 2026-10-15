@@ -30,11 +30,11 @@ use figment::providers::{Env, Serialized};
 
 pub use crate::config::model::{
     AdminConfig, ArchiveStagingConfig, BusConfig, ChannelDigestsConfig,
-    DEFAULT_ACTOR_REQUESTS_PER_MINUTE, DEFAULT_MAX_ARCHIVE_BYTES, DEFAULT_STALE_AFTER_SECONDS,
-    DatabaseConfig, EVENT_RETENTION_DAYS, GATEWAY_TRANSFER_PATHS, GatewayConfig,
-    GatewayRouteBudget, GatewayRouteBudgets, GatewayRouteClass, GatewayRouteConfig, IdentityConfig,
-    LogFormat, OperationsConfig, OtlpConfig, PlatformConfig, PublicConfig, RetentionConfig,
-    SchedulingConfig, ShutdownConfig, TelemetryConfig,
+    DEFAULT_ACTOR_REQUESTS_PER_MINUTE, DEFAULT_MAX_ARCHIVE_BYTES, DEFAULT_SITES_GATEWAY_PEER,
+    DEFAULT_STALE_AFTER_SECONDS, DatabaseConfig, EVENT_RETENTION_DAYS, GATEWAY_TRANSFER_PATHS,
+    GatewayConfig, GatewayRouteBudget, GatewayRouteBudgets, GatewayRouteClass, GatewayRouteConfig,
+    IdentityConfig, LogFormat, OperationsConfig, OtlpConfig, PlatformConfig, PublicConfig,
+    RetentionConfig, SchedulingConfig, ShutdownConfig, SitesConfig, TelemetryConfig,
 };
 pub use crate::config::validate::{SHUTDOWN_CEILING_SECONDS, Violation};
 use crate::role::RuntimeRole;
@@ -135,6 +135,9 @@ impl PlatformConfig {
             // task (ADR-0014); the other roles carry the section so one shape stays one shape.
             operations: OperationsConfig::default(),
             scheduling: SchedulingConfig::default(),
+            // The default source address of the sites gateway; the gateway's own default is the
+            // same address.
+            sites: SitesConfig::default(),
             shutdown: ShutdownConfig {
                 drain_seconds: model::default_drain_seconds(),
                 grace_seconds: model::default_grace_seconds(),

@@ -25,6 +25,10 @@ pub struct Served {
 
 /// Serves `router` on `listener` until [`drain_and_close`] closes it.
 ///
+/// Each request carries the peer address of its connection as `ConnectInfo<SocketAddr>`. The
+/// `public` class of Edge keys its client bucket on it, and trusts `X-Ratatoskr-Client-IP` only from
+/// the sites gateway's address (workspace spec `site-gateway`).
+///
 /// # Panics
 ///
 /// Never itself; the spawned task panics only if axum's accept loop does.
@@ -32,12 +36,15 @@ pub struct Served {
 pub fn serve(listener: TcpListener, router: Router) -> Served {
     let (close, closed) = oneshot::channel();
     let task = tokio::spawn(
-        axum::serve(listener, router)
-            .with_graceful_shutdown(async move {
-                // A dropped sender means the process is going down anyway.
-                let _ = closed.await;
-            })
-            .into_future(),
+        axum::serve(
+            listener,
+            router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .with_graceful_shutdown(async move {
+            // A dropped sender means the process is going down anyway.
+            let _ = closed.await;
+        })
+        .into_future(),
     );
     Served { close, task }
 }

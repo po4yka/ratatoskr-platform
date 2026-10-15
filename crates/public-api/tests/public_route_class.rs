@@ -309,12 +309,19 @@ async fn per_client_limit_is_enforced_before_proxy() {
     let harness = TestDatabase::create().await.expect("a test database");
     let (listener, count) = stub_sites().await;
     let app = app(&harness, listener);
+    // From the sites gateway's address, the only peer whose X-Ratatoskr-Client-IP Edge reads
+    // (workspace spec `site-gateway`).
+    let gateway: std::net::SocketAddr = "127.0.0.83:40000".parse().expect("a peer address");
     let read = |client: &str| {
-        Request::builder()
+        let mut request = Request::builder()
             .uri(PAGE)
             .header("x-ratatoskr-client-ip", client)
             .body(Body::empty())
-            .expect("a request")
+            .expect("a request");
+        request
+            .extensions_mut()
+            .insert(axum::extract::ConnectInfo(gateway));
+        request
     };
 
     let mut admitted = 0_usize;

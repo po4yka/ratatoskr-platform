@@ -76,6 +76,10 @@ pub struct PlatformConfig {
     #[serde(default)]
     pub scheduling: SchedulingConfig,
 
+    /// What Edge knows about the sites gateway. Always present; every member has a default.
+    #[serde(default)]
+    pub sites: SitesConfig,
+
     /// The two phases of a graceful stop.
     pub shutdown: ShutdownConfig,
 
@@ -322,6 +326,37 @@ pub struct OperationsConfig {
     /// value, not behind a boolean.
     #[serde(default = "default_stale_after_seconds")]
     pub stale_after_seconds: u64,
+}
+
+/// What Edge knows about the sites gateway of `ratatoskr-sites` (workspace change
+/// `add-site-gateway-hosting`).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SitesConfig {
+    /// `RATATOSKR__SITES__GATEWAY_PEER`. Default `127.0.0.83`.
+    ///
+    /// The loopback source address of the sites gateway's connections to Edge. Edge keys the
+    /// client bucket of the `public` class on `X-Ratatoskr-Client-IP` only on a connection from this
+    /// address, and on the peer address of every other connection. The gateway sets the header
+    /// from `CF-Connecting-IP`. The header selects a bucket and nothing else.
+    #[serde(default = "default_sites_gateway_peer")]
+    pub gateway_peer: std::net::IpAddr,
+}
+
+impl Default for SitesConfig {
+    fn default() -> Self {
+        Self {
+            gateway_peer: default_sites_gateway_peer(),
+        }
+    }
+}
+
+/// The default of [`SitesConfig::gateway_peer`], the default source address of the sites gateway.
+pub const DEFAULT_SITES_GATEWAY_PEER: std::net::IpAddr =
+    std::net::IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 83));
+
+pub(super) const fn default_sites_gateway_peer() -> std::net::IpAddr {
+    DEFAULT_SITES_GATEWAY_PEER
 }
 
 /// The interim admission policy for schedule-registration commands.
