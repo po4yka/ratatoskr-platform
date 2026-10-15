@@ -45,7 +45,8 @@ const CAPTURE_PRODUCERS: &[&str] = &[
 /// The one producer of every channel-digest operation.
 const CHANNEL_DIGEST_PRODUCERS: &[&str] = &["ratatoskr-channel-digests"];
 
-/// The one producer of a vault connect (workspace change `add-notes-vault-connections`).
+/// The one producer of a vault connect (workspace change `add-notes-vault-connections`), of a
+/// notes write and of a write-mode change (workspace change `add-notes-write-back`).
 const NOTES_PRODUCERS: &[&str] = &["ratatoskr-notes"];
 
 /// Every operation kind Platform mints, and who may report for it.
@@ -72,6 +73,11 @@ pub const AUTHORITY: &[(&str, Producers)] = &[
     ),
     (
         "notes.connection.connect",
+        Producers::Listed(NOTES_PRODUCERS),
+    ),
+    ("notes.file.write", Producers::Listed(NOTES_PRODUCERS)),
+    (
+        "notes.connection.write_mode",
         Producers::Listed(NOTES_PRODUCERS),
     ),
 ];

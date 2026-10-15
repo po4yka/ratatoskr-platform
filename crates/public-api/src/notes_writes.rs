@@ -63,6 +63,9 @@ const WRITE_KIND: &str = "notes.file.write";
 /// The kind of the operation that a write-mode change mints.
 const WRITE_MODE_KIND: &str = "notes.connection.write_mode";
 
+/// The one service that reports on the operations of these routes (XR-021 R3-02).
+const NOTES_PRODUCER: &str = "ratatoskr-notes";
+
 /// The header `INTERFACES.md` requires on a replayable mutation.
 const IDEMPOTENCY_KEY: &str = "idempotency-key";
 
@@ -232,7 +235,7 @@ pub async fn set_write_mode(
         key: &key,
         fingerprint: &fingerprint,
         correlation: &correlation_id,
-        reporter: None,
+        reporter: Some(NOTES_PRODUCER),
     };
     let operation_id = match mint(&state, principal, &intake).await {
         Ok(Minted::Fresh(operation_id)) => operation_id,
@@ -318,7 +321,7 @@ async fn submit(
         key: submission.key,
         fingerprint: submission.fingerprint,
         correlation: &correlation,
-        reporter: None,
+        reporter: Some(NOTES_PRODUCER),
     };
     accept(state, principal, &intake, accepted, |operation, now| {
         command.operation_id = OperationId(operation.operation_id);
