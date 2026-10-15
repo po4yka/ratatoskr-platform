@@ -67,15 +67,16 @@ to the sites listener `127.0.0.1:8100`.
 
 ### The site route classes
 
-Edge holds one table of the routes under `/v1/sites/{site}/`. Each row has a method set, a path
-below `/v1/sites/{site}`, and a class: `management`, `site-origin`, `sign-in` or `release`. Edge
+Edge holds one table of `/v1/sites` and the routes under `/v1/sites/{site}/`. Each row has a method
+set, a path below `/v1/sites`, and a class: `management`, `site-origin`, `sign-in` or `release`. Edge
 refuses to start when a row has no class, and the refusal names the route. A request under
 `/v1/sites/` that no row holds gets `404` at Edge and does not reach the sites service. A request
 whose path a row holds, with a method that the row does not hold, gets `405`.
 
 | Route | Class | Who serves it |
 |---|---|---|
-| `PUT .../manifest` | management | sites |
+| `GET /v1/sites` | management | sites |
+| `GET`, `PUT .../manifest` | management | sites |
 | `POST`, `DELETE .../manifest/approval` | management | Edge |
 | `GET`, `PUT`, `DELETE .../publications` and `.../publications/{publication}` | management | sites |
 | `GET .../releases` | management | sites |

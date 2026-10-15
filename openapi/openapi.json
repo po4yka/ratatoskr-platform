@@ -36,6 +36,45 @@
           }
         ]
       },
+      "ActiveSiteManifest": {
+        "description": "The answer of `GET /v1/sites/{site}/manifest`: the active manifest of the site.",
+        "properties": {
+          "capabilities": {
+            "description": "The capabilities that the manifest requests.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "hostname": {
+            "description": "The hostname of the manifest.",
+            "type": "string"
+          },
+          "manifest_sha256": {
+            "description": "The SHA-256 of the manifest bytes, 64 lower-case hex digits. The owner approves this digest.",
+            "type": "string"
+          },
+          "publications": {
+            "description": "The publication ids of the manifest.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "site_id": {
+            "description": "The site id.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "site_id",
+          "manifest_sha256",
+          "hostname",
+          "publications",
+          "capabilities"
+        ],
+        "type": "object"
+      },
       "AiArchiveCompleteness": {
         "description": "Whether one import obtained the whole export, stated per `docs/ARCHITECTURE.md` S8.3.\n\n**Closed on purpose**: indexing depth, retention and re-import scheduling hang off this\nstate, so an unrecognized value must stop processing rather than be read as \"whole enough\".\nCompleteness is evidence-based: a parser may not mark an import `complete` merely because it\nparsed every file it knows about.",
         "oneOf": [
@@ -2625,6 +2664,74 @@
         },
         "required": [
           "manifest_sha256"
+        ],
+        "type": "object"
+      },
+      "SiteApprovalState": {
+        "description": "The approval state of a site in [`SiteManifestState`].",
+        "oneOf": [
+          {
+            "const": "unapproved",
+            "description": "No approval was ever announced for the site.",
+            "type": "string"
+          },
+          {
+            "const": "approved",
+            "description": "The approval is in force.",
+            "type": "string"
+          },
+          {
+            "const": "withdrawn",
+            "description": "The approval was withdrawn.",
+            "type": "string"
+          }
+        ]
+      },
+      "SiteList": {
+        "description": "The answer of `GET /v1/sites`: the owner's sites, each with the state of its manifest.",
+        "properties": {
+          "sites": {
+            "description": "The sites, in ascending `site_id` order.",
+            "items": {
+              "$ref": "#/components/schemas/SiteManifestState"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "sites"
+        ],
+        "type": "object"
+      },
+      "SiteManifestState": {
+        "description": "One site of [`SiteList`].",
+        "properties": {
+          "approval_state": {
+            "$ref": "#/components/schemas/SiteApprovalState",
+            "description": "The approval state of the site."
+          },
+          "approved_manifest_sha256": {
+            "description": "The SHA-256 that the last approval or withdrawal named, from the projection of the approval\nevents; `null` when the site was never approved.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "site_id": {
+            "description": "The site id.",
+            "type": "string"
+          },
+          "submitted_manifest_sha256": {
+            "description": "The SHA-256 of the active manifest, the last valid submission; `null` when the site has\nnone.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "site_id",
+          "approval_state"
         ],
         "type": "object"
       },
@@ -6857,6 +6964,161 @@
         "summary": "Revoke one of your sessions",
         "tags": [
           "sessions"
+        ]
+      }
+    },
+    "/v1/sites": {
+      "get": {
+        "description": "Lists the owner's sites, each with the digest of its active manifest, the digest of its last approval or withdrawal and its approval state (`unapproved`, `approved` or `withdrawn`). The sites service answers; Edge forwards the request after it checks the caller. Only a primary session whose user holds the live `platform.owner` grant may call this route (class `management`, ADR-0017).",
+        "operationId": "listSites",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SiteList"
+                }
+              }
+            },
+            "description": "The owner's sites."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No credential, or one that does not authenticate here."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The session is not a primary session whose user holds the live `platform.owner` grant."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The sites service could not be reached."
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The sites service did not answer in time."
+          }
+        },
+        "security": [
+          {
+            "sessionBearer": []
+          }
+        ],
+        "summary": "List the owner's sites",
+        "tags": [
+          "sites"
+        ]
+      }
+    },
+    "/v1/sites/{site}/manifest": {
+      "get": {
+        "description": "Reads the active manifest of the site, the last valid submission, with its SHA-256. An approval names that digest. The sites service answers; Edge forwards the request after it checks the caller. Only a primary session whose user holds the live `platform.owner` grant may call this route (class `management`, ADR-0017).",
+        "operationId": "readSiteManifest",
+        "parameters": [
+          {
+            "description": "The site id: 3 to 40 lower-case ASCII letters, digits and `-`.",
+            "in": "path",
+            "name": "site",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActiveSiteManifest"
+                }
+              }
+            },
+            "description": "The active manifest of the site."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No credential, or one that does not authenticate here."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The session is not a primary session whose user holds the live `platform.owner` grant."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The site has no active manifest."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The sites service could not be reached."
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The sites service did not answer in time."
+          }
+        },
+        "security": [
+          {
+            "sessionBearer": []
+          }
+        ],
+        "summary": "Read the active manifest of a site",
+        "tags": [
+          "sites"
         ]
       }
     },

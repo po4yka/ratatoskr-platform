@@ -1,7 +1,8 @@
 //! `/v1/sites`: Edge in front of `ratatoskr-sites` (workspace change `add-site-publications`,
 //! ADR-0017).
 //!
-//! Every route under `/v1/sites/{site}/` has one row in [`ROUTES`], and the row has a class. The
+//! `/v1/sites` and every route under `/v1/sites/{site}/` have one row in [`ROUTES`], and the row
+//! has a class. The
 //! class decides the caller: `management` and `release` need the owner, and `site-origin` is the
 //! `public` class of the content routes, which reads no credential. A request that no row holds is
 //! `404` at Edge, and a row without a class stops Edge at start-up ([`check_routes`]).
@@ -54,7 +55,7 @@ pub enum SiteRouteClass {
     Release,
 }
 
-/// One row of the site route table: the methods, the path below `/v1/sites/{site}`, and the class.
+/// One row of the site route table: the methods, the path below `/v1/sites`, and the class.
 ///
 /// A `{name}` segment of the path matches one segment that is not empty, and a last `{*name}`
 /// segment matches one or more segments.
@@ -62,47 +63,54 @@ pub enum SiteRouteClass {
 pub struct SiteRoute {
     /// The methods of the row. A request to the path with another method is `405`.
     pub methods: &'static [Method],
-    /// The path below `/v1/sites/{site}`.
+    /// The path below `/v1/sites`: empty for the site list, else `/{site}/...`.
     pub path: &'static str,
     /// The class. A row without one stops Edge at start-up ([`check_routes`]).
     pub class: Option<SiteRouteClass>,
 }
 
-/// Every route under `/v1/sites/{site}/` (workspace spec `site-route-classes`).
+/// `/v1/sites` and every route under `/v1/sites/{site}/` (workspace spec `site-route-classes`).
+/// `GET /v1/sites` and `GET /v1/sites/{site}/manifest` are the reads of the web client (workspace
+/// task 6.15); the sites service answers them ([`crate::site_reads`]).
 pub const ROUTES: &[SiteRoute] = &[
     SiteRoute {
-        methods: &[Method::PUT],
-        path: "/manifest",
+        methods: &[Method::GET],
+        path: "",
+        class: Some(SiteRouteClass::Management),
+    },
+    SiteRoute {
+        methods: &[Method::GET, Method::PUT],
+        path: "/{site}/manifest",
         class: Some(SiteRouteClass::Management),
     },
     SiteRoute {
         methods: &[Method::POST, Method::DELETE],
-        path: "/manifest/approval",
+        path: "/{site}/manifest/approval",
         class: Some(SiteRouteClass::Management),
     },
     SiteRoute {
         methods: &[Method::GET, Method::PUT, Method::DELETE],
-        path: "/publications",
+        path: "/{site}/publications",
         class: Some(SiteRouteClass::Management),
     },
     SiteRoute {
         methods: &[Method::GET, Method::PUT, Method::DELETE],
-        path: "/publications/{publication}",
+        path: "/{site}/publications/{publication}",
         class: Some(SiteRouteClass::Management),
     },
     SiteRoute {
         methods: &[Method::GET],
-        path: "/releases",
+        path: "/{site}/releases",
         class: Some(SiteRouteClass::Management),
     },
     SiteRoute {
         methods: &[Method::POST],
-        path: "/releases",
+        path: "/{site}/releases",
         class: Some(SiteRouteClass::Release),
     },
     SiteRoute {
         methods: &[Method::GET, Method::HEAD],
-        path: "/content/{*rest}",
+        path: "/{site}/content/{*rest}",
         class: Some(SiteRouteClass::SiteOrigin),
     },
 ];
@@ -117,7 +125,7 @@ pub fn check_routes(routes: &[SiteRoute]) -> Result<(), String> {
     let mut failed = Vec::new();
     for (index, row) in routes.iter().enumerate() {
         for method in row.methods {
-            let named = format!("{method} /v1/sites/{{site}}{}", row.path);
+            let named = format!("{method} /v1/sites{}", row.path);
             if row.class.is_none() {
                 failed.push(format!("{named} has no route class"));
             }
@@ -237,11 +245,11 @@ pub async fn dispatch(
 
 /// The site and the class of the row that holds `method` and `path`.
 fn classify<'a>(method: &Method, path: &'a str) -> Result<(&'a str, SiteRouteClass), FailureKind> {
-    let (site, below) = path
-        .strip_prefix("/v1/sites/")
-        .and_then(|below| below.split_once('/'))
-        .filter(|(site, _)| !site.is_empty())
+    let below = path
+        .strip_prefix("/v1/sites")
         .ok_or(FailureKind::RouteNotFound)?;
+    // The site segment, or nothing for `/v1/sites` itself.
+    let site = below.split('/').nth(1).unwrap_or_default();
     let mut rows = ROUTES
         .iter()
         .filter(|row| holds(row.path, below))
@@ -257,10 +265,10 @@ fn classify<'a>(method: &Method, path: &'a str) -> Result<(&'a str, SiteRouteCla
     Ok((site, class))
 }
 
-/// Whether `below`, the path below `/v1/sites/{site}/`, is a path of the row `pattern`.
+/// Whether `below`, the path below `/v1/sites`, is a path of the row `pattern`.
 fn holds(pattern: &str, below: &str) -> bool {
     let mut actual = below.split('/');
-    for expected in pattern.trim_start_matches('/').split('/') {
+    for expected in pattern.split('/') {
         let Some(segment) = actual.next() else {
             return false;
         };

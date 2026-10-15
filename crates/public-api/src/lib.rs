@@ -46,6 +46,7 @@ pub mod oauth;
 pub mod operations;
 pub mod sessions;
 pub mod site_approvals;
+pub mod site_reads;
 pub mod site_releases;
 pub mod sites;
 pub mod status;
@@ -466,6 +467,8 @@ pub fn surface() -> ApiSurface {
                 site_approvals::APPROVE_DOC,
                 site_approvals::WITHDRAW_DOC,
                 site_releases::BUILD_DOC,
+                site_reads::LIST_DOC,
+                site_reads::MANIFEST_DOC,
             ])
             .collect(),
         register: register_schemas,
@@ -506,6 +509,8 @@ fn register_schemas(generator: &mut schemars::SchemaGenerator) {
     generator.subschema_for::<site_approvals::ApproveManifest>();
     generator.subschema_for::<site_approvals::SiteApproval>();
     generator.subschema_for::<site_releases::BuildAccepted>();
+    generator.subschema_for::<site_reads::SiteList>();
+    generator.subschema_for::<site_reads::ActiveSiteManifest>();
     generator.subschema_for::<ratatoskr_operation_contracts::OperationSnapshot>();
     generator.subschema_for::<ratatoskr_error_contracts::ErrorEnvelope>();
     generator.subschema_for::<operations::OperationList>();
