@@ -131,8 +131,11 @@ pub struct FixedConsumerSpec {
     pub stream: &'static str,
     /// The stable durable cursor name, also used by its NATS permission stanza.
     pub durable_name: &'static str,
-    /// The sole subject filter this durable may receive.
+    /// The subject filter this durable receives.
     pub filter_subject: &'static str,
+    /// A second subject filter, for an Edge durable that reads two subjects (NATS 2.10 filter
+    /// subjects). `None` for every other durable.
+    pub also_filter_subject: Option<&'static str>,
     /// Whether messages are acknowledged.
     pub ack: AckMode,
     /// Where the durable starts.
@@ -156,6 +159,7 @@ impl FixedConsumerSpec {
             stream,
             durable_name,
             filter_subject,
+            also_filter_subject: None,
             ack: AckMode::Explicit,
             start: StartAt::All,
             ack_wait_seconds: 30,
@@ -166,7 +170,16 @@ impl FixedConsumerSpec {
     /// Every filter subject of the durable.
     #[must_use]
     pub fn filters(&self) -> Vec<&'static str> {
-        vec![self.filter_subject]
+        std::iter::once(self.filter_subject)
+            .chain(self.also_filter_subject)
+            .collect()
+    }
+
+    /// The same durable with a second filter subject.
+    #[must_use]
+    pub const fn with_also_filter_subject(mut self, subject: &'static str) -> Self {
+        self.also_filter_subject = Some(subject);
+        self
     }
 
     /// The same durable with another ack wait.
@@ -409,6 +422,7 @@ pub const DOMAIN_CONSUMERS: [FixedConsumerSpec; 30] = [
         stream: EVENT_STREAM,
         durable_name: "ratatoskr_extractor_render_awaits",
         filter_subject: "evt.content.render.>",
+        also_filter_subject: None,
         ack: AckMode::None,
         start: StartAt::New,
         ack_wait_seconds: 30,
@@ -450,12 +464,23 @@ pub const NOTES_CONFLICT_CONSUMER: &str = "platform_notes_conflict_projection";
 /// `notes.conflict.resolved.v1`.
 pub const NOTES_CONFLICT_SUBJECTS: &str = "evt.notes.conflict.>";
 
+/// The durable through which Edge feeds the site event stream `/v1/sites/{site}/events`
+/// (SITE-027).
+pub const SITE_EVENTS_CONSUMER: &str = "platform_site_events";
+
+/// The two filters of [`SITE_EVENTS_CONSUMER`]: `sites.release.published.v1` and
+/// `sites.draft.changed.v1`.
+pub const SITE_EVENTS_SUBJECTS: [&str; 2] = [
+    "evt.sites.release.published.v1",
+    "evt.sites.draft.changed.v1",
+];
+
 /// Edge's own consumers, which `consumer::run` creates when each one first runs.
 ///
 /// They are NOT created from this table, and no service verifies them. They are listed here so that
 /// the lag sampler (`observe::sample_bus`) describes them with the same name, stream and filter the
 /// consumers use, in one place that a rename cannot miss (XR-021 CONTRACTS.md R5-13).
-pub const EDGE_INTERNAL_CONSUMERS: [FixedConsumerSpec; 4] = [
+pub const EDGE_INTERNAL_CONSUMERS: [FixedConsumerSpec; 5] = [
     FixedConsumerSpec::standard(
         EVENT_STREAM,
         EDGE_PROJECTION_CONSUMER,
@@ -476,6 +501,8 @@ pub const EDGE_INTERNAL_CONSUMERS: [FixedConsumerSpec; 4] = [
         NOTES_CONFLICT_CONSUMER,
         NOTES_CONFLICT_SUBJECTS,
     ),
+    FixedConsumerSpec::standard(EVENT_STREAM, SITE_EVENTS_CONSUMER, SITE_EVENTS_SUBJECTS[0])
+        .with_also_filter_subject(SITE_EVENTS_SUBJECTS[1]),
 ];
 
 /// Every durable the lag sampler describes: the fixed tables Edge creates, and Edge's own consumers.

@@ -28,14 +28,8 @@ use ratatoskr_sites_contracts::{
 };
 use tokio::sync::broadcast;
 
-/// Edge's durable that feeds the hub, on the events stream.
-pub const SITE_EVENTS_CONSUMER: &str = "platform_site_events";
-
-/// The filters of [`SITE_EVENTS_CONSUMER`].
-pub const SITE_EVENTS_SUBJECTS: [&str; 2] = [
-    "evt.sites.release.published.v1",
-    "evt.sites.draft.changed.v1",
-];
+/// Edge's durable that feeds the hub, and its two filters (`platform_eventing::stream`).
+pub use platform_eventing::{SITE_EVENTS_CONSUMER, SITE_EVENTS_SUBJECTS};
 
 /// The most events a site keeps for a resume.
 const WINDOW_EVENTS: usize = 256;
