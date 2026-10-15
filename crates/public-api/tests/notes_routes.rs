@@ -87,6 +87,53 @@ async fn device_claim_names_the_device_kind() {
     harness.cleanup().await.expect("cleanup");
 }
 
+/// Workspace OBS-024 task 10.3: the owner's primary session uploads the content of a write. Edge
+/// forwards it with a claim that names the owner and the session kind, and with no device claim.
+#[tokio::test]
+async fn session_upload_claim_names_the_session_kind() {
+    let (address, mut seen, task) = stub().await;
+    let gateway = notes_route(address);
+    let harness = TestDatabase::create().await.expect("a test database");
+    let owner = seed_owner(harness.pool()).await;
+    let app = app(&harness, &gateway);
+    let forged = Uuid::now_v7().to_string();
+
+    let (status, body) = send(
+        &app,
+        Request::builder()
+            .method("POST")
+            .uri("/v1/notes/connections/018f0000-0000-7000-8000-0000000000c1/blobs")
+            .header("authorization", format!("Bearer {OWNER_CREDENTIAL}"))
+            .header("content-type", "application/json")
+            .header("x-ratatoskr-device-id", &forged)
+            .header("x-ratatoskr-device-kind", "obsidian_plugin")
+            .header("x-ratatoskr-session-kind", "device")
+            .body(Body::from(r#"{"declared_size_bytes":7}"#))
+            .expect("a request"),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let request = seen.recv().await.expect("one upstream request");
+    assert_eq!(
+        request.path,
+        "/v1/notes/connections/018f0000-0000-7000-8000-0000000000c1/blobs"
+    );
+    assert_eq!(
+        values(&request.headers, "x-ratatoskr-user-id"),
+        [owner.to_string()]
+    );
+    assert_eq!(
+        values(&request.headers, "x-ratatoskr-session-kind"),
+        ["browser"]
+    );
+    assert!(values(&request.headers, "x-ratatoskr-device-id").is_empty());
+    assert!(values(&request.headers, "x-ratatoskr-device-kind").is_empty());
+    assert!(request.headers.get("authorization").is_none());
+    task.abort();
+    harness.cleanup().await.expect("cleanup");
+}
+
 #[tokio::test]
 async fn blob_upload_uses_the_transfer_budget() {
     let (address, mut seen, task) = stub().await;
