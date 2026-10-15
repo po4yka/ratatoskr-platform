@@ -37,12 +37,17 @@ The shipped route table SHALL route `/v1/notes` to the loopback listener `127.0.
 
 ### Requirement: Edge bounds a notes device body by the limit of notes
 
-Edge SHALL forward a change batch up to 2 MiB, a manifest up to 32 MiB and an upload chunk at `/v1/notes/connections/{id}/blobs/{token}/chunks/{index}` up to 16 MiB, the chunk maximum of the shared transfer contract, and SHALL refuse a larger body with `413` before it reaches notes. A limit is never above the `transfer` budget.
+Edge SHALL forward a change batch up to 2 MiB, a manifest up to 32 MiB and an upload chunk at `/v1/notes/connections/{id}/blobs/{token}/chunks/{index}` up to 16 MiB, the chunk maximum of the shared transfer contract, and SHALL refuse a larger body with `413` before it reaches notes. A limit is never above the `transfer` budget, and the configuration SHALL be refused when the notes route is configured and `gateway.budgets.transfer.max_body_bytes` is below the largest of these limits.
 
 #### Scenario: A body of the largest size that notes takes
 
 - **WHEN** a paired plugin sends a change batch of 2 MiB, a manifest of 32 MiB and an upload chunk of 16 MiB, and then each of them with one byte more
 - **THEN** the stub upstream receives each body of the largest size unchanged, and Edge refuses each larger body with `413` (`platform.request.payload_too_large`) before it reaches the stub, verified by `crates/public-api/tests/notes_device_routes.rs::change_batch_admits_the_notes_maximum`, `manifest_admits_the_notes_maximum` and `chunk_admits_the_contract_maximum`
+
+#### Scenario: The transfer budget is below the manifest limit
+
+- **WHEN** Edge loads a configuration with the notes route and a `transfer` body budget of one byte less than 32 MiB, and then one of 32 MiB
+- **THEN** the first is refused for `gateway.budgets.transfer.max_body_bytes` and the second is accepted, verified by `crates/core/tests/config_validation.rs::notes_route_needs_a_transfer_budget_that_holds_its_body_limits`
 
 #### Scenario: A streamed body grows past the largest size that notes takes
 

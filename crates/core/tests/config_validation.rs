@@ -140,6 +140,42 @@ fn notes_blob_path_needs_the_public_transfer_limits() {
     load(104_857_600, 300).expect("public limits that hold the transfer budget are valid");
 }
 
+/// Workspace task 9.30: a transfer budget below the largest body limit of a notes sub-path (the
+/// manifest, 32 MiB) would lower that limit in silence, and notes would never see a valid manifest.
+#[test]
+fn notes_route_needs_a_transfer_budget_that_holds_its_body_limits() {
+    let load = |transfer_max_body_bytes| {
+        let mut configured = PlatformConfig::defaults(RuntimeRole::Edge);
+        let public = configured.public.as_mut().expect("a public listener");
+        public.max_body_bytes = 104_857_600;
+        public.request_timeout_seconds = 300;
+        configured.gateway.budgets.transfer.max_body_bytes = transfer_max_body_bytes;
+        configured.gateway.routes.insert(
+            "notes".to_owned(),
+            GatewayRouteConfig {
+                prefix: "/v1/notes".to_owned(),
+                listener: "127.0.0.1:8099".parse().unwrap(),
+                class: Some(GatewayRouteClass::Control),
+                capabilities_path: "/v1/capabilities".to_owned(),
+                archive_receipt_path: "/v1/ai-archives/receipt".to_owned(),
+            },
+        );
+        config::load_from(
+            RuntimeRole::Edge,
+            Figment::from(Serialized::defaults(configured)),
+        )
+    };
+
+    let Err(ConfigError::Invalid(found)) = load(33_554_431) else {
+        panic!("a transfer budget below the 32 MiB manifest limit of notes must be refused");
+    };
+    assert!(
+        names(&found, "gateway.budgets.transfer.max_body_bytes"),
+        "{found:?}"
+    );
+    load(33_554_432).expect("a transfer budget that holds the manifest limit is valid");
+}
+
 #[test]
 fn gateway_requires_both_distinct_archive_receivers_when_archive_ingress_is_enabled() {
     let mut configured = PlatformConfig::defaults(RuntimeRole::Edge);
