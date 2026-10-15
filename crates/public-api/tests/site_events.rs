@@ -654,3 +654,81 @@ async fn event_older_than_the_window_is_not_kept() {
 
     harness.cleanup().await.expect("cleanup");
 }
+
+/// Revoke the owner sessions of `site-a` while `site` has a release every 50 ms, and answer
+/// whether the open owner stream `body` of `site-a` ended within 3 s.
+async fn ends_under_traffic(
+    harness: &TestDatabase,
+    app: &Router,
+    hub: &Arc<SiteEventHub>,
+    body: &mut Body,
+    site: &'static str,
+) -> bool {
+    let pool = harness.pool().clone();
+    let noise_hub = Arc::clone(hub);
+    let noise = tokio::spawn(async move {
+        for n in 0..200_u32 {
+            let mut release = released('c');
+            release.payload["payload"]["site_id"] = json!(site);
+            release.payload["payload"]["release_id"] = json!(format!("{n:064x}"));
+            deliver(&pool, &noise_hub, &release).await;
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    });
+    let revoke = Request::builder()
+        .method("POST")
+        .uri("/v1/sessions/revoke-site")
+        .header("authorization", format!("Bearer {OWNER}"))
+        .header("content-type", "application/json")
+        .body(Body::from(r#"{"site_id":"site-a"}"#))
+        .expect("a request");
+    let revoked = app.clone().oneshot(revoke).await.expect("a response");
+    assert_eq!(revoked.status(), 200, "revoke-site");
+    let ended = ends_within(body, Duration::from_secs(3)).await;
+    noise.abort();
+    ended
+}
+
+/// Review M-A of SITE-027: events of another site, more frequent than the owner check, do not
+/// keep a revoked owner stream alive.
+#[tokio::test]
+async fn revoked_owner_stream_ends_under_other_site_traffic() {
+    let harness = TestDatabase::create().await.expect("a test database");
+    let limits = SiteStreamLimits {
+        owner_check: Duration::from_millis(200),
+        ..SiteStreamLimits::default()
+    };
+    let (app, cookie, hub) = edge(&harness, limits).await;
+    let response = open(&app, Some(&cookie), "6.6.6.6", None).await;
+    assert_eq!(response.status(), 200, "the owner stream");
+    let mut body = response.into_body();
+
+    assert!(
+        ends_under_traffic(&harness, &app, &hub, &mut body, "site-b").await,
+        "the revoked owner stream outlived 3 s while site-b had events"
+    );
+
+    harness.cleanup().await.expect("cleanup");
+}
+
+/// Review M-A of SITE-027: events of the owner's own site, more frequent than the owner check, do
+/// not keep a revoked owner stream alive.
+#[tokio::test]
+async fn revoked_owner_stream_ends_under_own_site_traffic() {
+    let harness = TestDatabase::create().await.expect("a test database");
+    let limits = SiteStreamLimits {
+        owner_check: Duration::from_millis(200),
+        ..SiteStreamLimits::default()
+    };
+    let (app, cookie, hub) = edge(&harness, limits).await;
+    let response = open(&app, Some(&cookie), "6.6.6.6", None).await;
+    assert_eq!(response.status(), 200, "the owner stream");
+    let mut body = response.into_body();
+
+    assert!(
+        ends_under_traffic(&harness, &app, &hub, &mut body, "site-a").await,
+        "the revoked owner stream outlived 3 s while site-a had events"
+    );
+
+    harness.cleanup().await.expect("cleanup");
+}
