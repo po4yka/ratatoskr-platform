@@ -42,12 +42,14 @@ const MAX_ANSWER_BYTES: usize = 16_384;
 pub const CONNECT_ROUTE: &str = "/v1/notes/connections";
 
 /// The paths below the notes route that a paired device calls: the change batch, the manifest
-/// and the uploads (workspace spec `notes-device-channels`). Notes answers a request without the
+/// and the uploads (workspace spec `notes-device-channels`), and the write queue with its result
+/// route (spec `notes-write-delivery`, `control` class). Notes answers a request without the
 /// device claims with `401`, which Edge does not relay, so Edge refuses it with `403` first.
-pub(crate) const DEVICE_PATHS: [&str; 3] = [
+pub(crate) const DEVICE_PATHS: [&str; 4] = [
     "/connections/{connection}/changes",
     "/connections/{connection}/manifest",
     "/connections/{connection}/blobs",
+    "/connections/{connection}/device-operations",
 ];
 
 /// The device path that the owner's primary session calls too: it uploads the content of a write
