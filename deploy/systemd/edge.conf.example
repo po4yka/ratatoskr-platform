@@ -39,7 +39,8 @@ RATATOSKR__ARCHIVE_STAGING__SWEEP_INTERVAL_SECONDS=300
 
 # Domain APIs are loopback-only. Edge owns the public prefixes, validates the session and mints
 # only x-ratatoskr-user-id, optional x-ratatoskr-device-id and x-ratatoskr-device-kind, and
-# x-correlation-id for each request.
+# x-correlation-id for each request. On a deploy route, a site_deployer device also gets
+# x-ratatoskr-site-id, the one site of its pairing; that device reaches no other route.
 #
 # Each upstream address below is bound by the OWNING service's own listener, not by its operator
 # listener (XR-021 R2-01): knowledge 8091 is Knowledge's API listener (RATATOSKR__API__LISTEN_ADDRESS),

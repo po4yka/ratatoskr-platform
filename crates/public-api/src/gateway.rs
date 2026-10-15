@@ -491,6 +491,7 @@ impl Gateway {
         let claims = Claims {
             principal,
             device_kind: None,
+            site_id: None,
             correlation_id,
         };
         let headers = forwarded_headers(&HeaderMap::new(), claims);
@@ -545,6 +546,8 @@ pub(crate) struct Claims<'a> {
     pub(crate) principal: Principal,
     /// The stored kind of the device, when the principal is a device.
     pub(crate) device_kind: Option<&'static str>,
+    /// The one site of a `site_deployer` device, on a `deploy` route only.
+    pub(crate) site_id: Option<&'a str>,
     pub(crate) correlation_id: &'a str,
 }
 
@@ -632,6 +635,10 @@ pub async fn proxy(
         Err(_) => return platform_http::reject(FailureKind::UpstreamUnavailable),
     };
     let (parts, body) = request.into_parts();
+    let site_id = parts
+        .extensions
+        .get::<crate::auth::DeployerSite>()
+        .map(|site| site.0.as_str());
     // The route layer holds the limit of the route, and a sub-path can take less.
     if body.size_hint().lower() > budget.max_body_bytes {
         return platform_http::reject(FailureKind::PayloadTooLarge);
@@ -650,6 +657,7 @@ pub async fn proxy(
         Claims {
             principal,
             device_kind,
+            site_id,
             correlation_id: &context.correlation_id.to_string(),
         },
     );

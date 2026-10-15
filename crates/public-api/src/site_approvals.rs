@@ -183,6 +183,7 @@ async fn active_manifest(
     *request.headers_mut() = gateway::claim_headers(Claims {
         principal,
         device_kind: None,
+        site_id: None,
         correlation_id: correlation,
     });
     state

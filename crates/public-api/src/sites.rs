@@ -15,9 +15,10 @@ use axum::response::Response;
 use http::{HeaderValue, Method};
 use platform_core::FailureKind;
 use platform_http::{ActorLimiter, RequestContext};
-use platform_identity::{DeviceKind, SessionKind};
+use platform_identity::SessionKind;
 use uuid::Uuid;
 
+use crate::auth::{DeployRoute, DeployerSite};
 use crate::{ApiState, Principal, gateway, site_approvals, site_releases};
 
 /// The name of the sites route in the gateway route table.
@@ -337,31 +338,17 @@ async fn deployer(
     parts: &mut http::request::Parts,
     site: &str,
 ) -> Result<Principal, Response> {
+    parts.extensions.insert(DeployRoute);
     let principal = Principal::from_request_parts(parts, state).await?;
-    let Some(device_id) = principal.device_id else {
-        if principal.kind == SessionKind::Device {
-            return Err(platform_http::reject(FailureKind::Forbidden));
-        }
+    if principal.device_id.is_none() && principal.kind != SessionKind::Device {
         crate::admin::require_owner(state, principal).await?;
         return Ok(principal);
-    };
-    match platform_identity::device::find_device(state.database.pool(), device_id).await {
-        Ok(Some(device))
-            if device.kind == DeviceKind::SiteDeployer
-                && device.user_id == principal.user_id
-                && device.is_active() =>
-        {
-            if device.site_id.as_deref() == Some(site) {
-                Ok(principal)
-            } else {
-                Err(platform_http::reject(FailureKind::CapabilityNotGranted))
-            }
-        }
-        Ok(_) => Err(platform_http::reject(FailureKind::Forbidden)),
-        Err(error) => {
-            tracing::error!(%error, "the deployer device could not be read");
-            Err(platform_http::reject(FailureKind::RequestTimeout))
-        }
+    }
+    // The extractor names the site of a `site_deployer`; no other device has one.
+    match parts.extensions.get::<DeployerSite>() {
+        Some(DeployerSite(own)) if own == site => Ok(principal),
+        Some(_) => Err(platform_http::reject(FailureKind::CapabilityNotGranted)),
+        None => Err(platform_http::reject(FailureKind::Forbidden)),
     }
 }
 

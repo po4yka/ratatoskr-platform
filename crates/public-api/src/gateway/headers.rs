@@ -24,6 +24,10 @@ const HEADER_DEVICE_KIND: &str = "x-ratatoskr-device-kind";
 /// notes tells the owner's upload from a device upload. Reserved prefix, as above.
 const HEADER_SESSION_KIND: &str = "x-ratatoskr-session-kind";
 
+/// The claim that names the one site of a `site_deployer` device, minted only on a `deploy` route
+/// (workspace spec `site-route-classes`). Reserved prefix, as above.
+const HEADER_SITE_ID: &str = "x-ratatoskr-site-id";
+
 /// The value of [`HEADER_SESSION_KIND`] on a request of the `public` class (ADR-0017).
 const ANONYMOUS_SESSION_KIND: &str = "anonymous";
 
@@ -31,6 +35,7 @@ pub(super) fn forwarded_headers(headers: &HeaderMap, claims: Claims<'_>) -> Head
     let Claims {
         principal,
         device_kind,
+        site_id,
         correlation_id,
     } = claims;
     let mut forwarded = cleaned(headers);
@@ -46,6 +51,9 @@ pub(super) fn forwarded_headers(headers: &HeaderMap, claims: Claims<'_>) -> Head
     }
     if let Some(device_kind) = device_kind {
         insert(&mut forwarded, HEADER_DEVICE_KIND, device_kind);
+    }
+    if let Some(site_id) = site_id {
+        insert(&mut forwarded, HEADER_SITE_ID, site_id);
     }
     insert(&mut forwarded, HEADER_SESSION_KIND, principal.kind.as_str());
     insert(

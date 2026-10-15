@@ -6,7 +6,7 @@ use axum::extract::FromRequestParts;
 use axum::response::Response;
 use http::request::Parts;
 use platform_core::FailureKind;
-use platform_identity::{SecretDigest, SessionKind};
+use platform_identity::{DeviceKind, SecretDigest, SessionKind};
 use uuid::Uuid;
 
 use crate::ApiState;
@@ -27,6 +27,18 @@ pub struct Principal {
     /// How that session was established.
     pub kind: SessionKind,
 }
+
+/// Marks a request of a `deploy` route (workspace spec `site-route-classes`). The site dispatcher
+/// inserts it before it authenticates the caller, and a `site_deployer` session authenticates only
+/// on a request that carries it.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct DeployRoute;
+
+/// The one site of the authenticated `site_deployer` device. The extractor inserts it on a
+/// `deploy` route, the guard compares it with the site of the path, and the proxy mints it into
+/// the claims.
+#[derive(Debug, Clone)]
+pub(crate) struct DeployerSite(pub(crate) String);
 
 impl FromRequestParts<Arc<ApiState>> for Principal {
     type Rejection = Response;
@@ -65,6 +77,9 @@ impl FromRequestParts<Arc<ApiState>> for Principal {
         let Some(session) = session else {
             return Err(refuse());
         };
+        if let Some(device_id) = session.device_id {
+            deployer_site(state, parts, device_id, session.user_id).await?;
+        }
 
         // After authentication, because until then there is no actor to charge. Behind a tunnel
         // that adds its own headers there is no client identity a process may trust
@@ -100,6 +115,37 @@ impl FromRequestParts<Arc<ApiState>> for Principal {
             device_id: session.device_id,
             kind: session.kind,
         })
+    }
+}
+
+/// The rule of a `site_deployer` session: it authenticates only on a `deploy` route, and there
+/// the site of its device goes into the request as [`DeployerSite`]. A session of any other device
+/// passes unchanged.
+async fn deployer_site(
+    state: &ApiState,
+    parts: &mut Parts,
+    device_id: Uuid,
+    user_id: Uuid,
+) -> Result<(), Response> {
+    let device = platform_identity::device::find_device(state.database.pool(), device_id)
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, "the device of a session could not be read");
+            platform_http::reject(FailureKind::RequestTimeout)
+        })?;
+    let Some(device) = device.filter(|device| device.kind == DeviceKind::SiteDeployer) else {
+        return Ok(());
+    };
+    match device.site_id {
+        Some(site)
+            if device.user_id == user_id
+                && device.is_active()
+                && parts.extensions.get::<DeployRoute>().is_some() =>
+        {
+            parts.extensions.insert(DeployerSite(site));
+            Ok(())
+        }
+        _ => Err(platform_http::reject(FailureKind::Forbidden)),
     }
 }
 

@@ -272,6 +272,7 @@ pub(crate) async fn settle(
         let claims = Claims {
             principal: claimed.principal,
             device_kind: claimed.device_kind,
+            site_id: None,
             correlation_id: &claimed.correlation_id,
         };
         let forward = forward(&state, request, claims, operation_id, kind);

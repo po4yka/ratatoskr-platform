@@ -95,7 +95,9 @@ The guard of each class:
 - **deploy**: added by SITE-026 (workspace change `add-site-gateway-hosting`). The guard of
   `management`, or a registered device of the kind `site_deployer` that was paired for the same
   site. A `site_deployer` of another site gets `403` `edge.capability_not_granted`, and every other
-  device gets the stable forbidden error. The upload body of `.../deploys` streams under the
+  device gets the stable forbidden error. Edge mints the site of the device as
+  `x-ratatoskr-site-id`, and refuses a `site_deployer` session with the stable forbidden error on
+  every route that is not of this class. The upload body of `.../deploys` streams under the
   `transfer` budget of ADR-0015; the bundle size limit belongs to the sites service.
 - **site-origin**: the `public` class above. SITE-027 adds site owner sessions to this class.
 - **sign-in**: no route has it in this change. SITE-027 adds the sign-in exchange.
