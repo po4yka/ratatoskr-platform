@@ -133,9 +133,13 @@ async fn deployer_site(
             tracing::error!(%error, "the device of a session could not be read");
             platform_http::reject(FailureKind::RequestTimeout)
         })?;
-    let Some(device) = device.filter(|device| device.kind == DeviceKind::SiteDeployer) else {
-        return Ok(());
+    // A session whose device cannot be read is not a principal.
+    let Some(device) = device else {
+        return Err(platform_http::reject(FailureKind::Unauthenticated));
     };
+    if device.kind != DeviceKind::SiteDeployer {
+        return Ok(());
+    }
     match device.site_id {
         Some(site)
             if device.user_id == user_id

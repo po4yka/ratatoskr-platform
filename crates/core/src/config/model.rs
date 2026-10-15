@@ -337,8 +337,12 @@ pub struct SitesConfig {
     ///
     /// The loopback source address of the sites gateway's connections to Edge. Edge keys the
     /// client bucket of the `public` class on `X-Ratatoskr-Client-IP` only on a connection from this
-    /// address, and on the peer address of every other connection. The gateway sets the header
-    /// from `CF-Connecting-IP`. The header selects a bucket and nothing else.
+    /// address, and only when the header holds exactly one IP address; on the peer address of
+    /// every other request. The gateway sets the header from `CF-Connecting-IP`. The header selects
+    /// a bucket and nothing else.
+    ///
+    /// Rule V24: a loopback address, and not `127.0.0.1`, which is the source of `cloudflared` and
+    /// of every other local client.
     #[serde(default = "default_sites_gateway_peer")]
     pub gateway_peer: std::net::IpAddr,
 }

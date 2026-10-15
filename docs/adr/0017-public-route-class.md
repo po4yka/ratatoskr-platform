@@ -59,10 +59,10 @@ A route of the class `public`:
   holds at most 10 000 keys, as the per-actor limiter of milestone 8 does.
 
 The sites gateway of SITE-026 sets `X-Ratatoskr-Client-IP`. Edge reads the header only on a
-connection from the gateway's address (`sites.gateway_peer`, default `127.0.0.83`), and keys the
-client bucket on the peer address of every other connection (SITE-026, spec `site-gateway`; the
-rule is in the follow-up of ADR-0015). A request from the gateway without the header has the empty
-key, so a missing header cannot get a new bucket for each request.
+connection from the gateway's address (`sites.gateway_peer`, default `127.0.0.83`), and only when
+it holds exactly one IP address. Every other request, and every other connection, has the peer
+address as its client key (SITE-026, spec `site-gateway`; the rule is in the follow-up of
+ADR-0015). So a missing or malformed header cannot get a new bucket for each request.
 
 In this change, the only `public` routes are `GET` and `HEAD /v1/sites/{site}/content/*`, proxied
 to the sites listener `127.0.0.1:8100`.

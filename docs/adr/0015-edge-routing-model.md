@@ -83,8 +83,11 @@ Answering the question the transfer contract waits on: client uploads flow throu
 - SITE-026 (workspace change `add-site-gateway-hosting`, spec `site-gateway`): Edge trusts
   `X-Ratatoskr-Client-IP` only on a connection whose peer address is `sites.gateway_peer`
   (`RATATOSKR__SITES__GATEWAY_PEER`, default `127.0.0.83`), the loopback source address of the sites
-  gateway. On every other connection Edge ignores the header and keys the client bucket of the
-  `public` class (ADR-0017) on the peer address. The header carries the reserved `x-ratatoskr-`
+  gateway. Even there Edge reads it only when the request carries exactly one value and the value
+  is an IP address. On every other connection, and for any other header, Edge keys the client
+  bucket of the `public` class (ADR-0017) on the peer address. Rule V24 refuses at start-up a
+  `sites.gateway_peer` that is not a loopback address or that is `127.0.0.1`, the source of
+  `cloudflared`. The header carries the reserved `x-ratatoskr-`
   prefix, so it is removed on every forward and never reaches a domain service. It selects a rate
   limit bucket only, never an identity.
 

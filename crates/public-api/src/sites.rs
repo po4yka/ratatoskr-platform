@@ -8,9 +8,10 @@
 //! routes, which reads no credential. A request that no row holds is
 //! `404` at Edge, and a row without a class stops Edge at start-up ([`check_routes`]).
 
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 
+use axum::body::HttpBody as _;
 use axum::extract::{ConnectInfo, Extension, FromRequestParts as _, Request, State};
 use axum::response::Response;
 use http::{HeaderValue, Method};
@@ -262,6 +263,13 @@ pub async fn dispatch(
                 Ok(principal) => principal,
                 Err(refusal) => return refusal,
             };
+            // The activation takes no body, so it never streams under the transfer budget of the
+            // upload that it sits below.
+            if parts.uri.path().ends_with("/activate")
+                && (declares_body(&parts.headers) || body.size_hint().exact() != Some(0))
+            {
+                return platform_http::reject(FailureKind::InvalidRequest);
+            }
             gateway::proxy(
                 State(state),
                 principal,
@@ -354,25 +362,37 @@ async fn deployer(
     }
 }
 
-/// The client key of a `public` request (workspace spec `site-gateway`): the value of
-/// `X-Ratatoskr-Client-IP` on a connection from the sites gateway's address, and the peer address
-/// on every other connection, whatever header it sends. A request whose connection is not known
-/// has the empty key, so every such request shares one bucket. The header never reaches the sites
+/// The client key of a `public` request (workspace spec `site-gateway`): on a connection from the
+/// sites gateway's address, the address in `X-Ratatoskr-Client-IP` when the request carries exactly
+/// one value and it is an IP address; on every other connection, and for any other header, the peer
+/// address. A request whose connection is not known has the empty key, so every such request shares
+/// one bucket. The header never reaches the sites
 /// service: the reserved `x-ratatoskr-` prefix is removed on every forward.
 fn client_key(state: &ApiState, request: &http::request::Parts) -> String {
     let Some(ConnectInfo(peer)) = request.extensions.get::<ConnectInfo<SocketAddr>>() else {
         return String::new();
     };
     if peer.ip() == state.sites_gateway_peer {
-        request
-            .headers
-            .get(CLIENT_HEADER)
-            .and_then(|value| value.to_str().ok())
-            .unwrap_or_default()
-            .to_owned()
-    } else {
-        peer.ip().to_string()
+        // Exactly one value, and an IP address. Anything else is not what the gateway sends.
+        let mut values = request.headers.get_all(CLIENT_HEADER).iter();
+        if let (Some(value), None) = (values.next(), values.next())
+            && let Some(address) = value
+                .to_str()
+                .ok()
+                .and_then(|text| text.parse::<IpAddr>().ok())
+        {
+            return address.to_string();
+        }
     }
+    peer.ip().to_string()
+}
+
+/// Whether a request declares a body: a `Content-Length` that is not `0`, or a transfer coding.
+fn declares_body(headers: &http::HeaderMap) -> bool {
+    headers
+        .get(http::header::CONTENT_LENGTH)
+        .is_some_and(|length| length.as_bytes() != b"0")
+        || headers.contains_key(http::header::TRANSFER_ENCODING)
 }
 
 /// `GET` and `HEAD /v1/sites/{site}/content/*`: the `public` class.
@@ -386,11 +406,7 @@ async fn content(
     request: &http::request::Parts,
 ) -> Response {
     let headers = &request.headers;
-    let declares_body = headers
-        .get(http::header::CONTENT_LENGTH)
-        .is_some_and(|length| length.as_bytes() != b"0")
-        || headers.contains_key(http::header::TRANSFER_ENCODING);
-    if declares_body {
+    if declares_body(headers) {
         return platform_http::reject(FailureKind::InvalidRequest);
     }
     let client = client_key(state, request);

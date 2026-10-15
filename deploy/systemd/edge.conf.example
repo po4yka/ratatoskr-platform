@@ -94,7 +94,9 @@ RATATOSKR__GATEWAY__ROUTES__SITES__CLASS=control
 # The loopback source address of ratatoskr-sites-gateway (SITE-026). Edge keys the per-client bucket
 # of the content routes on X-Ratatoskr-Client-IP only on a connection from this address, and on the
 # peer address of every other connection, cloudflared included. The gateway sets the header from
-# CF-Connecting-IP and connects from this address; both defaults are 127.0.0.83. A local process
+# CF-Connecting-IP and connects from this address; both defaults are 127.0.0.83. Edge reads the
+# header only when it holds exactly one IP address. Rule V24 refuses an address that is not loopback
+# or that is 127.0.0.1, the source of cloudflared. A local process
 # that binds this address on purpose can choose its own bucket, and nothing else: the host is the
 # trust boundary (ADR-0015), and the header selects a bucket only.
 RATATOSKR__SITES__GATEWAY_PEER=127.0.0.83

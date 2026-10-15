@@ -18,6 +18,8 @@ use secrecy::ExposeSecret;
 
 use crate::role::RuntimeRole;
 
+mod sites;
+
 /// One startup-rule violation.
 ///
 /// `rule` is `&'static str`, and `key` and `env_var` are built only from literals or from a route
@@ -151,6 +153,7 @@ pub(crate) fn validate(role: RuntimeRole, config: &PlatformConfig) -> Vec<Violat
     found.extend(archive_ceiling_violations(config));
     found.extend(staging_sweep_violations(config));
     found.extend(channel_digests_violations(role, config));
+    found.extend(sites::gateway_peer_violations(config));
 
     found
 }
