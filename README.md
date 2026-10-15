@@ -226,6 +226,10 @@ a partial or unrelated document cannot enable either route family. The cross-rep
 (`RATATOSKR__GATEWAY__ROUTES__NOTES__*`). The notes service serves no capability document, so the
 name follows the route and not a sample of notes.
 
+`sites.manage` appears while the database is reachable and the deployment routes the sites service
+(`RATATOSKR__GATEWAY__ROUTES__SITES__*`), by the same rule. The routes behind it still need the owner
+(ADR-0017).
+
 `GET /v1/status` is the anonymous public availability surface. It returns four stable groups: API,
 storage, command delivery, and connected services. Cached observations supply every value. It preserves
 `degraded`, `unavailable`, `unknown`, and stale states, sets `Cache-Control: no-store`, and never

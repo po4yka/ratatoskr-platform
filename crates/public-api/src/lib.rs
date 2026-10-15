@@ -154,6 +154,7 @@ impl ApiState {
                 platform_core::DependencyAvailability::Unavailable
             },
             notes_route_configured: self.gateway.routes().contains_key("notes"),
+            sites_route_configured: self.gateway.routes().contains_key(sites::SERVICE),
         }
     }
 }

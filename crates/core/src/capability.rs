@@ -27,6 +27,9 @@ pub enum Capability {
     /// `notes.vaults` — connecting and reading Obsidian vaults through the notes route, starting at
     /// `POST /v1/notes/connections`.
     NotesVaults,
+    /// `sites.manage` — managing the owner's sites through the sites route, starting at
+    /// `GET /v1/sites`.
+    SitesManage,
     /// `telegram.mini_app` — exchanging a `ratatoskr-telegram` identity assertion for a session, at
     /// `POST /v1/sessions/telegram`.
     TelegramMiniApp,
@@ -36,11 +39,12 @@ impl Capability {
     /// Every capability, in wire order — sorted, so two consecutive responses from an unchanged
     /// deployment are byte-identical. The array length is the documented count, so adding a variant
     /// without extending this does not compile.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::ContentSubmit,
         Self::LibraryReadState,
         Self::LibrarySearch,
         Self::NotesVaults,
+        Self::SitesManage,
         Self::TelegramMiniApp,
     ];
 
@@ -52,6 +56,7 @@ impl Capability {
             Self::LibraryReadState => "library.read_state",
             Self::LibrarySearch => "library.search",
             Self::NotesVaults => "notes.vaults",
+            Self::SitesManage => "sites.manage",
             Self::TelegramMiniApp => "telegram.mini_app",
         }
     }
@@ -69,6 +74,9 @@ impl Capability {
             // Not a sample of notes: the notes service serves no capability document. The route
             // is what Edge needs to serve the connect and every other notes path.
             Self::NotesVaults => Requirement::DatabaseAndNotesRoute,
+            // The same rule for the sites route: the name follows the route that Edge needs to
+            // serve `/v1/sites` and every route under it.
+            Self::SitesManage => Requirement::DatabaseAndSitesRoute,
             // No bus: exchanging an assertion for a session touches the database and nothing else.
             // The key is what makes it possible at all — without one, Platform cannot verify what
             // `ratatoskr-telegram` says and the route refuses everything (ADR-0011).
@@ -100,6 +108,8 @@ pub enum Requirement {
     DatabaseAndKnowledge,
     /// A reachable database and a configured notes route.
     DatabaseAndNotesRoute,
+    /// A reachable database and a configured sites route.
+    DatabaseAndSitesRoute,
 }
 
 impl Requirement {
@@ -118,6 +128,9 @@ impl Requirement {
             }
             Self::DatabaseAndNotesRoute => {
                 deployment.database_reachable && deployment.notes_route_configured
+            }
+            Self::DatabaseAndSitesRoute => {
+                deployment.database_reachable && deployment.sites_route_configured
             }
         }
     }
@@ -157,4 +170,6 @@ pub struct Deployment {
     pub knowledge: DependencyAvailability,
     /// Whether the gateway routes the notes service.
     pub notes_route_configured: bool,
+    /// Whether the gateway routes the sites service.
+    pub sites_route_configured: bool,
 }
