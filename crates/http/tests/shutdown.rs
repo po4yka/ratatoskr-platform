@@ -1,4 +1,5 @@
-//! The shutdown sequence, over real sockets — tests S-1 … S-5.
+//! The shutdown sequence, over real sockets — tests S-1, S-2, S-4 and S-5. S-3 captures the log and
+//! is in `shutdown_log.rs`; that file says why.
 
 #![allow(
     clippy::expect_used,
@@ -7,82 +8,17 @@
     reason = "assertions in a test binary"
 )]
 
-use std::fmt;
+mod shutdown_support;
+
 use std::future::pending;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use axum::Router;
-use axum::routing::get;
-use http::{StatusCode, Uri};
-use http_body_util::Empty;
-use hyper::body::Bytes;
-use hyper_util::client::legacy::Client;
-use hyper_util::rt::TokioExecutor;
+use http::StatusCode;
 use platform_core::RuntimeRole;
-use platform_core::config::{PublicConfig, ShutdownConfig};
-use platform_http::{
-    HttpState, RuntimeState, Served, admin_router, drain_and_close, public_router, serve,
-};
-use tokio::net::{TcpListener, TcpStream};
-use tracing::field::{Field, Visit};
-use tracing::span::{Attributes, Id, Record};
-use tracing::{Event, Metadata, Subscriber};
-
-/// A shutdown configuration written for a test rather than for a pod.
-fn timing(drain_seconds: u64, grace_seconds: u64) -> ShutdownConfig {
-    ShutdownConfig {
-        drain_seconds,
-        grace_seconds,
-    }
-}
-
-/// The admin listener of a process that has bound everything, on an ephemeral port.
-async fn admin(state: &Arc<RuntimeState>) -> (Served, Uri) {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
-    let served = serve(listener, admin_router(Arc::clone(state), String::new));
-    (served, address_to_uri(address.to_string().as_str(), "/"))
-}
-
-/// The public listener of an edge process with one slow handler, on an ephemeral port.
-async fn public(state: &Arc<HttpState>, handler_seconds: u64) -> (Served, Uri) {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
-    let config = PublicConfig {
-        bind: address,
-        request_timeout_seconds: 300,
-        max_body_bytes: 1024,
-        max_concurrent_requests: 64,
-        actor_requests_per_minute: 120,
-    };
-    let routes = Router::new().route(
-        "/slow",
-        get(move || async move {
-            tokio::time::sleep(Duration::from_secs(handler_seconds)).await;
-            "done"
-        }),
-    );
-    let served = serve(listener, public_router(Arc::clone(state), &config, routes));
-    (
-        served,
-        address_to_uri(address.to_string().as_str(), "/slow"),
-    )
-}
-
-fn address_to_uri(address: &str, path: &str) -> Uri {
-    format!("http://{address}{path}").parse().unwrap()
-}
-
-fn with_path(base: &Uri, path: &str) -> Uri {
-    address_to_uri(base.authority().unwrap().as_str(), path)
-}
-
-async fn status(uri: Uri) -> StatusCode {
-    let client: Client<_, Empty<Bytes>> = Client::builder(TokioExecutor::new()).build_http();
-    client.get(uri).await.unwrap().status()
-}
+use platform_http::{HttpState, RuntimeState, drain_and_close};
+use shutdown_support::{admin, public, status, timing, with_path};
+use tokio::net::TcpStream;
 
 /// S-1: readiness fails before the listener stops accepting. The entire justification for a
 /// separate readiness probe.
@@ -159,51 +95,6 @@ async fn an_in_flight_request_completes_within_the_grace_window() {
     assert_eq!(
         outcome.in_flight_at_close, 1,
         "the request was still in flight at close"
-    );
-}
-
-/// S-3: one stuck request cannot block a deploy.
-///
-/// The warning is asserted here; the "still exits zero" half is `run`'s, and is asserted at the
-/// process level by B-1 (`services/edge/tests/boot.rs`) — `drain_and_close` returns an outcome
-/// rather than an exit code.
-#[tokio::test]
-async fn the_grace_window_expiring_logs_a_warning_and_still_exits_zero() {
-    let state = Arc::new(RuntimeState::new(RuntimeRole::Edge));
-    state.mark_startup_complete();
-    let http = Arc::new(HttpState::new(RuntimeRole::Edge));
-    let (served, uri) = public(&http, 30).await;
-
-    let _stuck = tokio::spawn(status(uri));
-    tokio::time::sleep(Duration::from_millis(200)).await;
-
-    let log = Captured::default();
-    let capture = tracing::subscriber::set_default(Capture::installing(&log));
-    let started = Instant::now();
-    let outcome = drain_and_close(
-        &state,
-        &timing(0, 1),
-        vec![served],
-        http.in_flight(),
-        pending(),
-    )
-    .await;
-    drop(capture);
-
-    assert!(!outcome.graceful, "the grace window must expire");
-    assert_eq!(outcome.in_flight_at_close, 1);
-    assert!(
-        started.elapsed() < Duration::from_secs(5),
-        "the deploy was blocked"
-    );
-    let log = log.text();
-    assert!(
-        log.contains("the grace window expired with requests still in flight"),
-        "the operator was never told a request was abandoned: {log}"
-    );
-    assert!(
-        log.contains("in_flight_at_close=1"),
-        "the warning must carry the count: {log}"
     );
 }
 
@@ -293,76 +184,4 @@ async fn the_shutdown_sequence_order_is_drain_then_close_then_flush() {
     //    does not touch telemetry, and `run` calls `TelemetryGuard::shutdown` after it returns.
     //    That step is covered by T-3 (`crates/telemetry/tests/shutdown.rs`). This test pins
     //    drain-then-close, which is the half that lives in this function.
-}
-
-/// Everything a subscriber was asked to record, one `field=value` per line.
-#[derive(Clone, Default)]
-struct Captured(Arc<Mutex<String>>);
-
-impl Captured {
-    fn text(&self) -> String {
-        self.0.lock().unwrap().clone()
-    }
-}
-
-/// A subscriber that records the field values of events. Hand-rolled because `tracing-subscriber`
-/// is not a dependency of this crate, and because the property under test is what the shutdown
-/// sequence *records*, not how a formatter renders it.
-struct Capture {
-    sink: Captured,
-    next: AtomicU64,
-}
-
-impl Capture {
-    fn installing(sink: &Captured) -> Self {
-        Self {
-            sink: sink.clone(),
-            next: AtomicU64::new(1),
-        }
-    }
-}
-
-impl Subscriber for Capture {
-    fn enabled(&self, _: &Metadata<'_>) -> bool {
-        true
-    }
-
-    fn new_span(&self, _: &Attributes<'_>) -> Id {
-        Id::from_u64(self.next.fetch_add(1, Ordering::Relaxed))
-    }
-
-    fn record(&self, _: &Id, _: &Record<'_>) {}
-
-    fn record_follows_from(&self, _: &Id, _: &Id) {}
-
-    fn event(&self, event: &Event<'_>) {
-        event.record(&mut Writer(&self.sink));
-    }
-
-    fn enter(&self, _: &Id) {}
-
-    fn exit(&self, _: &Id) {}
-}
-
-/// Writes `field=value` lines into a [`Captured`].
-struct Writer<'a>(&'a Captured);
-
-impl Visit for Writer<'_> {
-    fn record_str(&mut self, field: &Field, value: &str) {
-        self.write(field, value);
-    }
-
-    fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
-        self.write(field, &format!("{value:?}"));
-    }
-}
-
-impl Writer<'_> {
-    fn write(&self, field: &Field, value: &str) {
-        let mut sink = self.0.0.lock().unwrap();
-        sink.push_str(field.name());
-        sink.push('=');
-        sink.push_str(value);
-        sink.push('\n');
-    }
 }

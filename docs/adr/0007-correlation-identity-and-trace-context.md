@@ -131,7 +131,7 @@ Milestone 1 tests:
 
 - **T-2** (`crates/telemetry/tests/subscriber.rs`) — the minted value parses back through
   `EntityRef::parse` and matches `EntityRef::PATTERN`.
-- **R-5** (`crates/http/tests/redaction.rs`) — the value the JSON log line carries is a parsable
+- **R-5** (`crates/http/tests/redaction_log.rs`) — the value the JSON log line carries is a parsable
   `EntityRef`, so a refactor to `String` fails a test rather than a code review.
 - **F-4** (`crates/http/tests/public_faults.rs`) — every rendered fault carries the correlation in
   both the response body and the `x-correlation-id` header.
