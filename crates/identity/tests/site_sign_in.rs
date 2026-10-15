@@ -313,12 +313,16 @@ async fn code_of_a_revoked_session_is_not_redeemed() {
     harness.cleanup().await.expect("cleanup");
 }
 
-/// Review L4 of SITE-027: a code is redeemed only while the owner still holds `platform.owner`.
+/// Review L4 of SITE-027: a code is redeemed only while the owner still holds `platform.owner`;
+/// another live grant of the same owner does not stand for it (review L-6).
 #[tokio::test]
 async fn code_without_the_owner_grant_is_not_redeemed() {
     let harness = TestDatabase::create().await.expect("a test database");
     let (owner, session) = context(&harness, SessionKind::Browser).await;
     let code = issue(&harness, owner, session).await.expect("a code");
+    platform_identity::grant::grant(harness.pool(), owner, "operations.inspect", now(), None)
+        .await
+        .expect("another grant");
     platform_identity::grant::revoke(harness.pool(), owner, OWNER_GRANT, later(1))
         .await
         .expect("the grant is revoked");

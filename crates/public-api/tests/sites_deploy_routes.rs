@@ -480,3 +480,29 @@ async fn a_session_without_its_device_is_unauthenticated() {
 
     harness.cleanup().await.expect("cleanup");
 }
+
+/// Review L-4 of SITE-027: a deploy path of the deployer's own site whose encoded dot segments
+/// resolve to another site is refused before the sites service.
+#[tokio::test]
+async fn a_deploy_path_resolving_to_another_site_never_reaches_the_sites_service() {
+    let harness = TestDatabase::create().await.expect("a test database");
+    deployer(harness.pool()).await;
+    let (sites, seen) = stub("/v1/sites").await;
+    let (notes, _) = stub("/v1/notes").await;
+    let app = app(&harness, sites, notes);
+
+    let path =
+        format!("/v1/sites/{SITE}/deploys/..%2f..%2f{OTHER_SITE}%2fdeploys%2f{COMMIT}/activate");
+    assert_eq!(
+        call(&app, "POST", &path, DEPLOYER, b"").await,
+        (404, "platform.route.not_found".to_owned()),
+        "POST {path}"
+    );
+    assert_eq!(
+        count(&seen),
+        0,
+        "a deploy path of another site reached the sites service"
+    );
+
+    harness.cleanup().await.expect("cleanup");
+}

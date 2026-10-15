@@ -611,18 +611,36 @@ async fn rolled_back_delivery_sends_nothing() {
     let projection = SiteEventProjection {
         hub: Arc::clone(&hub),
     };
+    let redelivered = released('a');
     let failed = platform_eventing::consumer::deliver(
         harness.pool(),
         &projection,
-        &released('a'),
+        &redelivered,
         jiff::Timestamp::now(),
     )
     .await;
     assert!(failed.is_err(), "the delivery rolls back");
+    let mut buffer = String::new();
     assert_eq!(
-        next_block(&mut body, &mut String::new(), Duration::from_millis(800)).await,
+        next_block(&mut body, &mut buffer, Duration::from_millis(800)).await,
         None,
         "a rolled-back delivery reached the stream"
+    );
+
+    sqlx::query("drop trigger refuse_inbox_finish on operations.inbox")
+        .execute(harness.pool())
+        .await
+        .expect("the fault is removed");
+    deliver(harness.pool(), &hub, &redelivered).await;
+    let event = next_event(&mut body, &mut buffer).await.expect("the event");
+    assert!(
+        event.data.to_string().contains(&"a".repeat(64)),
+        "the redelivered event: {event:?}"
+    );
+    assert_eq!(
+        next_block(&mut body, &mut buffer, Duration::from_millis(800)).await,
+        None,
+        "the redelivery sent the event more than once"
     );
 
     harness.cleanup().await.expect("cleanup");
@@ -728,6 +746,55 @@ async fn revoked_owner_stream_ends_under_own_site_traffic() {
     assert!(
         ends_under_traffic(&harness, &app, &hub, &mut body, "site-a").await,
         "the revoked owner stream outlived 3 s while site-a had events"
+    );
+
+    harness.cleanup().await.expect("cleanup");
+}
+
+/// Review L-2 of SITE-027: the check takes the session's new idle end, so the stream of an owner
+/// who keeps using the site is not cut at the idle end of its opening.
+#[tokio::test]
+async fn active_owner_stream_outlives_its_first_idle_end() {
+    let harness = TestDatabase::create().await.expect("a test database");
+    let limits = SiteStreamLimits {
+        owner_check: Duration::from_millis(200),
+        ..SiteStreamLimits::default()
+    };
+    let (app, cookie, _) = edge(&harness, limits).await;
+    // The session was last used almost an hour ago, and the touch of the opening is held back,
+    // so the stream opens with an idle end 2 s away.
+    for statement in [
+        "update identity.sessions
+            set issued_at = now() - interval '3599 seconds',
+                last_seen_at = now() - interval '3598 seconds'
+          where kind = 'site_owner'",
+        "create function identity.hold_last_seen() returns trigger language plpgsql
+           as $$ begin new.last_seen_at = old.last_seen_at; return new; end $$",
+        "create trigger hold_last_seen before update on identity.sessions
+           for each row execute function identity.hold_last_seen()",
+    ] {
+        sqlx::query(statement)
+            .execute(harness.pool())
+            .await
+            .expect("the setup");
+    }
+    let response = open(&app, Some(&cookie), "6.6.6.6", None).await;
+    assert_eq!(response.status(), 200, "the owner stream");
+    let mut body = response.into_body();
+    // The owner uses the site again, as the touch of another request records.
+    for statement in [
+        "drop trigger hold_last_seen on identity.sessions",
+        "update identity.sessions set last_seen_at = now() where kind = 'site_owner'",
+    ] {
+        sqlx::query(statement)
+            .execute(harness.pool())
+            .await
+            .expect("the use");
+    }
+
+    assert!(
+        !ends_within(&mut body, Duration::from_secs(3)).await,
+        "the stream of an active owner ended at the idle end of its opening"
     );
 
     harness.cleanup().await.expect("cleanup");
