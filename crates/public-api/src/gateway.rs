@@ -684,13 +684,22 @@ pub async fn proxy(
 /// forwarded and sends no `Authorization` to a domain service, so an upstream authentication
 /// challenge is a deployment or contract fault between Edge and that service. Relayed, it would
 /// read to a client as its own credential being rejected, and the export agent removes its pairing
-/// on exactly that. `route` is the configured route prefix or the archive provider, both fixed
-/// labels; the log carries only it and a class.
+/// on exactly that. A redirect other than `304` is not relayed either: the client would follow it to
+/// a place that Edge did not choose. `route` is the configured route prefix or the archive provider,
+/// both fixed labels; the log carries only it and a class.
 pub(crate) async fn response_from_upstream(
     response: hyper::Response<hyper::body::Incoming>,
     route: &str,
 ) -> Response {
     let (mut parts, body) = response.into_parts();
+    if parts.status.is_redirection() && parts.status != StatusCode::NOT_MODIFIED {
+        tracing::warn!(
+            route,
+            class = "upstream_redirect",
+            "a domain service answered a redirect"
+        );
+        return platform_http::reject(FailureKind::UpstreamInvalidResponse);
+    }
     if matches!(
         parts.status,
         StatusCode::UNAUTHORIZED | StatusCode::PROXY_AUTHENTICATION_REQUIRED
