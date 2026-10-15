@@ -764,6 +764,13 @@
               "string",
               "null"
             ]
+          },
+          "site_id": {
+            "description": "The one site of a `site_deployer` code: required for that kind and refused for every other.\nOnly a session with the live owner grant creates such a code.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "type": "object"

@@ -15,6 +15,7 @@ use platform_api_doc::{In, Method, Parameter, Payload, ResponseDoc, RouteDoc, Se
 use platform_core::FailureKind;
 use platform_identity::DeviceKind;
 use platform_identity::pairing::{self, PairRequest};
+use ratatoskr_sites_contracts::SiteId;
 use uuid::Uuid;
 
 use crate::auth::Principal;
@@ -40,8 +41,34 @@ const MAX_BODY: usize = 4096;
 pub struct CreatePairingCode {
     /// The kind of device expected to present this code, when the initiator wants to pin one.
     pub expected_kind: Option<String>,
+    /// The one site of a `site_deployer` code: required for that kind and refused for every other.
+    /// Only a session with the live owner grant creates such a code.
+    pub site_id: Option<String>,
     /// A free-text note about what is expected to pair, at most 120 characters.
     pub label: Option<String>,
+}
+
+/// The kind and the site that a valid request pins, or `None` for a request that is not valid.
+///
+/// A `site_deployer` deploys one site, so its code names one valid site, and no other code names
+/// one (workspace spec `site-bundles`).
+fn pinned(request: &CreatePairingCode) -> Option<(Option<DeviceKind>, Option<&str>)> {
+    let expected_kind = match request.expected_kind.as_deref() {
+        None => None,
+        Some(raw) => Some(DeviceKind::from_str_opt(raw)?),
+    };
+    if request.label.as_deref().is_some_and(|label| {
+        label.is_empty() || label.chars().count() > 120 || label.contains(['\n', '\r'])
+    }) {
+        return None;
+    }
+    match (expected_kind, request.site_id.as_deref()) {
+        (Some(DeviceKind::SiteDeployer), Some(site)) if SiteId::parse(site).is_ok() => {
+            Some((expected_kind, Some(site)))
+        }
+        (Some(DeviceKind::SiteDeployer), _) | (_, Some(_)) => None,
+        (_, None) => Some((expected_kind, None)),
+    }
 }
 
 /// A minted pairing code.
@@ -84,17 +111,13 @@ pub async fn create_pairing_code(
         return platform_http::reject(FailureKind::InvalidRequest);
     };
 
-    let expected_kind = match request.expected_kind.as_deref() {
-        None => None,
-        Some(raw) => match DeviceKind::from_str_opt(raw) {
-            Some(kind) => Some(kind),
-            None => return platform_http::reject(FailureKind::InvalidRequest),
-        },
-    };
-    if request.label.as_deref().is_some_and(|label| {
-        label.is_empty() || label.chars().count() > 120 || label.contains(['\n', '\r'])
-    }) {
+    let Some((expected_kind, site_id)) = pinned(&request) else {
         return platform_http::reject(FailureKind::InvalidRequest);
+    };
+    if site_id.is_some()
+        && let Err(refusal) = crate::admin::require_owner(&state, principal).await
+    {
+        return refusal;
     }
 
     let now = jiff::Timestamp::now();
@@ -116,7 +139,7 @@ pub async fn create_pairing_code(
             user_id: principal.user_id,
             created_by_session_id: principal.session_id,
             expected_kind,
-            site_id: None,
+            site_id,
             label: request.label.as_deref(),
             code_digest: digest,
             now,
