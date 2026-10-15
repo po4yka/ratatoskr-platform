@@ -743,3 +743,61 @@ async fn notes_vaults_follows_the_notes_route() {
     );
     harness.cleanup().await.expect("cleanup");
 }
+
+/// A gateway that routes the sites service, as the shipped Edge example does.
+fn sites_gateway() -> GatewayConfig {
+    GatewayConfig {
+        routes: BTreeMap::from([(
+            "sites".to_owned(),
+            GatewayRouteConfig {
+                prefix: "/v1/sites".to_owned(),
+                listener: "127.0.0.1:8100".parse().expect("a socket address"),
+                class: Some(GatewayRouteClass::Control),
+                capabilities_path: "/v1/capabilities".to_owned(),
+                archive_receipt_path: "/v1/ai-archives/receipt".to_owned(),
+            },
+        )]),
+        ..GatewayConfig::default()
+    }
+}
+
+/// `sites.manage` (workspace change `add-site-publications`, task 6.16) is reported to the owner
+/// where the deployment routes the sites service and the database is reachable, and nowhere else.
+/// The web client shows its sites section only on this name.
+#[tokio::test]
+async fn sites_manage_follows_the_sites_route() {
+    let harness = TestDatabase::create().await.expect("a test database");
+    let owner = seed(harness.pool(), CREDENTIAL).await;
+    platform_identity::grant::grant(harness.pool(), owner, PLATFORM_OWNER_GRANT, now(), None)
+        .await
+        .expect("the owner grant");
+    let routed = |database_reachable: bool| {
+        let mut state = deployment(&harness, database_reachable, true);
+        state.gateway = platform_public_api::gateway::Gateway::from_config(&sites_gateway());
+        app(state)
+    };
+
+    let (status, body) = send(&routed(true), ask(Some(CREDENTIAL))).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(
+        names(&body).contains(&"sites.manage".to_owned()),
+        "a deployment that routes sites must report sites.manage: {body}"
+    );
+
+    let (_, body) = send(
+        &app(deployment(&harness, true, true)),
+        ask(Some(CREDENTIAL)),
+    )
+    .await;
+    assert!(
+        !names(&body).contains(&"sites.manage".to_owned()),
+        "a deployment without the sites route must not report sites.manage: {body}"
+    );
+
+    let (_, body) = send(&routed(false), ask(Some(CREDENTIAL))).await;
+    assert!(
+        !names(&body).contains(&"sites.manage".to_owned()),
+        "an unreachable database must remove sites.manage: {body}"
+    );
+    harness.cleanup().await.expect("cleanup");
+}
