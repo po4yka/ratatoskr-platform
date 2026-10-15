@@ -36,6 +36,42 @@ const SITE_REQUESTS_PER_MINUTE: u32 = 1200;
 const CLIENT_NAMESPACE: Uuid = Uuid::from_u128(0x0199_e5a0_0c11_7e47_9c0a_51e5_0000_0001);
 const SITE_NAMESPACE: Uuid = Uuid::from_u128(0x0199_e5a0_0c11_7e47_9c0a_51e5_0000_0002);
 
+/// The class of a route under `/v1/sites/{site}/` (ADR-0017). It decides who may call the route.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SiteRouteClass {
+    /// The owner manages the site from the web client.
+    Management,
+    /// The site itself.
+    SiteOrigin,
+    /// The sign-in exchange of a site owner session.
+    SignIn,
+    /// The build request.
+    Release,
+}
+
+/// One row of the site route table: the methods, the path below `/v1/sites/{site}`, and the class.
+#[derive(Debug, Clone, Copy)]
+pub struct SiteRoute {
+    /// The methods of the row.
+    pub methods: &'static [Method],
+    /// The path below `/v1/sites/{site}`.
+    pub path: &'static str,
+    /// The class.
+    pub class: Option<SiteRouteClass>,
+}
+
+/// Every route under `/v1/sites/{site}/`.
+pub const ROUTES: &[SiteRoute] = &[];
+
+/// The start-up check of a site route table.
+///
+/// # Errors
+///
+/// None yet.
+pub const fn check_routes(_routes: &[SiteRoute]) -> Result<(), String> {
+    Ok(())
+}
+
 /// The two token buckets of the `public` class: one for each client, keyed on the value of
 /// `X-Ratatoskr-Client-IP`, and one for each site. Each table holds a bounded number of keys
 /// ([`ActorLimiter`]).
