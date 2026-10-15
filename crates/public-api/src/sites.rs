@@ -53,6 +53,9 @@ pub enum SiteRouteClass {
     /// `notes.edit`. No route issues a `site_owner` session yet (SITE-027), so only the first
     /// guard can pass.
     Release,
+    /// The upload and the activation of a deploy (workspace change `add-site-gateway-hosting`).
+    /// No route has it yet.
+    Deploy,
 }
 
 /// One row of the site route table: the methods, the path below `/v1/sites`, and the class.
@@ -239,7 +242,9 @@ pub async fn dispatch(
             )
             .await
         }
-        SiteRouteClass::SignIn => platform_http::reject(FailureKind::RouteNotFound),
+        SiteRouteClass::SignIn | SiteRouteClass::Deploy => {
+            platform_http::reject(FailureKind::RouteNotFound)
+        }
     }
 }
 

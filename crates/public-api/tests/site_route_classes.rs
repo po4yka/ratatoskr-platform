@@ -37,7 +37,7 @@ fn now() -> jiff::Timestamp {
 /// The class table of the spec, as `(methods, path below /v1/sites, class)`. `GET /v1/sites` and
 /// `GET .../manifest` are the two reads of the web client (workspace task 6.14).
 fn listed() -> Vec<(Vec<Method>, &'static str, SiteRouteClass)> {
-    use SiteRouteClass::{Management, Release, SiteOrigin};
+    use SiteRouteClass::{Deploy, Management, Release, SiteOrigin};
     let read_write = vec![Method::GET, Method::PUT, Method::DELETE];
     vec![
         (vec![Method::GET], "", Management),
@@ -55,6 +55,12 @@ fn listed() -> Vec<(Vec<Method>, &'static str, SiteRouteClass)> {
         (read_write, "/{site}/publications/{publication}", Management),
         (vec![Method::GET], "/{site}/releases", Management),
         (vec![Method::POST], "/{site}/releases", Release),
+        (vec![Method::POST], "/{site}/deploys", Deploy),
+        (
+            vec![Method::POST],
+            "/{site}/deploys/{commit}/activate",
+            Deploy,
+        ),
         (
             vec![Method::GET, Method::HEAD],
             "/{site}/content/{*rest}",
@@ -111,6 +117,24 @@ fn site_routes_have_their_listed_classes() {
                 row.path
             );
         }
+    }
+}
+
+/// Spec `site-route-classes`, "The deploy routes are not management routes": the upload and the
+/// activation of a deploy have exactly the class `deploy`.
+#[test]
+fn deploy_routes_have_the_deploy_class() {
+    for path in ["/{site}/deploys", "/{site}/deploys/{commit}/activate"] {
+        let rows: Vec<Option<SiteRouteClass>> = ROUTES
+            .iter()
+            .filter(|row| row.path == path && row.methods.contains(&Method::POST))
+            .map(|row| row.class)
+            .collect();
+        assert_eq!(
+            rows,
+            [Some(SiteRouteClass::Deploy)],
+            "POST /v1/sites{path} must have exactly the class Deploy, and not Management"
+        );
     }
 }
 
