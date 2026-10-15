@@ -192,6 +192,25 @@ async fn active_manifest(
         .await
 }
 
+/// The capabilities of the active manifest of `site`, as their wire names, read from the sites
+/// service.
+pub(crate) async fn active_capabilities(
+    state: &ApiState,
+    principal: Principal,
+    correlation: &str,
+    site: &str,
+) -> Result<Vec<String>, FailureKind> {
+    let manifest = active_manifest(state, principal, correlation, site).await?;
+    manifest
+        .capabilities
+        .iter()
+        .map(|capability| match serde_json::to_value(capability) {
+            Ok(serde_json::Value::String(name)) => Ok(name),
+            _ => Err(FailureKind::UpstreamInvalidResponse),
+        })
+        .collect()
+}
+
 /// A failed statement of the approval transaction.
 fn failed(error: &sqlx::Error) -> FailureKind {
     tracing::error!(%error, "a site approval could not be written");

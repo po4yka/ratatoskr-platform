@@ -95,8 +95,11 @@ The guard of each class:
   holds the live `platform.owner` grant. No site capability changes this. Any other caller gets the
   stable unauthenticated or forbidden error, and the request does not reach the sites service.
 - **release**: the guard of `management`, or a `site_owner` session of the same site whose
-  effective set holds `notes.edit`. This change issues no `site_owner` session, so only the first
-  guard can pass. Edge refuses every other caller before it writes a command.
+  effective set holds `notes.edit` (SITE-027). The effective set is the capabilities of the last
+  approved manifest that the active manifest of the sites service still declares; a session whose
+  set lacks `notes.edit` gets `403` `edge.capability_not_granted`, and when Edge cannot read the set
+  it fails closed with the retryable unavailable error. Edge refuses every other caller before it
+  writes a command.
 - **deploy**: added by SITE-026 (workspace change `add-site-gateway-hosting`). The guard of
   `management`, or a registered device of the kind `site_deployer` that was paired for the same
   site. A `site_deployer` of another site gets `403` `edge.capability_not_granted`, and every other

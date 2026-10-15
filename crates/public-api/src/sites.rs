@@ -21,7 +21,9 @@ use platform_identity::SessionKind;
 use uuid::Uuid;
 
 use crate::auth::{DeployRoute, DeployerSite};
-use crate::{ApiState, Principal, gateway, site_approvals, site_releases, site_sessions};
+use crate::{
+    ApiState, Principal, gateway, site_approvals, site_capabilities, site_releases, site_sessions,
+};
 
 /// The name of the sites route in the gateway route table.
 pub const SERVICE: &str = "sites";
@@ -293,13 +295,9 @@ pub async fn dispatch(
             // A release from the site's page comes with the site cookie and no bearer.
             if class == SiteRouteClass::Release
                 && !parts.headers.contains_key(http::header::AUTHORIZATION)
+                && let Some(answer) = site_release(&state, &context, &parts, &site).await
             {
-                match site_sessions::site_owner(&state, &parts, &site).await {
-                    // The guard of a site owner session on this class arrives with task 6.4.
-                    Ok(Some(_)) => return platform_http::reject(FailureKind::Forbidden),
-                    Ok(None) => {}
-                    Err(refusal) => return refusal,
-                }
+                return answer;
             }
             let principal = match owner(&state, &mut parts).await {
                 Ok(principal) => principal,
@@ -369,6 +367,36 @@ pub async fn dispatch(
 /// Whether `path` is a route of the Content Delivery API, the `public` class of ADR-0017.
 fn is_content(path: &str) -> bool {
     path.split('/').nth(4) == Some("content")
+}
+
+/// The release route for a site owner session of `site` (the second guard of the class):
+/// `None` when the request carries no such session.
+async fn site_release(
+    state: &Arc<ApiState>,
+    context: &RequestContext,
+    parts: &http::request::Parts,
+    site: &str,
+) -> Option<Response> {
+    let principal = match site_sessions::site_owner(state, parts, site).await {
+        Ok(Some(principal)) => principal,
+        Ok(None) => return None,
+        Err(refusal) => return Some(refusal),
+    };
+    let correlation = context.correlation_id.to_string();
+    let granted = site_capabilities::require(
+        state,
+        principal,
+        &correlation,
+        site,
+        site_capabilities::NOTES_EDIT,
+    )
+    .await;
+    Some(match granted {
+        Ok(()) => {
+            site_releases::request_build(state, principal, &correlation, site, &parts.headers).await
+        }
+        Err(refusal) => platform_http::reject(refusal),
+    })
 }
 
 /// The site and the class of the row that holds `method` and `path`.

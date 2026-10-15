@@ -46,6 +46,7 @@ pub mod oauth;
 pub mod operations;
 pub mod sessions;
 pub mod site_approvals;
+pub mod site_capabilities;
 pub mod site_reads;
 pub mod site_releases;
 pub mod site_sessions;
