@@ -387,3 +387,109 @@ pub(crate) async fn site_owner(
         kind: SessionKind::SiteOwner,
     }))
 }
+
+/// What `POST /v1/sessions/revoke-site` takes.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RevokeSiteSessions {
+    /// The site whose owner sessions end.
+    pub site_id: String,
+}
+
+/// What `POST /v1/sessions/revoke-site` answers.
+#[derive(Debug, serde::Serialize, schemars::JsonSchema)]
+pub struct RevokedSiteSessions {
+    /// How many live `site_owner` sessions of the site ended.
+    pub revoked: u64,
+}
+
+/// `POST /v1/sessions/revoke-site`: ends every `site_owner` session of the caller for one site, and
+/// records why for each. The sessions of other sites and every other session stay.
+pub async fn revoke_site(
+    axum::extract::State(state): axum::extract::State<Arc<ApiState>>,
+    principal: Principal,
+    body: axum::body::Bytes,
+) -> Response {
+    let Ok(request) = serde_json::from_slice::<RevokeSiteSessions>(&body) else {
+        return platform_http::reject(FailureKind::InvalidRequest);
+    };
+    if SiteId::parse(&request.site_id).is_err() {
+        return platform_http::reject(FailureKind::InvalidRequest);
+    }
+    let now = jiff::Timestamp::now();
+    let revoked = async {
+        let mut transaction = state.database.pool().begin().await.ok()?;
+        let revoked = session::revoke_site_sessions(
+            &mut *transaction,
+            Some(principal.user_id),
+            &request.site_id,
+            now,
+        )
+        .await
+        .ok()?;
+        for session_id in &revoked {
+            platform_identity::record_revocation(
+                &mut *transaction,
+                platform_identity::RevocationSubject::Session,
+                *session_id,
+                platform_identity::RevocationReason::UserRequest,
+                Some(principal.user_id),
+                now,
+            )
+            .await
+            .ok()?;
+        }
+        transaction.commit().await.ok()?;
+        Some(revoked.len())
+    }
+    .await;
+    let Some(revoked) = revoked else {
+        tracing::error!("the site sessions could not be revoked");
+        return platform_http::reject(FailureKind::RequestTimeout);
+    };
+    (
+        StatusCode::OK,
+        axum::Json(RevokedSiteSessions {
+            revoked: u64::try_from(revoked).unwrap_or(u64::MAX),
+        }),
+    )
+        .into_response()
+}
+
+/// How `POST /v1/sessions/revoke-site` is described in the generated document.
+pub const REVOKE_SITE_DOC: platform_api_doc::RouteDoc = platform_api_doc::RouteDoc {
+    method: platform_api_doc::Method::Post,
+    path: "/v1/sessions/revoke-site",
+    operation_id: "revokeSiteSessions",
+    summary: "Revoke your sessions on one site",
+    description: "\
+Ends every `site_owner` session of yours for one site at once. The sessions of other sites and \
+every other session stay. The session list shows each `site_owner` session with its site and the \
+approved hostname.",
+    tag: "sessions",
+    security: platform_api_doc::Security::Session,
+    parameters: &[],
+    request: Some(platform_api_doc::Payload::Json("RevokeSiteSessions")),
+    responses: &[
+        platform_api_doc::ResponseDoc {
+            status: 200,
+            description: "The live sessions of the site are revoked; the answer counts them.",
+            payload: Some(platform_api_doc::Payload::Json("RevokedSiteSessions")),
+        },
+        platform_api_doc::ResponseDoc {
+            status: 400,
+            description: "The body is not a site id.",
+            payload: Some(platform_api_doc::Payload::Json("ErrorEnvelope")),
+        },
+        platform_api_doc::ResponseDoc {
+            status: 401,
+            description: "No credential, or one that does not authenticate.",
+            payload: Some(platform_api_doc::Payload::Json("ErrorEnvelope")),
+        },
+        platform_api_doc::ResponseDoc {
+            status: 504,
+            description: "A dependency did not answer in time. Nothing was changed.",
+            payload: Some(platform_api_doc::Payload::Json("ErrorEnvelope")),
+        },
+    ],
+};

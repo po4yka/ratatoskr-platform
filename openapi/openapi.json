@@ -2228,11 +2228,40 @@
           }
         ]
       },
+      "RevokeSiteSessions": {
+        "additionalProperties": false,
+        "description": "What `POST /v1/sessions/revoke-site` takes.",
+        "properties": {
+          "site_id": {
+            "description": "The site whose owner sessions end.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "site_id"
+        ],
+        "type": "object"
+      },
       "RevokedAll": {
         "description": "What revoke-all answers.",
         "properties": {
           "revoked": {
             "description": "How many live sessions ended, including the calling one.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revoked"
+        ],
+        "type": "object"
+      },
+      "RevokedSiteSessions": {
+        "description": "What `POST /v1/sessions/revoke-site` answers.",
+        "properties": {
+          "revoked": {
+            "description": "How many live `site_owner` sessions of the site ended.",
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
@@ -2533,6 +2562,13 @@
             "description": "When it stops being valid on its own.",
             "type": "string"
           },
+          "hostname": {
+            "description": "The approved hostname of the site of a `site_owner` session.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "issued_at": {
             "description": "When it was issued.",
             "type": "string"
@@ -2552,6 +2588,13 @@
             "description": "The session's identity.",
             "format": "uuid",
             "type": "string"
+          },
+          "site_id": {
+            "description": "The site of a `site_owner` session, and the approved hostname of that site.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -6844,6 +6887,73 @@
           }
         ],
         "summary": "Revoke every one of your sessions",
+        "tags": [
+          "sessions"
+        ]
+      }
+    },
+    "/v1/sessions/revoke-site": {
+      "post": {
+        "description": "Ends every `site_owner` session of yours for one site at once. The sessions of other sites and every other session stay. The session list shows each `site_owner` session with its site and the approved hostname.",
+        "operationId": "revokeSiteSessions",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RevokeSiteSessions"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevokedSiteSessions"
+                }
+              }
+            },
+            "description": "The live sessions of the site are revoked; the answer counts them."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The body is not a site id."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No credential, or one that does not authenticate."
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "A dependency did not answer in time. Nothing was changed."
+          }
+        },
+        "security": [
+          {
+            "sessionBearer": []
+          }
+        ],
+        "summary": "Revoke your sessions on one site",
         "tags": [
           "sessions"
         ]

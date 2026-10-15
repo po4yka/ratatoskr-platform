@@ -458,11 +458,31 @@ pub struct ListedSession {
     pub expires_at: jiff::Timestamp,
     /// When it was last used, as far as the throttled touch records.
     pub last_seen_at: Option<jiff::Timestamp>,
+    /// The site of a `site_owner` session.
+    pub site_id: Option<String>,
+    /// The hostname of the approval of that site.
+    pub hostname: Option<String>,
 }
+
+/// The columns and joins of the session listing: the bound device, and for a `site_owner`
+/// session its site and the hostname of the site's approval.
+const LISTED_FROM: &str =
+    "select s.session_id, s.user_id, s.kind, s.issued_at, s.expires_at, s.last_seen_at,
+            d.device_id as device_id, d.kind as device_kind, d.display_name as device_name,
+            a.site_id as site_id, a.hostname as hostname
+       from identity.sessions s
+       left join identity.registered_devices d on d.device_id = s.device_id
+       left join identity.site_approvals a
+              on s.kind = 'site_owner' and a.site_id = substr(s.audience, 6)
+      where s.user_id = $1
+        and s.revoked_at is null
+        and s.expires_at > $2
+        and (s.kind <> 'site_owner' or coalesce(s.last_seen_at, s.issued_at) > $3)";
 
 /// List one user's live sessions, newest first, cursor-paginated.
 ///
-/// Live means unrevoked and unexpired at `now`. The cursor names the LAST row of the previous
+/// Live means unrevoked and unexpired at `now`, and for a `site_owner` session also used within
+/// [`SITE_OWNER_IDLE`]. The cursor names the LAST row of the previous
 /// page; rows strictly older than it follow, so writes during a walk can neither duplicate nor
 /// skip a row behind the cursor.
 ///
@@ -482,34 +502,27 @@ where
     // One row beyond the limit answers "is there a next page" without a second query. The two
     // statement shapes differ only in their cursor predicate, so one execution site serves both.
     let fetch = limit + 1;
-    let sql_with_cursor =
-        "select s.session_id, s.user_id, s.kind, s.issued_at, s.expires_at, s.last_seen_at,
-                    d.device_id as device_id, d.kind as device_kind, d.display_name as device_name
-               from identity.sessions s
-               left join identity.registered_devices d on d.device_id = s.device_id
-              where s.user_id = $1
-                and s.revoked_at is null
-                and s.expires_at > $2
-                and (s.issued_at, s.session_id) < ($3, $4)
+    let sql_with_cursor = format!(
+        "{LISTED_FROM}
+                and (s.issued_at, s.session_id) < ($4, $5)
               order by s.issued_at desc, s.session_id desc
-              limit $5";
-    let sql_first_page =
-        "select s.session_id, s.user_id, s.kind, s.issued_at, s.expires_at, s.last_seen_at,
-                    d.device_id as device_id, d.kind as device_kind, d.display_name as device_name
-               from identity.sessions s
-               left join identity.registered_devices d on d.device_id = s.device_id
-              where s.user_id = $1
-                and s.revoked_at is null
-                and s.expires_at > $2
+              limit $6"
+    );
+    let sql_first_page = format!(
+        "{LISTED_FROM}
               order by s.issued_at desc, s.session_id desc
-              limit $3";
+              limit $4"
+    );
+    let idle_before = to_offset(now - SITE_OWNER_IDLE);
     let mut query = match after {
-        Some((_, _)) => sqlx::query(sql_with_cursor)
+        Some((_, _)) => sqlx::query(&sql_with_cursor)
             .bind(user_id)
-            .bind(to_offset(now)),
-        None => sqlx::query(sql_first_page)
+            .bind(to_offset(now))
+            .bind(idle_before),
+        None => sqlx::query(&sql_first_page)
             .bind(user_id)
-            .bind(to_offset(now)),
+            .bind(to_offset(now))
+            .bind(idle_before),
     };
     if let Some((issued_at, session_id)) = after {
         query = query.bind(to_offset(issued_at)).bind(session_id);
@@ -550,6 +563,8 @@ where
                 .map_err(PersistenceError::Query)?
                 .map(from_offset),
             device,
+            site_id: row.try_get("site_id").map_err(PersistenceError::Query)?,
+            hostname: row.try_get("hostname").map_err(PersistenceError::Query)?,
         });
     }
     sessions.truncate(usize::try_from(limit).unwrap_or(0));

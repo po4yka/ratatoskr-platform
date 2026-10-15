@@ -358,6 +358,10 @@ pub struct SessionSummary {
     pub expires_at: String,
     /// When it last authenticated, as far as the throttled liveness touch records.
     pub last_seen_at: Option<String>,
+    /// The site of a `site_owner` session, and the approved hostname of that site.
+    pub site_id: Option<String>,
+    /// The approved hostname of the site of a `site_owner` session.
+    pub hostname: Option<String>,
 }
 
 /// A device reference inside [`SessionSummary`].
@@ -461,6 +465,8 @@ pub async fn list_sessions(
             issued_at: s.issued_at.to_string(),
             expires_at: s.expires_at.to_string(),
             last_seen_at: s.last_seen_at.map(|seen| seen.to_string()),
+            site_id: s.site_id,
+            hostname: s.hostname,
         })
         .collect();
 

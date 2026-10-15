@@ -315,6 +315,10 @@ fn table() -> Vec<Endpoint> {
             handler: post(sessions::revoke_all),
         },
         Endpoint {
+            doc: site_sessions::REVOKE_SITE_DOC,
+            handler: post(site_sessions::revoke_site),
+        },
+        Endpoint {
             doc: credentials::OPEN_DOC,
             handler: post(credentials::open_device_session),
         },
@@ -505,6 +509,8 @@ fn register_schemas(generator: &mut schemars::SchemaGenerator) {
     generator.subschema_for::<sessions::SessionMinted>();
     generator.subschema_for::<sessions::SessionList>();
     generator.subschema_for::<sessions::RevokedAll>();
+    generator.subschema_for::<site_sessions::RevokeSiteSessions>();
+    generator.subschema_for::<site_sessions::RevokedSiteSessions>();
     generator.subschema_for::<credentials::OpenDeviceSession>();
     generator.subschema_for::<credentials::DeviceSessionOpened>();
     generator.subschema_for::<credentials::RefreshSession>();
