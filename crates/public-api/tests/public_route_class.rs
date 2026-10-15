@@ -61,43 +61,87 @@ async fn seed_owner(pool: &sqlx::PgPool) {
         .expect("the owner grant");
 }
 
+/// Approve `site` in the database and serve its active manifest from the stub, both with the
+/// public capabilities, so that Edge's capability check of the content routes passes (workspace
+/// spec `site-capability-enforcement`).
+async fn approve(pool: &sqlx::PgPool, site: &str) {
+    let user = platform_identity::user::create_user(pool, jiff::Timestamp::now())
+        .await
+        .expect("a user");
+    sqlx::query(
+        "insert into identity.site_approvals
+             (site_id, changed_by, manifest_sha256, capabilities, hostname, state, changed_at)
+         values ($1, $2, $3, $4, 'garden.example.org', 'approved', now())",
+    )
+    .bind(site)
+    .bind(user.user_id)
+    .bind("a".repeat(64))
+    .bind(vec![
+        "pages.read",
+        "assets.read",
+        "search.publication",
+        "live.release",
+    ])
+    .execute(pool)
+    .await
+    .expect("an approval");
+}
+
+/// The active manifest that the stub sites service answers for every site.
+async fn active_manifest(
+    axum::extract::Path(site): axum::extract::Path<String>,
+) -> axum::Json<serde_json::Value> {
+    axum::Json(serde_json::json!({
+        "site_id": site,
+        "manifest_sha256": "a".repeat(64),
+        "hostname": "garden.example.org",
+        "publications": ["garden"],
+        "capabilities": ["pages.read", "assets.read", "search.publication", "live.release"],
+    }))
+}
+
 /// A stub sites service. It counts every request, and its answer repeats what it received of the
 /// caller's identity, so an answer that a credential changed would differ.
 async fn stub_sites() -> (std::net::SocketAddr, Arc<AtomicUsize>) {
     let count = Arc::new(AtomicUsize::new(0));
     let seen = Arc::clone(&count);
-    let router = Router::new().route(
-        "/v1/sites/{*rest}",
-        any(move |request: Received| {
-            let seen = Arc::clone(&seen);
-            async move {
-                seen.fetch_add(1, Ordering::SeqCst);
-                let header = |name: &str| {
-                    request
-                        .headers()
-                        .get(name)
-                        .and_then(|value| value.to_str().ok())
-                        .map(str::to_owned)
-                };
-                let body = serde_json::json!({
-                    "path": request.uri().path(),
-                    "authorization": header("authorization"),
-                    "cookie": header("cookie"),
-                    "user": header("x-ratatoskr-user-id"),
-                    "device": header("x-ratatoskr-device-id"),
-                    "session_kind": header("x-ratatoskr-session-kind"),
-                });
-                axum::response::Response::builder()
-                    .status(StatusCode::OK)
-                    .header("content-type", "application/json")
-                    .header("cache-control", "public, max-age=60")
-                    .header("etag", "\"release-1\"")
-                    .header("set-cookie", "visitor=1; Path=/")
-                    .body(Body::from(body.to_string()))
-                    .expect("a stub answer")
-            }
-        }),
-    );
+    let router = Router::new()
+        .route(
+            "/internal/sites/{site}/manifest",
+            axum::routing::get(active_manifest),
+        )
+        .route(
+            "/v1/sites/{*rest}",
+            any(move |request: Received| {
+                let seen = Arc::clone(&seen);
+                async move {
+                    seen.fetch_add(1, Ordering::SeqCst);
+                    let header = |name: &str| {
+                        request
+                            .headers()
+                            .get(name)
+                            .and_then(|value| value.to_str().ok())
+                            .map(str::to_owned)
+                    };
+                    let body = serde_json::json!({
+                        "path": request.uri().path(),
+                        "authorization": header("authorization"),
+                        "cookie": header("cookie"),
+                        "user": header("x-ratatoskr-user-id"),
+                        "device": header("x-ratatoskr-device-id"),
+                        "session_kind": header("x-ratatoskr-session-kind"),
+                    });
+                    axum::response::Response::builder()
+                        .status(StatusCode::OK)
+                        .header("content-type", "application/json")
+                        .header("cache-control", "public, max-age=60")
+                        .header("etag", "\"release-1\"")
+                        .header("set-cookie", "visitor=1; Path=/")
+                        .body(Body::from(body.to_string()))
+                        .expect("a stub answer")
+                }
+            }),
+        );
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("a loopback listener");
@@ -188,6 +232,7 @@ fn stable(headers: &HeaderMap) -> BTreeMap<String, Vec<String>> {
 #[tokio::test]
 async fn write_method_is_refused_before_proxy() {
     let harness = TestDatabase::create().await.expect("a test database");
+    approve(harness.pool(), "demo-site").await;
     let (listener, count) = stub_sites().await;
     let app = app(&harness, listener);
 
@@ -225,6 +270,7 @@ async fn write_method_is_refused_before_proxy() {
 #[tokio::test]
 async fn credential_does_not_change_a_public_response() {
     let harness = TestDatabase::create().await.expect("a test database");
+    approve(harness.pool(), "demo-site").await;
     seed_owner(harness.pool()).await;
     let (listener, count) = stub_sites().await;
     let app = app(&harness, listener);
@@ -307,6 +353,7 @@ async fn credential_does_not_change_a_public_response() {
 #[tokio::test]
 async fn per_client_limit_is_enforced_before_proxy() {
     let harness = TestDatabase::create().await.expect("a test database");
+    approve(harness.pool(), "demo-site").await;
     let (listener, count) = stub_sites().await;
     let app = app(&harness, listener);
     // From the sites gateway's address, the only peer whose X-Ratatoskr-Client-IP Edge reads

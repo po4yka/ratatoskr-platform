@@ -67,7 +67,22 @@ fn listed() -> Vec<(Vec<Method>, &'static str, SiteRouteClass)> {
         ),
         (
             vec![Method::GET, Method::HEAD],
-            "/{site}/content/{*rest}",
+            "/{site}/content/release",
+            SiteOrigin,
+        ),
+        (
+            vec![Method::GET, Method::HEAD],
+            "/{site}/content/pages/{*slug}",
+            SiteOrigin,
+        ),
+        (
+            vec![Method::GET, Method::HEAD],
+            "/{site}/content/assets/{sha256}",
+            SiteOrigin,
+        ),
+        (
+            vec![Method::GET, Method::HEAD],
+            "/{site}/content/search",
             SiteOrigin,
         ),
     ]

@@ -67,6 +67,17 @@ ADR-0015). So a missing or malformed header cannot get a new bucket for each req
 In this change, the only `public` routes are `GET` and `HEAD /v1/sites/{site}/content/*`, proxied
 to the sites listener `127.0.0.1:8100`.
 
+SITE-027 (workspace spec `site-capability-enforcement`) gives every `site-origin` row one capability
+and checks it against the site's effective set before Edge forwards or reads anything: the
+capabilities of the last approved manifest that the active manifest of the sites service still
+declares. The content rows are `content/release` and `content/pages/{*slug}` (`pages.read`),
+`content/assets/{sha256}` (`assets.read`) and `content/search` (`search.publication`). An unapproved
+or unknown site, and a public capability that the site did not request, get `404`
+`sites.site_not_found`, the answer of the sites service for an unknown site. Edge reads the active
+manifest from the loopback route `GET /internal/sites/{site}/manifest`; for an anonymous request it
+reads it as Edge on behalf of the owner who approved the site (session kind `service`). A
+`site-origin` row without a capability stops Edge at start-up.
+
 ### The site route classes
 
 Edge holds one table of `/v1/sites` and the routes under `/v1/sites/{site}/`. Each row has a method

@@ -8,6 +8,9 @@
 //! cannot read the set, the check fails closed with the retryable unavailable error.
 
 use platform_core::FailureKind;
+use platform_identity::SessionKind;
+use ratatoskr_sites_contracts::{SiteCapability, SiteId};
+use uuid::Uuid;
 
 use crate::{ApiState, Principal, site_approvals};
 
@@ -15,18 +18,20 @@ use crate::{ApiState, Principal, site_approvals};
 pub(crate) const NOTES_EDIT: &str = "notes.edit";
 
 /// The effective capability set of `site`, or `None` when the site has no approved manifest.
+/// The active manifest is read with the claims of `principal`, or, for an anonymous request, of
+/// Edge on behalf of the owner who approved the site.
 ///
 /// # Errors
 ///
 /// [`FailureKind::UpstreamUnavailable`] when the approval or the active manifest cannot be read.
 pub(crate) async fn effective_set(
     state: &ApiState,
-    principal: Principal,
+    principal: Option<Principal>,
     correlation: &str,
     site: &str,
 ) -> Result<Option<Vec<String>>, FailureKind> {
-    let approved: Option<Vec<String>> = sqlx::query_scalar(
-        "select capabilities from identity.site_approvals
+    let approved: Option<(Vec<String>, Uuid)> = sqlx::query_as(
+        "select capabilities, changed_by from identity.site_approvals
           where site_id = $1 and state = 'approved'",
     )
     .bind(site)
@@ -36,9 +41,15 @@ pub(crate) async fn effective_set(
         tracing::error!(%error, "the approval of a site could not be read");
         FailureKind::UpstreamUnavailable
     })?;
-    let Some(approved) = approved else {
+    let Some((approved, owner)) = approved else {
         return Ok(None);
     };
+    let principal = principal.unwrap_or(Principal {
+        user_id: owner,
+        session_id: Uuid::nil(),
+        device_id: None,
+        kind: SessionKind::Service,
+    });
     let active = site_approvals::active_capabilities(state, principal, correlation, site)
         .await
         .map_err(|_| {
@@ -69,9 +80,30 @@ pub(crate) async fn require(
     site: &str,
     capability: &str,
 ) -> Result<(), FailureKind> {
-    match effective_set(state, principal, correlation, site).await? {
+    match effective_set(state, Some(principal), correlation, site).await? {
         Some(set) if set.iter().any(|granted| granted == capability) => Ok(()),
         Some(_) => Err(FailureKind::CapabilityNotGranted),
         None => Err(FailureKind::Unauthenticated),
     }
+}
+
+/// Whether the public `capability` is in the effective set of `site`. `false` for a site that is
+/// not approved, has no such id, or did not request the capability: Edge answers all three as an
+/// unknown site.
+///
+/// # Errors
+///
+/// [`FailureKind::UpstreamUnavailable`] when the set cannot be read.
+pub(crate) async fn public(
+    state: &ApiState,
+    correlation: &str,
+    site: &str,
+    capability: SiteCapability,
+) -> Result<bool, FailureKind> {
+    if SiteId::parse(site).is_err() {
+        return Ok(false);
+    }
+    Ok(effective_set(state, None, correlation, site)
+        .await?
+        .is_some_and(|set| set.iter().any(|granted| granted == capability.as_str())))
 }

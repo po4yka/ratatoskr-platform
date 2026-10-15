@@ -160,9 +160,27 @@ pub const ROUTES: &[SiteRoute] = &[
     },
     SiteRoute {
         methods: &[Method::GET, Method::HEAD],
-        path: "/{site}/content/{*rest}",
+        path: "/{site}/content/release",
         class: Some(SiteRouteClass::SiteOrigin),
-        capability: None,
+        capability: Some(SiteCapability::PagesRead),
+    },
+    SiteRoute {
+        methods: &[Method::GET, Method::HEAD],
+        path: "/{site}/content/pages/{*slug}",
+        class: Some(SiteRouteClass::SiteOrigin),
+        capability: Some(SiteCapability::PagesRead),
+    },
+    SiteRoute {
+        methods: &[Method::GET, Method::HEAD],
+        path: "/{site}/content/assets/{sha256}",
+        class: Some(SiteRouteClass::SiteOrigin),
+        capability: Some(SiteCapability::AssetsRead),
+    },
+    SiteRoute {
+        methods: &[Method::GET, Method::HEAD],
+        path: "/{site}/content/search",
+        class: Some(SiteRouteClass::SiteOrigin),
+        capability: Some(SiteCapability::SearchPublication),
     },
     // The routes of the site owner session on the site origin (workspace change
     // `add-site-owner-editing-and-live`).
@@ -170,49 +188,49 @@ pub const ROUTES: &[SiteRoute] = &[
         methods: &[Method::GET],
         path: "/{site}/events",
         class: Some(SiteRouteClass::SiteOrigin),
-        capability: None,
+        capability: Some(SiteCapability::LiveRelease),
     },
     SiteRoute {
         methods: &[Method::GET],
         path: "/{site}/drafts/pages/{*slug}",
         class: Some(SiteRouteClass::SiteOrigin),
-        capability: None,
+        capability: Some(SiteCapability::DraftRead),
     },
     SiteRoute {
         methods: &[Method::GET],
         path: "/{site}/drafts/sources/{source_ref}",
         class: Some(SiteRouteClass::SiteOrigin),
-        capability: None,
+        capability: Some(SiteCapability::DraftRead),
     },
     SiteRoute {
         methods: &[Method::POST],
         path: "/{site}/drafts/sources/{source_ref}/blobs",
         class: Some(SiteRouteClass::SiteOrigin),
-        capability: None,
+        capability: Some(SiteCapability::NotesEdit),
     },
     SiteRoute {
         methods: &[Method::POST],
         path: "/{site}/edits",
         class: Some(SiteRouteClass::SiteOrigin),
-        capability: None,
+        capability: Some(SiteCapability::NotesEdit),
     },
     SiteRoute {
         methods: &[Method::GET],
         path: "/{site}/conflicts/{conflict_id}",
         class: Some(SiteRouteClass::SiteOrigin),
-        capability: None,
+        capability: Some(SiteCapability::DraftRead),
     },
     SiteRoute {
         methods: &[Method::GET],
         path: "/{site}/library",
         class: Some(SiteRouteClass::SiteOrigin),
-        capability: None,
+        capability: Some(SiteCapability::LibraryRead),
     },
     SiteRoute {
         methods: &[Method::GET],
         path: "/{site}/knowledge/search",
         class: Some(SiteRouteClass::SiteOrigin),
-        capability: None,
+        capability: Some(SiteCapability::KnowledgeSearch),
     },
 ];
 
@@ -229,6 +247,12 @@ pub fn check_routes(routes: &[SiteRoute]) -> Result<(), String> {
             let named = format!("{method} /v1/sites{}", row.path);
             if row.class.is_none() {
                 failed.push(format!("{named} has no route class"));
+            }
+            let site_origin = row.class == Some(SiteRouteClass::SiteOrigin);
+            if site_origin != row.capability.is_some() {
+                failed.push(format!(
+                    "{named} must name one capability exactly when it is site-origin"
+                ));
             }
             let repeated = routes
                 .iter()
@@ -298,22 +322,24 @@ pub async fn dispatch(
     request: Request,
 ) -> Response {
     let (mut parts, body) = request.into_parts();
-    let (site, class) = match classify(&parts.method, parts.uri.path()) {
-        Ok((site, class)) => (site.to_owned(), class),
+    let (site, class, capability) = match classify(&parts.method, parts.uri.path()) {
+        Ok((
+            site,
+            SiteRoute {
+                class: Some(class),
+                capability,
+                ..
+            },
+        )) => (site.to_owned(), *class, *capability),
+        Ok(_) => return platform_http::reject(FailureKind::RouteNotFound),
         Err(refusal) => return platform_http::reject(refusal),
     };
     match class {
-        SiteRouteClass::SiteOrigin if is_content(parts.uri.path()) => {
-            content(&state, &context, &site, &parts).await
-        }
         SiteRouteClass::SiteOrigin => {
-            // The routes of the site owner session: their handlers arrive with tasks 7.2, 8.2 and
-            // 8.4. Until then a site owner session gets 404, and every other caller 401.
-            match site_sessions::site_owner(&state, &parts, &site).await {
-                Ok(Some(_)) => platform_http::reject(FailureKind::RouteNotFound),
-                Ok(None) => platform_http::reject(FailureKind::Unauthenticated),
-                Err(refusal) => refusal,
-            }
+            let Some(capability) = capability else {
+                return platform_http::reject(FailureKind::RouteNotFound);
+            };
+            site_origin(&state, &context, parts, body, &site, capability).await
         }
         SiteRouteClass::Management | SiteRouteClass::Release => {
             // A release from the site's page comes with the site cookie and no bearer.
@@ -393,6 +419,55 @@ fn is_content(path: &str) -> bool {
     path.split('/').nth(4) == Some("content")
 }
 
+/// A `site-origin` route: the content routes are the `public` class; every other route needs its
+/// capability in the site's effective set, and an owner-only capability also needs a site owner
+/// session of the site (workspace spec `site-capability-enforcement`).
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "the handlers of tasks 7.2, 8.2 and 8.4 take them"
+)]
+async fn site_origin(
+    state: &Arc<ApiState>,
+    context: &RequestContext,
+    parts: http::request::Parts,
+    _body: axum::body::Body,
+    site: &str,
+    capability: SiteCapability,
+) -> Response {
+    if is_content(parts.uri.path()) {
+        return content(state, context, site, &parts, capability).await;
+    }
+    let correlation = context.correlation_id.to_string();
+    if capability.is_public() {
+        // The event stream arrives with task 7.2.
+        return match site_capabilities::public(state, &correlation, site, capability).await {
+            Ok(true) => platform_http::reject(FailureKind::RouteNotFound),
+            Ok(false) => site_sessions::site_not_found(context),
+            Err(refusal) => platform_http::reject(refusal),
+        };
+    }
+    // An owner-only capability: a site owner session of the site, whose effective set
+    // holds the capability. The handlers arrive with tasks 8.2 and 8.4.
+    match site_sessions::site_owner(state, &parts, site).await {
+        Ok(Some(principal)) => {
+            match site_capabilities::require(
+                state,
+                principal,
+                &correlation,
+                site,
+                capability.as_str(),
+            )
+            .await
+            {
+                Ok(()) => platform_http::reject(FailureKind::RouteNotFound),
+                Err(refusal) => platform_http::reject(refusal),
+            }
+        }
+        Ok(None) => platform_http::reject(FailureKind::Unauthenticated),
+        Err(refusal) => refusal,
+    }
+}
+
 /// The release route for a site owner session of `site` (the second guard of the class):
 /// `None` when the request carries no such session.
 async fn site_release(
@@ -424,7 +499,10 @@ async fn site_release(
 }
 
 /// The site and the class of the row that holds `method` and `path`.
-fn classify<'a>(method: &Method, path: &'a str) -> Result<(&'a str, SiteRouteClass), FailureKind> {
+fn classify<'a>(
+    method: &Method,
+    path: &'a str,
+) -> Result<(&'a str, &'static SiteRoute), FailureKind> {
     let below = path
         .strip_prefix("/v1/sites")
         .ok_or(FailureKind::RouteNotFound)?;
@@ -437,12 +515,10 @@ fn classify<'a>(method: &Method, path: &'a str) -> Result<(&'a str, SiteRouteCla
     if rows.peek().is_none() {
         return Err(FailureKind::RouteNotFound);
     }
-    let class = rows
+    let row = rows
         .find(|row| row.methods.contains(method))
-        .ok_or(FailureKind::MethodNotAllowed)?
-        .class
-        .ok_or(FailureKind::RouteNotFound)?;
-    Ok((site, class))
+        .ok_or(FailureKind::MethodNotAllowed)?;
+    Ok((site, row))
 }
 
 /// Whether `below`, the path below `/v1/sites`, is a path of the row `pattern`.
@@ -545,6 +621,7 @@ async fn content(
     context: &RequestContext,
     site: &str,
     request: &http::request::Parts,
+    capability: SiteCapability,
 ) -> Response {
     let headers = &request.headers;
     if declares_body(headers) {
@@ -561,6 +638,12 @@ async fn content(
             HeaderValue::from(state.site_limits.retry_after_seconds),
         );
         return refused;
+    }
+    let correlation = context.correlation_id.to_string();
+    match site_capabilities::public(state, &correlation, site, capability).await {
+        Ok(true) => {}
+        Ok(false) => return site_sessions::site_not_found(context),
+        Err(refusal) => return platform_http::reject(refusal),
     }
     let path_and_query = request
         .uri

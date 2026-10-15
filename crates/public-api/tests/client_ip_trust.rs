@@ -40,24 +40,68 @@ const GATEWAY_PEER: &str = "127.0.0.83:40000";
 /// What the stub sites service received: the value of `x-ratatoskr-client-ip` of each request.
 type Seen = Arc<Mutex<Vec<Option<String>>>>;
 
+/// Approve `site` in the database and serve its active manifest from the stub, both with the
+/// public capabilities, so that Edge's capability check of the content routes passes (workspace
+/// spec `site-capability-enforcement`).
+async fn approve(pool: &sqlx::PgPool, site: &str) {
+    let user = platform_identity::user::create_user(pool, jiff::Timestamp::now())
+        .await
+        .expect("a user");
+    sqlx::query(
+        "insert into identity.site_approvals
+             (site_id, changed_by, manifest_sha256, capabilities, hostname, state, changed_at)
+         values ($1, $2, $3, $4, 'garden.example.org', 'approved', now())",
+    )
+    .bind(site)
+    .bind(user.user_id)
+    .bind("a".repeat(64))
+    .bind(vec![
+        "pages.read",
+        "assets.read",
+        "search.publication",
+        "live.release",
+    ])
+    .execute(pool)
+    .await
+    .expect("an approval");
+}
+
+/// The active manifest that the stub sites service answers for every site.
+async fn active_manifest(
+    axum::extract::Path(site): axum::extract::Path<String>,
+) -> axum::Json<serde_json::Value> {
+    axum::Json(serde_json::json!({
+        "site_id": site,
+        "manifest_sha256": "a".repeat(64),
+        "hostname": "garden.example.org",
+        "publications": ["garden"],
+        "capabilities": ["pages.read", "assets.read", "search.publication", "live.release"],
+    }))
+}
+
 async fn stub_sites() -> (SocketAddr, Seen) {
     let seen: Seen = Arc::default();
     let record = Arc::clone(&seen);
-    let router = Router::new().route(
-        "/v1/sites/{*rest}",
-        any(move |request: Received| {
-            let record = Arc::clone(&record);
-            async move {
-                let header = request
-                    .headers()
-                    .get("x-ratatoskr-client-ip")
-                    .and_then(|value| value.to_str().ok())
-                    .map(str::to_owned);
-                record.lock().expect("the record").push(header);
-                StatusCode::OK
-            }
-        }),
-    );
+    let router = Router::new()
+        .route(
+            "/internal/sites/{site}/manifest",
+            axum::routing::get(active_manifest),
+        )
+        .route(
+            "/v1/sites/{*rest}",
+            any(move |request: Received| {
+                let record = Arc::clone(&record);
+                async move {
+                    let header = request
+                        .headers()
+                        .get("x-ratatoskr-client-ip")
+                        .and_then(|value| value.to_str().ok())
+                        .map(str::to_owned);
+                    record.lock().expect("the record").push(header);
+                    StatusCode::OK
+                }
+            }),
+        );
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("a loopback listener");
@@ -151,6 +195,7 @@ async fn from_peer(app: &Router, peer: &str, client_ip: &str) -> u16 {
 #[tokio::test]
 async fn client_ip_header_is_ignored_from_other_peers() {
     let harness = TestDatabase::create().await.expect("a test database");
+    approve(harness.pool(), "site-a").await;
     let (sites, seen) = stub_sites().await;
     let app = app(&harness, sites);
     let listener = TcpListener::bind("127.0.0.1:0")
@@ -189,6 +234,7 @@ async fn client_ip_header_is_ignored_from_other_peers() {
 #[tokio::test]
 async fn client_ip_header_is_used_from_the_gateway_peer() {
     let harness = TestDatabase::create().await.expect("a test database");
+    approve(harness.pool(), "site-a").await;
     let (sites, seen) = stub_sites().await;
     let app = app(&harness, sites);
 
@@ -235,6 +281,7 @@ async fn from_peer_with(app: &Router, peer: &str, values: &[&str]) -> u16 {
 #[tokio::test]
 async fn client_ip_header_needs_one_valid_address() {
     let harness = TestDatabase::create().await.expect("a test database");
+    approve(harness.pool(), "site-a").await;
     let (sites, _) = stub_sites().await;
     let app = app(&harness, sites);
 
