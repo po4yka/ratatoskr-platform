@@ -89,9 +89,13 @@ const OWNERS: [(&str, &str, &str); 32] = [
     ("EDGE", EVT, "platform_ai_archive_claude_projection"),
 ];
 
-/// Durables only Edge may describe. `platform_edge_projection` is created by Edge's own consumer,
-/// so it may not exist on this broker, which does not change who is refused.
-const EDGE_ONLY: [(&str, &str); 1] = [(EVT, "platform_edge_projection")];
+/// Durables only Edge may describe. `platform_edge_projection` and
+/// `platform_notes_conflict_projection` are created by Edge's own consumers, so they may not exist
+/// on this broker, which does not change who is refused.
+const EDGE_ONLY: [(&str, &str); 2] = [
+    (EVT, "platform_edge_projection"),
+    (EVT, "platform_notes_conflict_projection"),
+];
 
 /// Where each durable's test message comes from: the identity allowed to publish to its filter, and
 /// one concrete subject that matches it.
@@ -607,6 +611,8 @@ async fn notes_identity_matrix() {
             "evt.notes.vault.connected.v1",
             "evt.notes.vault.disconnected.v1",
             "evt.notes.file.changed.v1",
+            "evt.notes.conflict.raised.v1",
+            "evt.notes.conflict.resolved.v1",
             "evt.platform.operation.reported.v1",
         ],
     )

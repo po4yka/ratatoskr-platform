@@ -204,23 +204,31 @@ fn expected_domain_services() -> Vec<(&'static str, Vec<String>)> {
                 trio(EVT, "ratatoskr_channel_digest_recap_failed"),
             ]),
         ),
-        (
-            "NOTES",
-            join(vec![
-                subjects(&[
-                    "evt.notes.vault.connected.v1",
-                    "evt.notes.vault.disconnected.v1",
-                    "evt.notes.file.changed.v1",
-                    "evt.platform.operation.reported.v1",
-                ]),
-                trio(CMD, "ratatoskr_notes_write_requests"),
-            ]),
-        ),
     ]
+}
+
+/// The NOTES identity of OBS-023 and OBS-024: its events, the two conflict events, the report subject
+/// and the write durable.
+fn expected_notes() -> (&'static str, Vec<String>) {
+    let mut allow: Vec<String> = [
+        subjects(&[
+            "evt.notes.vault.connected.v1",
+            "evt.notes.vault.disconnected.v1",
+            "evt.notes.file.changed.v1",
+            "evt.notes.conflict.raised.v1",
+            "evt.notes.conflict.resolved.v1",
+            "evt.platform.operation.reported.v1",
+        ]),
+        trio(CMD, "ratatoskr_notes_write_requests"),
+    ]
+    .concat();
+    allow.sort();
+    ("NOTES", allow)
 }
 
 pub(crate) fn expected_publish_allow() -> Vec<(&'static str, Vec<String>)> {
     let mut all = expected_platform_and_social();
     all.extend(expected_domain_services());
+    all.push(expected_notes());
     all
 }
