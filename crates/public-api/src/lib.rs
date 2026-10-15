@@ -47,6 +47,7 @@ pub mod operations;
 pub mod sessions;
 pub mod site_approvals;
 pub mod site_capabilities;
+pub mod site_events;
 pub mod site_reads;
 pub mod site_releases;
 pub mod site_sessions;
@@ -106,6 +107,10 @@ pub struct ApiState {
     /// The source address of the sites gateway. Only a connection from it sets the client key of
     /// the `public` class with `X-Ratatoskr-Client-IP` (`sites.gateway_peer`).
     pub sites_gateway_peer: std::net::IpAddr,
+    /// The per-site buffers of the site event stream (workspace spec `site-live-events`).
+    pub site_events: Arc<site_events::SiteEventHub>,
+    /// The bounds of the anonymous connections of the site event stream.
+    pub site_stream_limits: site_events::SiteStreamLimits,
 }
 
 impl ApiState {
@@ -140,6 +145,8 @@ impl ApiState {
             channel_digests: None,
             site_limits: Arc::new(sites::PublicLimits::default()),
             sites_gateway_peer: platform_core::config::DEFAULT_SITES_GATEWAY_PEER,
+            site_events: Arc::default(),
+            site_stream_limits: site_events::SiteStreamLimits::default(),
         }
     }
 
