@@ -18,6 +18,7 @@ use http::{HeaderValue, Method};
 use platform_core::FailureKind;
 use platform_http::{ActorLimiter, RequestContext};
 use platform_identity::SessionKind;
+use ratatoskr_sites_contracts::SiteCapability;
 use uuid::Uuid;
 
 use crate::auth::{DeployRoute, DeployerSite};
@@ -82,6 +83,9 @@ pub struct SiteRoute {
     pub path: &'static str,
     /// The class. A row without one stops Edge at start-up ([`check_routes`]).
     pub class: Option<SiteRouteClass>,
+    /// The one capability of a `site-origin` row, which Edge checks against the site's effective
+    /// set (workspace spec `site-capability-enforcement`). No other class has one.
+    pub capability: Option<SiteCapability>,
 }
 
 /// `/v1/sites` and every route under `/v1/sites/{site}/` (workspace spec `site-route-classes`).
@@ -92,61 +96,73 @@ pub const ROUTES: &[SiteRoute] = &[
         methods: &[Method::GET],
         path: "",
         class: Some(SiteRouteClass::Management),
+        capability: None,
     },
     SiteRoute {
         methods: &[Method::GET, Method::PUT],
         path: "/{site}/manifest",
         class: Some(SiteRouteClass::Management),
+        capability: None,
     },
     SiteRoute {
         methods: &[Method::POST, Method::DELETE],
         path: "/{site}/manifest/approval",
         class: Some(SiteRouteClass::Management),
+        capability: None,
     },
     SiteRoute {
         methods: &[Method::GET, Method::PUT, Method::DELETE],
         path: "/{site}/publications",
         class: Some(SiteRouteClass::Management),
+        capability: None,
     },
     SiteRoute {
         methods: &[Method::GET, Method::PUT, Method::DELETE],
         path: "/{site}/publications/{publication}",
         class: Some(SiteRouteClass::Management),
+        capability: None,
     },
     SiteRoute {
         methods: &[Method::GET],
         path: "/{site}/releases",
         class: Some(SiteRouteClass::Management),
+        capability: None,
     },
     SiteRoute {
         methods: &[Method::POST],
         path: "/{site}/releases",
         class: Some(SiteRouteClass::Release),
+        capability: None,
     },
     SiteRoute {
         methods: &[Method::POST],
         path: "/{site}/sign-in-codes",
         class: Some(SiteRouteClass::Management),
+        capability: None,
     },
     SiteRoute {
         methods: &[Method::POST],
         path: "/{site}/sessions",
         class: Some(SiteRouteClass::SignIn),
+        capability: None,
     },
     SiteRoute {
         methods: &[Method::POST],
         path: "/{site}/deploys",
         class: Some(SiteRouteClass::Deploy),
+        capability: None,
     },
     SiteRoute {
         methods: &[Method::POST],
         path: "/{site}/deploys/{commit}/activate",
         class: Some(SiteRouteClass::Deploy),
+        capability: None,
     },
     SiteRoute {
         methods: &[Method::GET, Method::HEAD],
         path: "/{site}/content/{*rest}",
         class: Some(SiteRouteClass::SiteOrigin),
+        capability: None,
     },
     // The routes of the site owner session on the site origin (workspace change
     // `add-site-owner-editing-and-live`).
@@ -154,41 +170,49 @@ pub const ROUTES: &[SiteRoute] = &[
         methods: &[Method::GET],
         path: "/{site}/events",
         class: Some(SiteRouteClass::SiteOrigin),
+        capability: None,
     },
     SiteRoute {
         methods: &[Method::GET],
         path: "/{site}/drafts/pages/{*slug}",
         class: Some(SiteRouteClass::SiteOrigin),
+        capability: None,
     },
     SiteRoute {
         methods: &[Method::GET],
         path: "/{site}/drafts/sources/{source_ref}",
         class: Some(SiteRouteClass::SiteOrigin),
+        capability: None,
     },
     SiteRoute {
         methods: &[Method::POST],
         path: "/{site}/drafts/sources/{source_ref}/blobs",
         class: Some(SiteRouteClass::SiteOrigin),
+        capability: None,
     },
     SiteRoute {
         methods: &[Method::POST],
         path: "/{site}/edits",
         class: Some(SiteRouteClass::SiteOrigin),
+        capability: None,
     },
     SiteRoute {
         methods: &[Method::GET],
         path: "/{site}/conflicts/{conflict_id}",
         class: Some(SiteRouteClass::SiteOrigin),
+        capability: None,
     },
     SiteRoute {
         methods: &[Method::GET],
         path: "/{site}/library",
         class: Some(SiteRouteClass::SiteOrigin),
+        capability: None,
     },
     SiteRoute {
         methods: &[Method::GET],
         path: "/{site}/knowledge/search",
         class: Some(SiteRouteClass::SiteOrigin),
+        capability: None,
     },
 ];
 

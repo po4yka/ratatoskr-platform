@@ -159,6 +159,7 @@ fn unclassified_site_route_fails_start_up() {
         methods: &[Method::PUT],
         path: "/{site}/manifest",
         class: None,
+        capability: None,
     }];
     let refusal = check_routes(&UNCLASSIFIED);
     assert!(
