@@ -94,6 +94,19 @@ publishes the three note events and the shared operation-report subject, subscri
 `_INBOX_notes.>`, and owns no durable. The Knowledge stanza gets the inspect, fetch and acknowledge
 grants of `ratatoskr_knowledge_notes_files` and `ratatoskr_knowledge_notes_vaults`.
 
+### D6. A device reaches only the connect and the device routes
+
+The generic proxy splits the notes paths by credential (`notes::refuses`). `/changes`, `/manifest`
+and the paths under `/blobs` (`notes::DEVICE_PATHS`) take only an active paired device: notes needs
+the device claims there and answers `401` without them, which Edge does not relay. Every other notes
+path of the generic proxy, the read routes, `excluded-folders` and the removal included, takes only a
+session that is not a device. A device keeps the connect, which is the Edge handler of D3 and not the
+generic proxy. Both refusals are `403` (`platform.auth.forbidden`) before the forward. The Obsidian
+plugin and the export agent call only the connect and the device routes, so least privilege costs
+them nothing, and a stolen device credential cannot read the vaults of the owner or remove a
+connection. Edge still does not decide which connection a device may use; notes checks the owner,
+the channel and the device.
+
 ## Risks / Trade-offs
 
 - [A failed connect ends its operation at Edge] → a retried connect mints a new operation. If

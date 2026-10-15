@@ -50,6 +50,17 @@ pub(crate) const DEVICE_PATHS: [&str; 3] = [
     "/connections/{connection}/blobs",
 ];
 
+/// Whether the generic proxy refuses a request to `below`, the path below the notes route: a device
+/// route without a device, or another path with a device. A device keeps only the connect, which
+/// is [`connect`] and not the generic proxy, and the device routes; the plugin and the export agent
+/// call nothing else, and a device that reaches the read routes can read every vault of the owner.
+pub(crate) fn refuses(below: &str, device_kind: Option<&str>) -> bool {
+    let device_path = DEVICE_PATHS
+        .iter()
+        .any(|pattern| gateway::is_under(pattern, below));
+    device_path != device_kind.is_some()
+}
+
 /// The body of a connect. The notes service owns its members, and Edge sends it to the notes service
 /// unread.
 #[derive(Debug, schemars::JsonSchema)]

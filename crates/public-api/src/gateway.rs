@@ -582,7 +582,7 @@ fn caused_by<E: std::error::Error + 'static>(error: &(dyn std::error::Error + 's
 
 /// Whether `path` is `pattern` or a path below it. A `{name}` segment of the pattern matches one
 /// segment that is not empty.
-fn is_under(pattern: &str, path: &str) -> bool {
+pub(crate) fn is_under(pattern: &str, path: &str) -> bool {
     let mut segments = path.split('/');
     pattern.split('/').all(|expected| {
         segments.next().is_some_and(|segment| {
@@ -616,12 +616,7 @@ pub async fn proxy(
         Err(rejection) => return rejection,
     };
     let below = request.uri().path().strip_prefix(route.prefix.as_str());
-    if device_kind.is_none()
-        && service == "notes"
-        && crate::notes::DEVICE_PATHS
-            .iter()
-            .any(|pattern| below.is_some_and(|below| is_under(pattern, below)))
-    {
+    if service == "notes" && crate::notes::refuses(below.unwrap_or_default(), device_kind) {
         return platform_http::reject(FailureKind::Forbidden);
     }
     let path_and_query = request
