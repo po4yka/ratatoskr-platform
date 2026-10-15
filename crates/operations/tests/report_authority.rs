@@ -499,6 +499,54 @@ async fn notes_connect_accepts_only_the_notes_lane() {
     harness.cleanup().await.expect("cleanup");
 }
 
+/// Workspace OBS-024 task 10.5: Edge mints a notes write and a write-mode change for the notes
+/// lane, and only that lane reports on them.
+#[tokio::test]
+async fn notes_write_kinds_accept_only_notes_reports() {
+    let kinds = minted_kinds();
+    let harness = TestDatabase::create().await.expect("a test database");
+    let pool = harness.pool();
+    for kind in ["notes.file.write", "notes.connection.write_mode"] {
+        assert!(
+            kinds.iter().any(|minted| minted == kind),
+            "{kind} is not minted by Platform: {kinds:?}"
+        );
+        let accepted = platform_operations::accept(
+            pool,
+            OWNER,
+            kind,
+            CORRELATION,
+            None,
+            Some("ratatoskr-notes"),
+            now(),
+        )
+        .await;
+        assert!(
+            accepted.is_ok(),
+            "{kind} refuses the notes lane: {:?}",
+            accepted.err()
+        );
+        let operation = accepted.expect("accepted").operation_id;
+
+        expect(
+            pool,
+            operation,
+            &message("ratatoskr-extractor", Some(OWNER), operation),
+            Outcome::Rejected,
+        )
+        .await;
+        expect(
+            pool,
+            operation,
+            &message("ratatoskr-notes", Some(OWNER), operation),
+            Outcome::Applied,
+        )
+        .await;
+    }
+
+    harness.cleanup().await.expect("cleanup");
+}
+
 /// The quoted value on the line after `marker`, or the first quoted value of the line holding it.
 fn literal_after(source: &str, marker: &str) -> Vec<String> {
     source
@@ -518,6 +566,7 @@ fn minted_kinds() -> Vec<String> {
         include_str!("../../public-api/src/archives.rs"),
         include_str!("../../public-api/src/channel_digests.rs"),
         include_str!("../../public-api/src/notes.rs"),
+        include_str!("../../public-api/src/notes_writes.rs"),
     ] {
         for line in source.lines() {
             let line = line.trim();
@@ -545,6 +594,8 @@ fn every_minted_operation_kind_has_an_authority_row() {
         "channel_digest.subscription.set",
         "channel_digest.run",
         "notes.connection.connect",
+        "notes.file.write",
+        "notes.connection.write_mode",
     ] {
         assert!(
             kinds.iter().any(|kind| kind == expected),
@@ -639,6 +690,10 @@ fn every_mint_site_passes_a_lane_for_a_listed_kind() {
         (
             "channel digests",
             include_str!("../../public-api/src/channel_digests.rs"),
+        ),
+        (
+            "notes writes",
+            include_str!("../../public-api/src/notes_writes.rs"),
         ),
     ] {
         let literals = source.matches("Intake {").count();
