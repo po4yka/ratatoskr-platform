@@ -335,6 +335,11 @@ pub async fn dispatch(
         Ok(_) => return platform_http::reject(FailureKind::RouteNotFound),
         Err(refusal) => return platform_http::reject(refusal),
     };
+    // The site that the checks of every class use must be the site of the path that is forwarded
+    // (reviews L2 and L-4 of SITE-027). The site listing names no site.
+    if !site.is_empty() && !gateway::paths::names_site(parts.uri.path(), &site) {
+        return platform_http::reject(FailureKind::RouteNotFound);
+    }
     match class {
         SiteRouteClass::SiteOrigin => {
             let Some(capability) = capability else {
@@ -435,10 +440,6 @@ async fn site_origin(
     site: &str,
     capability: SiteCapability,
 ) -> Response {
-    // The site that the capability check used must be the site of the path that is forwarded.
-    if !gateway::paths::names_site(parts.uri.path(), site) {
-        return platform_http::reject(FailureKind::RouteNotFound);
-    }
     if is_content(parts.uri.path()) {
         return content(state, context, site, &parts, capability).await;
     }
@@ -683,10 +684,6 @@ fn declares_body(headers: &http::HeaderMap) -> bool {
         || headers.contains_key(http::header::TRANSFER_ENCODING)
 }
 
-/// `GET` and `HEAD /v1/sites/{site}/content/*`: the `public` class.
-///
-/// A request that declares a body is `400`. The buckets are checked before the proxy, and a
-/// refusal is `429` with `Retry-After`. Nothing here reads a credential or a cookie.
 /// The refusal of a public request of the client of `request` to `site` above the public rate
 /// limit, with its `Retry-After`; `None` when the request is admitted. Edge applies it before it
 /// asks the sites service for the manifest.
@@ -710,6 +707,10 @@ pub(crate) fn public_limit(
     Some(refused)
 }
 
+/// `GET` and `HEAD /v1/sites/{site}/content/*`: the `public` class.
+///
+/// A request that declares a body is `400`. The buckets are checked before the proxy, and a
+/// refusal is `429` with `Retry-After`. Nothing here reads a credential or a cookie.
 async fn content(
     state: &ApiState,
     context: &RequestContext,

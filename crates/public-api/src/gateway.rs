@@ -173,6 +173,18 @@ impl Gateway {
         }
     }
 
+    /// Send one typed control request whose answer the caller does not read, bounded by the
+    /// control budget: the status, or the failure of the transport.
+    pub(crate) async fn send_control(
+        &self,
+        dependency: &'static str,
+        request: hyper::Request<Body>,
+    ) -> Result<http::StatusCode, FailureKind> {
+        self.request_control(dependency, request)
+            .await
+            .map(|response| response.status())
+    }
+
     /// Send one typed control request and read its JSON answer, bounded in time and size.
     ///
     /// The one place a typed client (Knowledge, channel-digests) turns an HTTP answer into a value:

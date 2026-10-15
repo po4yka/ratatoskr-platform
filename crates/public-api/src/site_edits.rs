@@ -191,22 +191,34 @@ async fn upload_content(
         .and_then(serde_json::Value::as_str)
         .ok_or(FailureKind::UpstreamInvalidResponse)?
         .to_owned();
-    let _: serde_json::Value = notes_json(
+    let sent = notes_json::<serde_json::Value>(
         state,
         http::Method::PUT,
         &format!("{blobs}/{token}/chunks/0"),
         &claims,
         Body::from(content),
     )
-    .await?;
-    let finalized: serde_json::Value = notes_json(
-        state,
-        http::Method::POST,
-        &format!("{blobs}/{token}/finalize"),
-        &claims,
-        json_body(&serde_json::json!({"resumption_token": token})),
-    )
-    .await?;
+    .await;
+    let finalized = match sent {
+        Ok(_) => {
+            notes_json::<serde_json::Value>(
+                state,
+                http::Method::POST,
+                &format!("{blobs}/{token}/finalize"),
+                &claims,
+                json_body(&serde_json::json!({"resumption_token": token})),
+            )
+            .await
+        }
+        Err(refusal) => Err(refusal),
+    };
+    let finalized = match finalized {
+        Ok(finalized) => finalized,
+        Err(refusal) => {
+            close_session(state, &format!("{blobs}/{token}"), &claims).await;
+            return Err(refusal);
+        }
+    };
     if finalized.get("outcome").and_then(serde_json::Value::as_str) != Some("stored") {
         tracing::warn!("notes did not store the content of a site edit");
         return Err(FailureKind::UpstreamInvalidResponse);
@@ -220,6 +232,26 @@ async fn upload_content(
         content_blob,
         content_hash: hash,
     })
+}
+
+/// Close the notes upload session at `session` after a failed step (review L9), so that it does
+/// not hold one of the connection's sessions until it expires. Best effort: notes answers 204, or
+/// 404 `blob_transfer.session_unknown` for a session it no longer has.
+async fn close_session(state: &ApiState, session: &str, claims: &http::HeaderMap) {
+    let Ok(request) = loopback(
+        state,
+        "notes",
+        http::Method::DELETE,
+        session,
+        claims.clone(),
+        Body::empty(),
+    ) else {
+        return;
+    };
+    match state.gateway.send_control("notes", request).await {
+        Ok(status) if status.is_success() || status == StatusCode::NOT_FOUND => {}
+        Ok(_) | Err(_) => tracing::warn!("a notes upload session could not be closed"),
+    }
 }
 
 fn json_body(value: &serde_json::Value) -> Body {

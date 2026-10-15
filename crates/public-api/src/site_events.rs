@@ -323,16 +323,25 @@ pub(crate) struct OwnerWatch {
 impl OwnerWatch {
     /// Whether the session is still live: before its end, and not revoked. A failed read ends the
     /// connection; the client opens a new one.
-    async fn live(&self) -> bool {
+    ///
+    /// A live session sets the end again from its last use (review L-2), so the stream of an owner
+    /// who keeps using the site is not cut at the idle end of its opening.
+    async fn live(&mut self) -> bool {
         let now = jiff::Timestamp::now();
-        if now >= self.ends_at {
+        let session =
+            platform_identity::session::authenticate(&self.pool, self.token, &self.audience, now)
+                .await;
+        let Ok(Some(session)) = session else {
+            return false;
+        };
+        if session.kind != platform_identity::SessionKind::SiteOwner {
             return false;
         }
-        matches!(
-            platform_identity::session::authenticate(&self.pool, self.token, &self.audience, now)
-                .await,
-            Ok(Some(session)) if session.kind == platform_identity::SessionKind::SiteOwner
-        )
+        let used = session.last_seen_at.unwrap_or(session.issued_at);
+        self.ends_at = session
+            .expires_at
+            .min(used + platform_identity::session::SITE_OWNER_IDLE);
+        true
     }
 
     /// When the next check is due: at `next_check`, or sooner when the session ends sooner.
@@ -443,7 +452,7 @@ impl Reader {
     /// Whether an owner connection's session is still live, checked when the check is due and
     /// whatever events arrived since the last one; an anonymous connection always is.
     async fn still_live(&mut self) -> bool {
-        let Some(watch) = &self.watch else {
+        let Some(watch) = &mut self.watch else {
             return true;
         };
         let now = tokio::time::Instant::now();
