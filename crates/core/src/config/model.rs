@@ -214,7 +214,7 @@ pub struct GatewayRouteBudget {
 /// `MAX_BATCH_BYTES` and `MAX_MANIFEST_BYTES` of its channel routes, and `CHUNK_SIZE_MAX_BYTES` of
 /// the shared transfer contract. The sites deploy path has no limit of its own: the sites service
 /// owns the bundle size limit, and the transfer budget bounds the body at Edge.
-pub const GATEWAY_TRANSFER_PATHS: [(&str, &str, Option<u64>); 5] = [
+pub const GATEWAY_TRANSFER_PATHS: [(&str, &str, Option<u64>); 6] = [
     ("notes", "/connections/{connection}/blobs", None),
     (
         "notes",
@@ -232,6 +232,7 @@ pub const GATEWAY_TRANSFER_PATHS: [(&str, &str, Option<u64>); 5] = [
         Some(32 * 1024 * 1024),
     ),
     ("sites", "/{site}/deploys", None),
+    ("sites", "/{site}/drafts/sources/{source_ref}/blobs", None),
 ];
 
 impl GatewayRouteBudgets {

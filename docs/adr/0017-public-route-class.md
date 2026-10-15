@@ -86,6 +86,7 @@ whose path a row holds, with a method that the row does not hold, gets `405`.
 | `POST .../deploys`, `POST .../deploys/{commit}/activate` | deploy | sites |
 | `POST .../sign-in-codes` | management | Edge |
 | `POST .../sessions` | sign-in | Edge |
+| `GET .../events`, `GET .../drafts/pages/{*slug}`, `GET`, `POST .../drafts/sources/{source_ref}` and `.../blobs`, `POST .../edits`, `GET .../conflicts/{conflict_id}`, `GET .../library`, `GET .../knowledge/search` | site-origin, with the site owner session | Edge, sites, notes or Knowledge (SITE-027) |
 | `GET`, `HEAD .../content/*` | site-origin, in the class `public` | sites |
 
 The guard of each class:

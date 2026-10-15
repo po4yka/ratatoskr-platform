@@ -146,6 +146,48 @@ pub const ROUTES: &[SiteRoute] = &[
         path: "/{site}/content/{*rest}",
         class: Some(SiteRouteClass::SiteOrigin),
     },
+    // The routes of the site owner session on the site origin (workspace change
+    // `add-site-owner-editing-and-live`).
+    SiteRoute {
+        methods: &[Method::GET],
+        path: "/{site}/events",
+        class: Some(SiteRouteClass::SiteOrigin),
+    },
+    SiteRoute {
+        methods: &[Method::GET],
+        path: "/{site}/drafts/pages/{*slug}",
+        class: Some(SiteRouteClass::SiteOrigin),
+    },
+    SiteRoute {
+        methods: &[Method::GET],
+        path: "/{site}/drafts/sources/{source_ref}",
+        class: Some(SiteRouteClass::SiteOrigin),
+    },
+    SiteRoute {
+        methods: &[Method::POST],
+        path: "/{site}/drafts/sources/{source_ref}/blobs",
+        class: Some(SiteRouteClass::SiteOrigin),
+    },
+    SiteRoute {
+        methods: &[Method::POST],
+        path: "/{site}/edits",
+        class: Some(SiteRouteClass::SiteOrigin),
+    },
+    SiteRoute {
+        methods: &[Method::GET],
+        path: "/{site}/conflicts/{conflict_id}",
+        class: Some(SiteRouteClass::SiteOrigin),
+    },
+    SiteRoute {
+        methods: &[Method::GET],
+        path: "/{site}/library",
+        class: Some(SiteRouteClass::SiteOrigin),
+    },
+    SiteRoute {
+        methods: &[Method::GET],
+        path: "/{site}/knowledge/search",
+        class: Some(SiteRouteClass::SiteOrigin),
+    },
 ];
 
 /// The start-up check of a site route table: every row has a class, and no method and path has
@@ -235,7 +277,18 @@ pub async fn dispatch(
         Err(refusal) => return platform_http::reject(refusal),
     };
     match class {
-        SiteRouteClass::SiteOrigin => content(&state, &context, &site, &parts).await,
+        SiteRouteClass::SiteOrigin if is_content(parts.uri.path()) => {
+            content(&state, &context, &site, &parts).await
+        }
+        SiteRouteClass::SiteOrigin => {
+            // The routes of the site owner session: their handlers arrive with tasks 7.2, 8.2 and
+            // 8.4. Until then a site owner session gets 404, and every other caller 401.
+            match site_sessions::site_owner(&state, &parts, &site).await {
+                Ok(Some(_)) => platform_http::reject(FailureKind::RouteNotFound),
+                Ok(None) => platform_http::reject(FailureKind::Unauthenticated),
+                Err(refusal) => refusal,
+            }
+        }
         SiteRouteClass::Management | SiteRouteClass::Release => {
             // A release from the site's page comes with the site cookie and no bearer.
             if class == SiteRouteClass::Release
@@ -311,6 +364,11 @@ pub async fn dispatch(
             site_sessions::open_session(&state, &site, &parts.headers, body).await
         }
     }
+}
+
+/// Whether `path` is a route of the Content Delivery API, the `public` class of ADR-0017.
+fn is_content(path: &str) -> bool {
+    path.split('/').nth(4) == Some("content")
 }
 
 /// The site and the class of the row that holds `method` and `path`.
