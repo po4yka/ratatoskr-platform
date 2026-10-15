@@ -252,13 +252,19 @@ fn routes() -> Vec<Route> {
             "get",
             "/v1/sites/{site}/library",
             None,
-            ("200", json!({"items": []})),
+            (
+                "200",
+                json!({"items": [], "limit": 25, "offset": 0, "has_more": false}),
+            ),
         ),
         (
             "get",
             "/v1/sites/{site}/knowledge/search",
             None,
-            ("200", json!({"items": []})),
+            (
+                "200",
+                json!({"items": [], "limit": 25, "offset": 0, "has_more": false}),
+            ),
         ),
     ]
 }

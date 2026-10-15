@@ -308,7 +308,7 @@ impl<'a> KnowledgeClient<'a> {
     }
 }
 
-const SEARCH_PARAMETERS: &[Parameter] = &[
+pub(crate) const SEARCH_PARAMETERS: &[Parameter] = &[
     Parameter {
         name: "q",
         location: In::Query,

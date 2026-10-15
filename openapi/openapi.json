@@ -2648,6 +2648,48 @@
         ],
         "type": "object"
       },
+      "SignInCodeIssued": {
+        "description": "The answer of `POST /v1/sites/{site}/sign-in-codes`.",
+        "properties": {
+          "code": {
+            "description": "The single-use code. It is shown once and expires after 60 seconds.",
+            "type": "string"
+          },
+          "expires_at": {
+            "description": "When the code expires.",
+            "type": "string"
+          },
+          "redirect_url": {
+            "description": "The SDK callback page of the approved hostname, with the code.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "redirect_url",
+          "expires_at"
+        ],
+        "type": "object"
+      },
+      "SignInCodeRequest": {
+        "additionalProperties": false,
+        "description": "What the owner's primary session sends to `POST /v1/sites/{site}/sign-in-codes`.",
+        "properties": {
+          "challenge": {
+            "description": "The PKCE S256 challenge of the site's verifier: 43 base64url characters.",
+            "type": "string"
+          },
+          "return_path": {
+            "description": "The path on the site to return to: it starts with one `/`, at most 1024 bytes.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "challenge",
+          "return_path"
+        ],
+        "type": "object"
+      },
       "SignalAccepted": {
         "description": "What a source gets back.",
         "properties": {
@@ -2737,6 +2779,224 @@
           }
         ]
       },
+      "SiteBlobUploaded": {
+        "additionalProperties": false,
+        "description": "The answer of `POST .../drafts/sources/{source_ref}/blobs`: the stored content of an edit.",
+        "properties": {
+          "content_blob": {
+            "$ref": "#/components/schemas/BlobRef",
+            "description": "The stored content, owned by `ratatoskr-notes`."
+          },
+          "content_hash": {
+            "description": "The lowercase hex SHA-256 of the content.",
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "content_blob",
+          "content_hash"
+        ],
+        "type": "object"
+      },
+      "SiteConflict": {
+        "additionalProperties": false,
+        "description": "The answer of `GET /v1/sites/{site}/conflicts/{conflict_id}`: one conflict of a note in the\nsite's publications, with no vault path and no connection.",
+        "properties": {
+          "base_hash": {
+            "description": "The hash of the revision that the edit read.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "conflict_id": {
+            "description": "The conflict.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "current_hash": {
+            "description": "The hash of the revision that the vault holds.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "merge_proposal": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SiteMergeProposal"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The merge proposal, when `ratatoskr-notes` made one."
+          },
+          "operation_id": {
+            "description": "The operation of the edit that met it.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "source_ref": {
+            "description": "The note of the conflict.",
+            "type": "string"
+          },
+          "state": {
+            "description": "`open` or `resolved`.",
+            "type": "string"
+          },
+          "texts": {
+            "$ref": "#/components/schemas/SiteConflictTexts",
+            "description": "The texts of the sides and of the proposal."
+          },
+          "texts_over_limit": {
+            "description": "The sides that are larger than 1 MiB and so are not in `texts`.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "writer_hash": {
+            "description": "The hash of the content of the edit.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "conflict_id",
+          "operation_id",
+          "source_ref",
+          "state",
+          "texts",
+          "texts_over_limit"
+        ],
+        "type": "object"
+      },
+      "SiteConflictTexts": {
+        "additionalProperties": false,
+        "description": "The texts of a conflict of a Markdown or plain-text note, when each is at most 1 MiB.",
+        "properties": {
+          "base": {
+            "description": "The revision that the edit read.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "current": {
+            "description": "The revision that the vault holds.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "merged": {
+            "description": "The merge proposal of `ratatoskr-notes`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "writer": {
+            "description": "The content of the edit.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "SiteDraft": {
+        "additionalProperties": false,
+        "description": "The source of one note in the site's publications, for the owner session of the site\n(`GET .../drafts/pages/{slug}` and `GET .../drafts/sources/{source_ref}`).",
+        "properties": {
+          "markdown": {
+            "description": "The Markdown source of the note.",
+            "type": "string"
+          },
+          "revision": {
+            "description": "The lowercase hex SHA-256 of the note's current bytes: the `base_hash` of the next edit.",
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "slug": {
+            "description": "The slug of the note in the current release; absent when the note is not published.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source_ref": {
+            "description": "The opaque reference of the note. Only a site owner session sees it; it names no vault path.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_ref",
+          "revision",
+          "markdown"
+        ],
+        "type": "object"
+      },
+      "SiteEditAccepted": {
+        "description": "The answer of `POST /v1/sites/{site}/edits`: an operation to follow, never a result.",
+        "properties": {
+          "operation_id": {
+            "description": "The operation of the write. The site's event stream sends `edit.completed` or\n`edit.conflicted` with this id.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "status": {
+            "description": "Always `accepted` here.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation_id",
+          "status"
+        ],
+        "type": "object"
+      },
+      "SiteEditRequest": {
+        "additionalProperties": false,
+        "description": "What the owner session sends to `POST /v1/sites/{site}/edits`: the content names a stored blob,\nnever inline text.",
+        "properties": {
+          "base_hash": {
+            "description": "The lowercase hex SHA-256 of the revision that the owner read and changed.",
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "content_blob": {
+            "$ref": "#/components/schemas/BlobRef",
+            "description": "The new content, uploaded first to `POST .../drafts/sources/{source_ref}/blobs`."
+          },
+          "content_hash": {
+            "description": "The lowercase hex SHA-256 of the new content.",
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "description": "A client-chosen key, 1 to 255 characters: a repeated edit with the same key answers the\nsame operation and writes nothing more.",
+            "type": "string"
+          },
+          "source_ref": {
+            "description": "The note to change.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_ref",
+          "base_hash",
+          "content_blob",
+          "content_hash",
+          "idempotency_key"
+        ],
+        "type": "object"
+      },
       "SiteList": {
         "description": "The answer of `GET /v1/sites`: the owner's sites, each with the state of its manifest.",
         "properties": {
@@ -2785,6 +3045,25 @@
         ],
         "type": "object"
       },
+      "SiteMergeProposal": {
+        "additionalProperties": false,
+        "description": "The merge proposal of a conflict.",
+        "properties": {
+          "has_overlapping_hunks": {
+            "description": "Whether the two changes overlap.",
+            "type": "boolean"
+          },
+          "merged_hash": {
+            "description": "The lowercase hex SHA-256 of the proposed merge.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "merged_hash",
+          "has_overlapping_hunks"
+        ],
+        "type": "object"
+      },
       "SiteReleaseBuildAccepted": {
         "description": "What a client gets back from an accepted build request.",
         "properties": {
@@ -2801,6 +3080,43 @@
         "required": [
           "operation_id",
           "status"
+        ],
+        "type": "object"
+      },
+      "SiteSessionOpened": {
+        "description": "The answer of `POST /v1/sites/{site}/sessions`. The credential is only in the cookie.",
+        "properties": {
+          "expires_at": {
+            "description": "When the session ends at the latest.",
+            "type": "string"
+          },
+          "return_path": {
+            "description": "The path on the site to return to.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "return_path",
+          "expires_at"
+        ],
+        "type": "object"
+      },
+      "SiteSessionRequest": {
+        "additionalProperties": false,
+        "description": "What the site's callback page sends to `POST /v1/sites/{site}/sessions`.",
+        "properties": {
+          "code": {
+            "description": "The code from the redirect.",
+            "type": "string"
+          },
+          "verifier": {
+            "description": "The PKCE verifier that the site kept.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "verifier"
         ],
         "type": "object"
       },
@@ -3374,6 +3690,12 @@
         "description": "A session credential, presented as `Authorization: Bearer <credential>`. It must have been issued for this listener's audience; one issued for another surface does not authenticate here.",
         "scheme": "bearer",
         "type": "http"
+      },
+      "siteSessionCookie": {
+        "description": "A site owner session, presented only in the host-only cookie `__Host-ratatoskr-site` that the sign-in of one site sets. It authenticates only on the owner routes of that site; a bearer header is never read as one.",
+        "in": "cookie",
+        "name": "__Host-ratatoskr-site",
+        "type": "apiKey"
       },
       "sourceBearer": {
         "description": "The credential issued to a registered webhook source, presented as `Authorization: Bearer <credential>`. It authenticates the source, not a person.",
@@ -7151,6 +7473,708 @@
         ]
       }
     },
+    "/v1/sites/{site}/conflicts/{conflict_id}": {
+      "get": {
+        "description": "The base, current and proposed versions of a conflict of a note of the site's publications, and the merge proposal. The owner resolves it with a new edit whose `base_hash` is the current revision. Capability `draft.read`, for the site owner session of the site.",
+        "operationId": "readSiteConflict",
+        "parameters": [
+          {
+            "description": "The site id: 3 to 40 lower-case letters, digits and `-`.",
+            "in": "path",
+            "name": "site",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The conflict that the event stream named in `edit.conflicted`.",
+            "in": "path",
+            "name": "conflict_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SiteConflict"
+                }
+              }
+            },
+            "description": "The conflict."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No site owner session of this site, in its cookie."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The site's effective capability set lacks the route's capability (`edge.capability_not_granted`), or an unsafe request lacks `X-Ratatoskr-Site-Request: 1` or the `Origin` of the approved hostname."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The note, the page or the conflict is not in the site's publications."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The effective capability set or the service behind the route could not be read; retryable."
+          }
+        },
+        "security": [
+          {
+            "siteSessionCookie": []
+          }
+        ],
+        "summary": "Read a conflict of an edit",
+        "tags": [
+          "sites"
+        ]
+      }
+    },
+    "/v1/sites/{site}/drafts/pages/{slug}": {
+      "get": {
+        "description": "The Markdown source, the reference and the current revision of the note behind a page of the current release. Capability `draft.read`, for the site owner session of the site.",
+        "operationId": "readSiteDraftPage",
+        "parameters": [
+          {
+            "description": "The site id: 3 to 40 lower-case letters, digits and `-`.",
+            "in": "path",
+            "name": "site",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The slug of a page of the site's current release.",
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SiteDraft"
+                }
+              }
+            },
+            "description": "The source of the note."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No site owner session of this site, in its cookie."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The site's effective capability set lacks the route's capability (`edge.capability_not_granted`), or an unsafe request lacks `X-Ratatoskr-Site-Request: 1` or the `Origin` of the approved hostname."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The note, the page or the conflict is not in the site's publications."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The effective capability set or the service behind the route could not be read; retryable."
+          }
+        },
+        "security": [
+          {
+            "siteSessionCookie": []
+          }
+        ],
+        "summary": "Read the source of a published page",
+        "tags": [
+          "sites"
+        ]
+      }
+    },
+    "/v1/sites/{site}/drafts/sources/{source_ref}": {
+      "get": {
+        "description": "The Markdown source and the current revision of a note of the site's publications, published or not. Capability `draft.read`, for the site owner session of the site.",
+        "operationId": "readSiteDraftSource",
+        "parameters": [
+          {
+            "description": "The site id: 3 to 40 lower-case letters, digits and `-`.",
+            "in": "path",
+            "name": "site",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The opaque reference of a note of the site.",
+            "in": "path",
+            "name": "source_ref",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SiteDraft"
+                }
+              }
+            },
+            "description": "The source of the note."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No site owner session of this site, in its cookie."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The site's effective capability set lacks the route's capability (`edge.capability_not_granted`), or an unsafe request lacks `X-Ratatoskr-Site-Request: 1` or the `Origin` of the approved hostname."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The note, the page or the conflict is not in the site's publications."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The effective capability set or the service behind the route could not be read; retryable."
+          }
+        },
+        "security": [
+          {
+            "siteSessionCookie": []
+          }
+        ],
+        "summary": "Read the source of a note of the site",
+        "tags": [
+          "sites"
+        ]
+      }
+    },
+    "/v1/sites/{site}/drafts/sources/{source_ref}/blobs": {
+      "post": {
+        "description": "The body is the new content of the note, at most 16 MiB. Edge stores it in `ratatoskr-notes` for the connection of the note and keeps none of it; the answer names the stored blob for the edit. Capability `notes.edit`, budget class `transfer`, for the site owner session of the site, with `X-Ratatoskr-Site-Request: 1` and the approved `Origin`.",
+        "operationId": "uploadSiteEditContent",
+        "parameters": [
+          {
+            "description": "The site id: 3 to 40 lower-case letters, digits and `-`.",
+            "in": "path",
+            "name": "site",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The opaque reference of a note of the site.",
+            "in": "path",
+            "name": "source_ref",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "format": "binary",
+                "type": "string"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SiteBlobUploaded"
+                }
+              }
+            },
+            "description": "The stored content."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "An empty body."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No site owner session of this site, in its cookie."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The site's effective capability set lacks the route's capability (`edge.capability_not_granted`), or an unsafe request lacks `X-Ratatoskr-Site-Request: 1` or the `Origin` of the approved hostname."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The note, the page or the conflict is not in the site's publications."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The content is larger than 16 MiB."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The effective capability set or the service behind the route could not be read; retryable."
+          }
+        },
+        "security": [
+          {
+            "siteSessionCookie": []
+          }
+        ],
+        "summary": "Upload the new content of a note",
+        "tags": [
+          "sites"
+        ]
+      }
+    },
+    "/v1/sites/{site}/edits": {
+      "post": {
+        "description": "Changes the content of one existing note of the site's publications to an uploaded blob, if the note is still at `base_hash`. The write is pending until the vault has it: the site's event stream sends `edit.completed` with the new revision, or `edit.conflicted` when the note changed in the meantime. A repeated request with the same `idempotency_key` answers the same operation. Capability `notes.edit`, for the site owner session of the site, with `X-Ratatoskr-Site-Request: 1` and the approved `Origin`.",
+        "operationId": "editSiteNote",
+        "parameters": [
+          {
+            "description": "The site id: 3 to 40 lower-case letters, digits and `-`.",
+            "in": "path",
+            "name": "site",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SiteEditRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SiteEditAccepted"
+                }
+              }
+            },
+            "description": "Accepted; follow the operation."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The body is not an edit."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No site owner session of this site, in its cookie."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The site's effective capability set lacks the route's capability (`edge.capability_not_granted`), or an unsafe request lacks `X-Ratatoskr-Site-Request: 1` or the `Origin` of the approved hostname."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The note, the page or the conflict is not in the site's publications."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The `idempotency_key` names another edit."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The effective capability set or the service behind the route could not be read; retryable."
+          }
+        },
+        "security": [
+          {
+            "siteSessionCookie": []
+          }
+        ],
+        "summary": "Change the content of one note",
+        "tags": [
+          "sites"
+        ]
+      }
+    },
+    "/v1/sites/{site}/knowledge/search": {
+      "get": {
+        "description": "Searches only what the user of the site owner session owns, with the bounds of `GET /v1/library/search`: a query of at most 512 Unicode scalar values and a `limit` from 1 through 100. A tenant parameter is refused. Capability `knowledge.search`, for the site owner session of the site.",
+        "operationId": "searchSiteKnowledge",
+        "parameters": [
+          {
+            "description": "Optional search text, at most 512 Unicode scalar values.",
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Optional effective state: read or unread.",
+            "in": "query",
+            "name": "read_state",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Page size from 1 through 100; defaults to 25.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "uint32",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Non-negative zero-based page offset; defaults to 0.",
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LibraryPage"
+                }
+              }
+            },
+            "description": "One page of the owner's items."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "A parameter is invalid, or a tenant is named."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No site owner session of this site, in its cookie."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The site's effective capability set lacks the route's capability (`edge.capability_not_granted`), or an unsafe request lacks `X-Ratatoskr-Site-Request: 1` or the `Origin` of the approved hostname."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The effective capability set or the service behind the route could not be read; retryable."
+          }
+        },
+        "security": [
+          {
+            "siteSessionCookie": []
+          }
+        ],
+        "summary": "Search the owner's knowledge from the site",
+        "tags": [
+          "sites"
+        ]
+      }
+    },
+    "/v1/sites/{site}/library": {
+      "get": {
+        "description": "The same items, bounds and read state as `GET /v1/library/search`, for the user of the site owner session; that user is the only tenant, and a tenant parameter is refused. Capability `library.read`, for the site owner session of the site.",
+        "operationId": "readSiteLibrary",
+        "parameters": [
+          {
+            "description": "Optional search text, at most 512 Unicode scalar values.",
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Optional effective state: read or unread.",
+            "in": "query",
+            "name": "read_state",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Page size from 1 through 100; defaults to 25.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "uint32",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Non-negative zero-based page offset; defaults to 0.",
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LibraryPage"
+                }
+              }
+            },
+            "description": "One page of the owner's library."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "A parameter is invalid, or a tenant is named."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No site owner session of this site, in its cookie."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The site's effective capability set lacks the route's capability (`edge.capability_not_granted`), or an unsafe request lacks `X-Ratatoskr-Site-Request: 1` or the `Origin` of the approved hostname."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The effective capability set or the service behind the route could not be read; retryable."
+          }
+        },
+        "security": [
+          {
+            "siteSessionCookie": []
+          }
+        ],
+        "summary": "Read the owner's library from the site",
+        "tags": [
+          "sites"
+        ]
+      }
+    },
     "/v1/sites/{site}/manifest": {
       "get": {
         "description": "Reads the active manifest of the site, the last valid submission, with its SHA-256. An approval names that digest. The sites service answers; Edge forwards the request after it checks the caller. Only a primary session whose user holds the live `platform.owner` grant may call this route (class `management`, ADR-0017).",
@@ -7535,6 +8559,158 @@
           }
         ],
         "summary": "Request a release build of a site",
+        "tags": [
+          "sites"
+        ]
+      }
+    },
+    "/v1/sites/{site}/sessions": {
+      "post": {
+        "description": "The site's callback page redeems the code with its PKCE verifier, from the approved hostname. The answer sets the host-only cookie `__Host-ratatoskr-site` of a site owner session (`HttpOnly`, `Secure`, `SameSite=Strict`, `Path=/`), which ends 12 hours after issue or 1 hour after its last use. Every invalid code is the same `401`. Class `sign-in` (ADR-0017).",
+        "operationId": "openSiteSession",
+        "parameters": [
+          {
+            "description": "The site id: 3 to 40 lower-case letters, digits and `-`.",
+            "in": "path",
+            "name": "site",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SiteSessionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SiteSessionOpened"
+                }
+              }
+            },
+            "description": "The session is in the cookie."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The body is not a code and a verifier."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The code was not accepted."
+          }
+        },
+        "security": [],
+        "summary": "Redeem a sign-in code on the site",
+        "tags": [
+          "sites"
+        ]
+      }
+    },
+    "/v1/sites/{site}/sign-in-codes": {
+      "post": {
+        "description": "The owner's primary session approves a sign-in on an approved site: the body names the PKCE S256 challenge of the site's verifier and the path to return to. The answer carries a single-use code that expires after 60 seconds, and the address of the site's callback page with the code. The answer is not stored and carries `Cache-Control: no-store` and `Referrer-Policy: no-referrer`. Class `management` (ADR-0017).",
+        "operationId": "requestSiteSignInCode",
+        "parameters": [
+          {
+            "description": "The site id: 3 to 40 lower-case letters, digits and `-`.",
+            "in": "path",
+            "name": "site",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SignInCodeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignInCodeIssued"
+                }
+              }
+            },
+            "description": "The code and the callback address."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The body is not a challenge and a path."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No credential, or one that does not authenticate."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Not a primary session with the live `platform.owner` grant."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "`sites.site_not_found`: the site has no approved manifest."
+          }
+        },
+        "security": [
+          {
+            "sessionBearer": []
+          }
+        ],
+        "summary": "Approve a sign-in of the owner on one site",
         "tags": [
           "sites"
         ]

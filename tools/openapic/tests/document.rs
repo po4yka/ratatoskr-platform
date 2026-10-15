@@ -198,13 +198,24 @@ fn the_document_discloses_no_internal_detail() {
 fn every_route_names_its_credential() {
     // The routes that are public, named rather than derived: a route becoming public by accident
     // must fail here, and a list is the only thing a diff shows.
-    const PUBLIC: [&str; 6] = [
+    const PUBLIC: [&str; 7] = [
         "/v1/sessions/telegram",
         "/v1/oauth/{provider}/callback",
         "/v1/devices/pair",
         "/v1/sessions/device",
         "/v1/sessions/refresh",
         "/v1/status",
+        "/v1/sites/{site}/sessions",
+    ];
+    // The routes of the site owner session (SITE-027): its cookie, never a bearer.
+    const SITE_SESSION: [&str; 7] = [
+        "/v1/sites/{site}/drafts/pages/{slug}",
+        "/v1/sites/{site}/drafts/sources/{source_ref}",
+        "/v1/sites/{site}/drafts/sources/{source_ref}/blobs",
+        "/v1/sites/{site}/edits",
+        "/v1/sites/{site}/conflicts/{conflict_id}",
+        "/v1/sites/{site}/library",
+        "/v1/sites/{site}/knowledge/search",
     ];
 
     let document = generated();
@@ -216,9 +227,13 @@ fn every_route_names_its_credential() {
         .collect();
     assert_eq!(
         schemes,
-        ["sessionBearer".to_owned(), "sourceBearer".to_owned()]
-            .into_iter()
-            .collect()
+        [
+            "sessionBearer".to_owned(),
+            "siteSessionCookie".to_owned(),
+            "sourceBearer".to_owned(),
+        ]
+        .into_iter()
+        .collect()
     );
 
     for (path, item) in document["paths"].as_object().expect("paths") {
@@ -241,6 +256,8 @@ fn every_route_names_its_credential() {
 
             let expected = if path.starts_with("/v1/ingest/") {
                 "sourceBearer"
+            } else if SITE_SESSION.contains(&path.as_str()) {
+                "siteSessionCookie"
             } else {
                 "sessionBearer"
             };

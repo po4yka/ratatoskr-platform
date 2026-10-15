@@ -82,6 +82,9 @@ pub enum Security {
     Session,
     /// The credential a registered webhook source presents.
     SourceToken,
+    /// A site owner session, presented only in the host-only cookie of its site's origin
+    /// (workspace change `add-site-owner-editing-and-live`).
+    SiteSession,
     /// None: the route is how a caller becomes authenticated, or is reached by a party that has no
     /// credential of ours to present. Spelled rather than omitted, because a route with no
     /// `security` key reads as an oversight and this must read as a decision.
@@ -95,6 +98,7 @@ impl Security {
         match self {
             Self::Session => Some("sessionBearer"),
             Self::SourceToken => Some("sourceBearer"),
+            Self::SiteSession => Some("siteSessionCookie"),
             Self::None => None,
         }
     }
@@ -110,6 +114,11 @@ impl Security {
             Self::SourceToken => {
                 "The credential issued to a registered webhook source, presented as \
                  `Authorization: Bearer <credential>`. It authenticates the source, not a person."
+            }
+            Self::SiteSession => {
+                "A site owner session, presented only in the host-only cookie \
+                 `__Host-ratatoskr-site` that the sign-in of one site sets. It authenticates only \
+                 on the owner routes of that site; a bearer header is never read as one."
             }
             Self::None => "",
         }
@@ -276,14 +285,21 @@ pub fn document(api_version: &str, surfaces: &[ApiSurface]) -> Result<Value, Doc
     let mut security_schemes = serde_json::Map::new();
     for security in routes.iter().map(|route| route.security) {
         if let Some(scheme) = security.scheme() {
-            security_schemes.insert(
-                scheme.to_owned(),
+            let object = if security == Security::SiteSession {
+                json!({
+                    "type": "apiKey",
+                    "in": "cookie",
+                    "name": "__Host-ratatoskr-site",
+                    "description": security.description(),
+                })
+            } else {
                 json!({
                     "type": "http",
                     "scheme": "bearer",
                     "description": security.description(),
-                }),
-            );
+                })
+            };
+            security_schemes.insert(scheme.to_owned(), object);
         }
     }
 

@@ -47,6 +47,7 @@ pub mod operations;
 pub mod sessions;
 pub mod site_approvals;
 pub mod site_capabilities;
+pub mod site_docs;
 pub mod site_events;
 pub mod site_reads;
 pub mod site_releases;
@@ -491,6 +492,7 @@ pub fn surface() -> ApiSurface {
                 site_reads::LIST_DOC,
                 site_reads::MANIFEST_DOC,
             ])
+            .chain(site_docs::DOCS)
             .collect(),
         register: register_schemas,
     }
@@ -501,6 +503,7 @@ pub fn surface() -> ApiSurface {
 /// Registering a type is what puts it in `components.schemas`; a route referring to one that is not
 /// registered fails the document build rather than emitting a dangling reference.
 fn register_schemas(generator: &mut schemars::SchemaGenerator) {
+    site_docs::register(generator);
     generator.subschema_for::<captures::SubmitCapture>();
     generator.subschema_for::<captures::CaptureAccepted>();
     generator.subschema_for::<captures::SubmitBlobCapture>();
