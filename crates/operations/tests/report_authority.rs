@@ -547,6 +547,53 @@ async fn notes_write_kinds_accept_only_notes_reports() {
     harness.cleanup().await.expect("cleanup");
 }
 
+/// Workspace SITE-025 task 6.10: Edge mints a site release build for the sites lane, and only that
+/// lane reports on it (spec `site-publications`, "Another identity reports for a build").
+#[tokio::test]
+async fn sites_build_accepts_only_the_sites_lane() {
+    const KIND: &str = "sites.release.build";
+    let kinds = minted_kinds();
+    assert!(
+        kinds.iter().any(|minted| minted == KIND),
+        "{KIND} is not minted by Platform: {kinds:?}"
+    );
+    let harness = TestDatabase::create().await.expect("a test database");
+    let pool = harness.pool();
+    let accepted = platform_operations::accept(
+        pool,
+        OWNER,
+        KIND,
+        CORRELATION,
+        None,
+        Some("ratatoskr-sites"),
+        now(),
+    )
+    .await;
+    assert!(
+        accepted.is_ok(),
+        "{KIND} refuses the sites lane: {:?}",
+        accepted.err()
+    );
+    let operation = accepted.expect("accepted").operation_id;
+
+    expect(
+        pool,
+        operation,
+        &message("ratatoskr-notes", Some(OWNER), operation),
+        Outcome::Rejected,
+    )
+    .await;
+    expect(
+        pool,
+        operation,
+        &message("ratatoskr-sites", Some(OWNER), operation),
+        Outcome::Applied,
+    )
+    .await;
+
+    harness.cleanup().await.expect("cleanup");
+}
+
 /// The quoted value on the line after `marker`, or the first quoted value of the line holding it.
 fn literal_after(source: &str, marker: &str) -> Vec<String> {
     source
@@ -567,6 +614,7 @@ fn minted_kinds() -> Vec<String> {
         include_str!("../../public-api/src/channel_digests.rs"),
         include_str!("../../public-api/src/notes.rs"),
         include_str!("../../public-api/src/notes_writes.rs"),
+        include_str!("../../public-api/src/site_releases.rs"),
     ] {
         for line in source.lines() {
             let line = line.trim();
@@ -694,6 +742,10 @@ fn every_mint_site_passes_a_lane_for_a_listed_kind() {
         (
             "notes writes",
             include_str!("../../public-api/src/notes_writes.rs"),
+        ),
+        (
+            "site releases",
+            include_str!("../../public-api/src/site_releases.rs"),
         ),
     ] {
         let literals = source.matches("Intake {").count();
