@@ -152,9 +152,20 @@ async fn upload_content(
     body: Body,
 ) -> Result<SiteBlobUploaded, FailureKind> {
     let scoped = scope_of(state, principal, correlation, site, source_ref).await?;
+    // Only content over the bound is too large; a body that breaks off is an invalid request.
     let content = axum::body::to_bytes(body, MAX_CONTENT_BYTES)
         .await
-        .map_err(|_| FailureKind::PayloadTooLarge)?;
+        .map_err(|error| {
+            // The bound of this read, or the bound of the route's layer, wrapped in a body error.
+            let mut cause: Option<&(dyn std::error::Error + 'static)> = Some(&error);
+            while let Some(current) = cause {
+                if current.is::<http_body_util::LengthLimitError>() {
+                    return FailureKind::PayloadTooLarge;
+                }
+                cause = current.source();
+            }
+            FailureKind::InvalidRequest
+        })?;
     if content.is_empty() {
         return Err(FailureKind::InvalidRequest);
     }

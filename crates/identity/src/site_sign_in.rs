@@ -15,6 +15,9 @@ use crate::to_offset;
 /// How long a code is acceptable.
 pub const CODE_TTL: jiff::SignedDuration = jiff::SignedDuration::from_secs(60);
 
+/// The grant that the owner must hold when a code is issued and when it is redeemed.
+pub const OWNER_GRANT: &str = "platform.owner";
+
 /// Everything issuing a code needs.
 #[derive(Debug, Clone)]
 pub struct NewSignInCode<'a> {
@@ -41,8 +44,9 @@ pub struct IssueRefused;
 
 /// Issue a code. Answers the code, which exists only in this answer; the table holds its digest.
 ///
-/// The approving session must be live and primary: not opened by a paired device, and not a site
-/// owner session. Any other session is [`IssueRefused`], and nothing is stored.
+/// The approving session must be a live browser session that no paired device opened: the
+/// owner's primary session in the web client (review L3 of SITE-027 narrows "primary" to this
+/// allow-list). Any other session is [`IssueRefused`], and nothing is stored.
 ///
 /// # Errors
 ///
@@ -52,7 +56,7 @@ pub async fn issue(
     new: &NewSignInCode<'_>,
 ) -> Result<Result<String, IssueRefused>, PersistenceError> {
     let primary: Option<bool> = sqlx::query_scalar(
-        "select device_id is null and kind not in ('device', 'site_owner', 'service')
+        "select device_id is null and kind = 'browser'
            from identity.sessions
           where session_id = $1 and user_id = $2 and revoked_at is null and expires_at > $3",
     )
@@ -122,8 +126,9 @@ pub struct Unauthenticated;
 /// Redeem a code.
 ///
 /// A live code is consumed by its first presentation, accepted or not, so a code can never be
-/// tried twice. The presentation is accepted only at the code's own site and with the verifier
-/// whose S256 challenge the code holds. Every refusal is the one value [`Unauthenticated`].
+/// tried twice. The presentation is accepted only at the code's own site, with the verifier whose
+/// S256 challenge the code holds, while the session that approved the code is live, and while the
+/// owner holds [`OWNER_GRANT`]. Every refusal is the one value [`Unauthenticated`].
 ///
 /// # Errors
 ///
@@ -133,20 +138,32 @@ pub async fn redeem(
     presented: &SignInRedeem<'_>,
 ) -> Result<Result<Redeemed, Unauthenticated>, PersistenceError> {
     let digest = crate::SecretDigest::of(presented.code);
-    let row: Option<(Uuid, String, String, String, String)> = sqlx::query_as(
-        "update identity.site_sign_in_codes
+    let row: Option<(Uuid, String, String, String, String, bool)> = sqlx::query_as(
+        "update identity.site_sign_in_codes c
             set consumed_at = $2
           where code_hash = $1 and consumed_at is null and expires_at > $2
-         returning user_id, site_id, challenge, return_path, hostname",
+         returning user_id, site_id, challenge, return_path, hostname,
+                   exists (select 1 from identity.sessions s
+                            where s.session_id = c.created_by_session_id
+                              and s.revoked_at is null and s.expires_at > $2)
+               and exists (select 1 from identity.grants g
+                            where g.user_id = c.user_id and g.capability = $3
+                              and g.revoked_at is null
+                              and (g.expires_at is null or g.expires_at > $2))",
     )
     .bind(digest.as_bytes().as_slice())
     .bind(to_offset(presented.now))
+    .bind(OWNER_GRANT)
     .fetch_optional(&mut **transaction)
     .await
     .map_err(PersistenceError::Query)?;
-    let Some((user_id, site_id, challenge, return_path, hostname)) = row else {
+    let Some((user_id, site_id, challenge, return_path, hostname, approved)) = row else {
         return Ok(Err(Unauthenticated));
     };
+    if !approved {
+        tracing::info!("a site sign-in code outlived its approving session or the owner grant");
+        return Ok(Err(Unauthenticated));
+    }
     if site_id != presented.site_id || challenge != challenge_of(presented.verifier) {
         tracing::info!(
             "a site sign-in code was presented at another site or with another verifier"

@@ -49,6 +49,12 @@ pub trait Handler: Send + Sync {
         message: &Incoming,
         now: jiff::Timestamp,
     ) -> impl Future<Output = Result<Handled, EventingError>> + Send;
+
+    /// Called by [`deliver`] once the transaction of a message that reached
+    /// [`Handler::handle`] is settled: `committed` when it committed, else it rolled back. A
+    /// handler with an effect outside the database (a wake-up of open streams) applies it here,
+    /// so the effect never comes before the commit or after a rollback.
+    fn settled(&self, _message: &Incoming, _committed: bool) {}
 }
 
 /// Deduplicate a message, hand it to `handler`, and record what happened — all in one transaction.
@@ -85,13 +91,18 @@ pub async fn deliver<H: Handler>(
         return Ok(None);
     }
 
-    let outcome = handler.handle(&mut transaction, message, now).await?;
-    Inbox::finish(&mut *transaction, message.message_id, outcome, now).await?;
-    transaction.commit().await.map_err(|error| {
-        EventingError::Persistence(platform_persistence::PersistenceError::Query(error))
-    })?;
+    let applied = async move {
+        let outcome = handler.handle(&mut transaction, message, now).await?;
+        Inbox::finish(&mut *transaction, message.message_id, outcome, now).await?;
+        transaction.commit().await.map_err(|error| {
+            EventingError::Persistence(platform_persistence::PersistenceError::Query(error))
+        })?;
+        Ok(outcome)
+    }
+    .await;
+    handler.settled(message, applied.is_ok());
 
-    Ok(Some(outcome))
+    applied.map(Some)
 }
 
 /// Subscribe to `subjects` on a durable `JetStream` consumer and deliver every message to `handler`

@@ -410,6 +410,10 @@ pub async fn dispatch(
             .await
         }
         SiteRouteClass::SignIn => {
+            // The route is anonymous: each try takes a token of the public rate limit.
+            if let Some(refused) = public_limit(&state, &parts, &site) {
+                return refused;
+            }
             site_sessions::open_session(&state, &site, &parts.headers, body).await
         }
     }
@@ -431,6 +435,10 @@ async fn site_origin(
     site: &str,
     capability: SiteCapability,
 ) -> Response {
+    // The site that the capability check used must be the site of the path that is forwarded.
+    if !gateway::paths::names_site(parts.uri.path(), site) {
+        return platform_http::reject(FailureKind::RouteNotFound);
+    }
     if is_content(parts.uri.path()) {
         return content(state, context, site, &parts, capability).await;
     }
@@ -517,6 +525,13 @@ async fn owner_route(
         // `/v1/library/search`: the same Knowledge question for the same owner. A tenant
         // parameter is not a parameter of the route, so it is refused before Knowledge.
         ["library"] | ["knowledge", "search"] => {
+            // A search needs a query of 1 to 512 characters; the library also browses.
+            let searched = url::form_urlencoded::parse(parts.uri.query().unwrap_or("").as_bytes())
+                .find(|(name, _)| name == "q")
+                .is_some_and(|(_, q)| (1..=512).contains(&q.chars().count()));
+            if below.first() == Some(&"knowledge") && !searched {
+                return platform_http::reject(FailureKind::InvalidRequest);
+            }
             let params = axum::extract::Query::try_from_uri(&parts.uri);
             crate::library::search(State(Arc::clone(state)), principal, params).await
         }
@@ -675,7 +690,11 @@ fn declares_body(headers: &http::HeaderMap) -> bool {
 /// The refusal of a public request of the client of `request` to `site` above the public rate
 /// limit, with its `Retry-After`; `None` when the request is admitted. Edge applies it before it
 /// asks the sites service for the manifest.
-fn public_limit(state: &ApiState, request: &http::request::Parts, site: &str) -> Option<Response> {
+pub(crate) fn public_limit(
+    state: &ApiState,
+    request: &http::request::Parts,
+    site: &str,
+) -> Option<Response> {
     let client = client_key(state, request);
     if state
         .site_limits

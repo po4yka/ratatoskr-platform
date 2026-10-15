@@ -92,11 +92,16 @@ struct SiteLog {
     owners: usize,
 }
 
+/// An event of a delivery that has not settled: its site, the event, and the event's time.
+type Staged = (String, SiteEvent, jiff::Timestamp);
+
 /// The per-site buffers of the site event stream.
 #[derive(Debug)]
 pub struct SiteEventHub {
     epoch: String,
     sites: Mutex<HashMap<String, SiteLog>>,
+    /// The events of deliveries whose transaction has not settled yet, by message id.
+    staged: Mutex<HashMap<uuid::Uuid, Vec<Staged>>>,
     wake: broadcast::Sender<String>,
 }
 
@@ -106,6 +111,7 @@ impl Default for SiteEventHub {
         Self {
             epoch: uuid::Uuid::now_v7().simple().to_string(),
             sites: Mutex::new(HashMap::new()),
+            staged: Mutex::new(HashMap::new()),
             wake,
         }
     }
@@ -120,8 +126,46 @@ enum Read {
 }
 
 impl SiteEventHub {
-    /// Append `event` to the buffer of `site`, at `now`, and wake its connections.
-    pub fn push(&self, site: &str, event: SiteEvent, now: jiff::Timestamp) {
+    /// Hold `event` of `site` until the delivery of `message` settles (review L6). The event is
+    /// kept by its own time: the envelope's `occurred_at`, or `now` without one.
+    fn stage(&self, message: &Incoming, site: String, event: SiteEvent, now: jiff::Timestamp) {
+        let at = message
+            .payload
+            .get("occurred_at")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|occurred| occurred.parse::<jiff::Timestamp>().ok())
+            .map_or(now, |occurred| occurred.min(now));
+        self.staged
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .entry(message.message_id)
+            .or_default()
+            .push((site, event, at));
+    }
+
+    /// The delivery of `message_id` settled: append its events when it committed, else drop
+    /// them.
+    pub fn settle(&self, message_id: uuid::Uuid, committed: bool) {
+        let staged = self
+            .staged
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&message_id);
+        if committed {
+            let now = jiff::Timestamp::now();
+            for (site, event, at) in staged.into_iter().flatten() {
+                self.push(&site, event, at, now);
+            }
+        }
+    }
+
+    /// Append `event` of the time `at` to the buffer of `site` and wake its connections. An event
+    /// older than the window at `now` is not kept.
+    fn push(&self, site: &str, event: SiteEvent, at: jiff::Timestamp, now: jiff::Timestamp) {
+        if at < now - WINDOW_AGE {
+            tracing::debug!("a site event older than the window is not kept");
+            return;
+        }
         {
             let mut sites = self.sites.lock().unwrap_or_else(PoisonError::into_inner);
             if !sites.contains_key(site) && sites.len() >= SITES_MAX {
@@ -133,7 +177,7 @@ impl SiteEventHub {
             let sequence = log.last;
             log.events.push_back(Stored {
                 sequence,
-                at: now,
+                at,
                 event,
             });
             while log.events.len() > WINDOW_EVENTS
@@ -480,8 +524,13 @@ impl Handler for SiteEventProjection {
             }
             _ => return Ok(Outcome::Rejected),
         };
-        self.hub.push(site.as_str(), event, now);
+        self.hub
+            .stage(message, site.as_str().to_owned(), event, now);
         Ok(Outcome::Applied)
+    }
+
+    fn settled(&self, message: &Incoming, committed: bool) {
+        self.hub.settle(message.message_id, committed);
     }
 }
 
@@ -523,9 +572,13 @@ impl Handler for SiteEditReports {
         if let Some((site, source_ref, revision)) = completed
             && let Some(event) = edit_completed(operation_id, &source_ref, &revision)
         {
-            self.hub.push(&site, event, now);
+            self.hub.stage(message, site, event, now);
         }
         Ok(outcome)
+    }
+
+    fn settled(&self, message: &Incoming, committed: bool) {
+        self.hub.settle(message.message_id, committed);
     }
 }
 
@@ -575,9 +628,13 @@ impl Handler for SiteEditConflicts {
                 conflict_id,
                 source_ref,
             });
-            self.hub.push(&site, event, now);
+            self.hub.stage(message, site, event, now);
         }
         Ok(outcome)
+    }
+
+    fn settled(&self, message: &Incoming, committed: bool) {
+        self.hub.settle(message.message_id, committed);
     }
 }
 
