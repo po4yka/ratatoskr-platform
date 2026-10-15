@@ -222,6 +222,10 @@ Knowledge observation is healthy. That observation accepts only a document namin
 a partial or unrelated document cannot enable either route family. The cross-repository contract is
 `library-search-read-state` in the `ratatoskr-workspace` OpenSpec store.
 
+`notes.vaults` appears while the database is reachable and the deployment routes the notes service
+(`RATATOSKR__GATEWAY__ROUTES__NOTES__*`). The notes service serves no capability document, so the
+name follows the route and not a sample of notes.
+
 `GET /v1/status` is the anonymous public availability surface. It returns four stable groups: API,
 storage, command delivery, and connected services. Cached observations supply every value. It preserves
 `degraded`, `unavailable`, `unknown`, and stale states, sets `Cache-Control: no-store`, and never

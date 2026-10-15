@@ -396,6 +396,7 @@ fn every_capability_names_a_route_this_build_serves() {
             Capability::ContentSubmit => "/v1/captures",
             Capability::LibraryReadState => "/v1/library/items/{analysis_id}/read-state",
             Capability::LibrarySearch => "/v1/library/search",
+            Capability::NotesVaults => "/v1/notes/connections",
             Capability::TelegramMiniApp => "/v1/sessions/telegram",
             // A new variant arrives here and fails until somebody names the route it promises,
             // which is the point: the vocabulary may not grow ahead of the route tree.

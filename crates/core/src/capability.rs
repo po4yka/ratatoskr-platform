@@ -24,6 +24,9 @@ pub enum Capability {
     LibraryReadState,
     /// `library.search` — searching or browsing the caller-owned library.
     LibrarySearch,
+    /// `notes.vaults` — connecting and reading Obsidian vaults through the notes route, starting at
+    /// `POST /v1/notes/connections`.
+    NotesVaults,
     /// `telegram.mini_app` — exchanging a `ratatoskr-telegram` identity assertion for a session, at
     /// `POST /v1/sessions/telegram`.
     TelegramMiniApp,
@@ -33,10 +36,11 @@ impl Capability {
     /// Every capability, in wire order — sorted, so two consecutive responses from an unchanged
     /// deployment are byte-identical. The array length is the documented count, so adding a variant
     /// without extending this does not compile.
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 5] = [
         Self::ContentSubmit,
         Self::LibraryReadState,
         Self::LibrarySearch,
+        Self::NotesVaults,
         Self::TelegramMiniApp,
     ];
 
@@ -47,6 +51,7 @@ impl Capability {
             Self::ContentSubmit => "content.submit",
             Self::LibraryReadState => "library.read_state",
             Self::LibrarySearch => "library.search",
+            Self::NotesVaults => "notes.vaults",
             Self::TelegramMiniApp => "telegram.mini_app",
         }
     }
@@ -61,6 +66,9 @@ impl Capability {
             // operation never progresses. From the client's side that is not a working feature.
             Self::ContentSubmit => Requirement::DatabaseAndBus,
             Self::LibraryReadState | Self::LibrarySearch => Requirement::DatabaseAndKnowledge,
+            // Not a sample of notes: the notes service serves no capability document. The route
+            // is what Edge needs to serve the connect and every other notes path.
+            Self::NotesVaults => Requirement::DatabaseAndNotesRoute,
             // No bus: exchanging an assertion for a session touches the database and nothing else.
             // The key is what makes it possible at all — without one, Platform cannot verify what
             // `ratatoskr-telegram` says and the route refuses everything (ADR-0011).
@@ -90,6 +98,8 @@ pub enum Requirement {
     DatabaseAndAssertionKey,
     /// A reachable database and a healthy last background observation of Knowledge.
     DatabaseAndKnowledge,
+    /// A reachable database and a configured notes route.
+    DatabaseAndNotesRoute,
 }
 
 impl Requirement {
@@ -105,6 +115,9 @@ impl Requirement {
             Self::DatabaseAndKnowledge => {
                 deployment.database_reachable
                     && matches!(deployment.knowledge, DependencyAvailability::Available)
+            }
+            Self::DatabaseAndNotesRoute => {
+                deployment.database_reachable && deployment.notes_route_configured
             }
         }
     }
@@ -126,6 +139,10 @@ pub enum DependencyAvailability {
 /// different subset and a positional `bool` pair was already one rename away from being silently
 /// swapped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag is one independent fact that a capability requirement reads"
+)]
 pub struct Deployment {
     /// What the readiness prober last found — never a fresh probe. A public request must not be the
     /// thing that opens a connection in order to decide whether connections can be opened.
@@ -138,4 +155,6 @@ pub struct Deployment {
     pub assertion_key_configured: bool,
     /// The last background Knowledge capability observation.
     pub knowledge: DependencyAvailability,
+    /// Whether the gateway routes the notes service.
+    pub notes_route_configured: bool,
 }

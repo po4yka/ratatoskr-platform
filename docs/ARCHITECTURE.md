@@ -454,6 +454,8 @@ Capabilities reflect enabled, healthy, and authorized features. They do not reve
 observation to be healthy. A successful observation must name service `knowledge` and declare both
 library capabilities; partial or unrelated documents fail closed. Public requests never probe
 Knowledge to decide capability availability.
+`notes.vaults` requires a reachable database and a configured notes route. The notes service serves
+no capability document, so the name follows the route.
 The corresponding routes derive tenant `user:<internal-user-uuid>` from the authenticated principal,
 delegate only to fixed loopback paths, and return bounded public projections with `Cache-Control:
 no-store`. Search ranking and read-state persistence remain owned by Knowledge. The fleet-visible
