@@ -291,7 +291,8 @@ async fn report_success(pool: &sqlx::PgPool, edge: &Edge, operation: &str) {
             edge.owner,
             &json!({"operation_id": operation, "status": status, "results": [], "warnings": []}),
         );
-        platform_eventing::consumer::deliver(pool, &handler, &report, jiff::Timestamp::now())
+        let now = jiff::Timestamp::now(); // wall-clock: Edge accepted the operation at real time
+        platform_eventing::consumer::deliver(pool, &handler, &report, now)
             .await
             .expect("the report is applied");
     }
@@ -317,7 +318,8 @@ async fn raise_conflict(pool: &sqlx::PgPool, edge: &Edge, operation: &str) {
             "writer_hash": content_hash(),
         }),
     );
-    platform_eventing::consumer::deliver(pool, &handler, &raised, jiff::Timestamp::now())
+    let now = jiff::Timestamp::now(); // wall-clock: Edge accepted the operation at real time
+    platform_eventing::consumer::deliver(pool, &handler, &raised, now)
         .await
         .expect("the conflict is applied");
 }

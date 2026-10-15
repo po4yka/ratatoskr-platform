@@ -65,7 +65,9 @@ async fn seed_owner(pool: &sqlx::PgPool) {
 /// public capabilities, so that Edge's capability check of the content routes passes (workspace
 /// spec `site-capability-enforcement`).
 async fn approve(pool: &sqlx::PgPool, site: &str) {
-    let user = platform_identity::user::create_user(pool, jiff::Timestamp::now())
+    // A fixed creation time: nothing under test compares it with the clock.
+    let created = jiff::Timestamp::from_second(1_700_000_000).expect("a fixed timestamp");
+    let user = platform_identity::user::create_user(pool, created)
         .await
         .expect("a user");
     sqlx::query(

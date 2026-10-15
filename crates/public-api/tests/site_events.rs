@@ -179,7 +179,8 @@ async fn deliver(pool: &sqlx::PgPool, hub: &Arc<SiteEventHub>, incoming: &Incomi
     let projection = SiteEventProjection {
         hub: Arc::clone(hub),
     };
-    platform_eventing::consumer::deliver(pool, &projection, incoming, jiff::Timestamp::now())
+    let now = jiff::Timestamp::now(); // wall-clock: the hub keeps events by the real-time window
+    platform_eventing::consumer::deliver(pool, &projection, incoming, now)
         .await
         .expect("the projection applies the event");
 }
@@ -612,13 +613,9 @@ async fn rolled_back_delivery_sends_nothing() {
         hub: Arc::clone(&hub),
     };
     let redelivered = released('a');
-    let failed = platform_eventing::consumer::deliver(
-        harness.pool(),
-        &projection,
-        &redelivered,
-        jiff::Timestamp::now(),
-    )
-    .await;
+    let now = jiff::Timestamp::now(); // wall-clock: the hub keeps events by the real-time window
+    let failed =
+        platform_eventing::consumer::deliver(harness.pool(), &projection, &redelivered, now).await;
     assert!(failed.is_err(), "the delivery rolls back");
     let mut buffer = String::new();
     assert_eq!(
@@ -657,7 +654,8 @@ async fn event_older_than_the_window_is_not_kept() {
     let mut body = response.into_body();
 
     let mut late = released('a');
-    let old = jiff::Timestamp::now() - jiff::SignedDuration::from_hours(25);
+    let now = jiff::Timestamp::now(); // wall-clock: the hub measures its window from real time
+    let old = now - jiff::SignedDuration::from_hours(25);
     late.payload["occurred_at"] = json!(old.to_string());
     deliver(harness.pool(), &hub, &late).await;
     deliver(harness.pool(), &hub, &released('b')).await;
