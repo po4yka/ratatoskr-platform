@@ -79,6 +79,13 @@ RATATOSKR__GATEWAY__ROUTES__CLAUDE__ARCHIVE_RECEIPT_PATH=/v1/ai-archives/receipt
 RATATOSKR__GATEWAY__ROUTES__NOTES__PREFIX=/v1/notes
 RATATOSKR__GATEWAY__ROUTES__NOTES__LISTENER=127.0.0.1:8099
 RATATOSKR__GATEWAY__ROUTES__NOTES__CLASS=control
+# The sites service, ratatoskr-sites (SITE-025). Its content routes, /v1/sites/{site}/content and
+# below, are the public class of ADR-0017: GET and HEAD only, no credential read, an anonymous claim,
+# and a bucket for each client and for each site before the proxy. Every other sites path needs a
+# session. The class below is the budget of the route.
+RATATOSKR__GATEWAY__ROUTES__SITES__PREFIX=/v1/sites
+RATATOSKR__GATEWAY__ROUTES__SITES__LISTENER=127.0.0.1:8100
+RATATOSKR__GATEWAY__ROUTES__SITES__CLASS=control
 
 # The channel-digests read API, behind GET /v1/channel-digests/{subscriptions,results}. Both keys or
 # neither (rule V22). The listener is loopback on the allocated port 8098; the secret equals the

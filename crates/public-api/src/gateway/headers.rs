@@ -24,12 +24,56 @@ const HEADER_DEVICE_KIND: &str = "x-ratatoskr-device-kind";
 /// notes tells the owner's upload from a device upload. Reserved prefix, as above.
 const HEADER_SESSION_KIND: &str = "x-ratatoskr-session-kind";
 
+/// The value of [`HEADER_SESSION_KIND`] on a request of the `public` class (ADR-0017).
+const ANONYMOUS_SESSION_KIND: &str = "anonymous";
+
 pub(super) fn forwarded_headers(headers: &HeaderMap, claims: Claims<'_>) -> HeaderMap {
     let Claims {
         principal,
         device_kind,
         correlation_id,
     } = claims;
+    let mut forwarded = cleaned(headers);
+    let user_id = principal.user_id.to_string();
+    insert(&mut forwarded, platform_receipt::HEADER_USER_ID, &user_id);
+    if let Some(device_id) = principal.device_id {
+        let device_id = device_id.to_string();
+        insert(
+            &mut forwarded,
+            platform_receipt::HEADER_DEVICE_ID,
+            &device_id,
+        );
+    }
+    if let Some(device_kind) = device_kind {
+        insert(&mut forwarded, HEADER_DEVICE_KIND, device_kind);
+    }
+    insert(&mut forwarded, HEADER_SESSION_KIND, principal.kind.as_str());
+    insert(
+        &mut forwarded,
+        platform_receipt::HEADER_CORRELATION_ID,
+        correlation_id,
+    );
+    forwarded
+}
+
+/// The headers of a request of the `public` class (ADR-0017): the same hygiene as
+/// [`forwarded_headers`], so no credential, cookie or reserved header of the client passes, and the
+/// anonymous claim, which is the session kind `anonymous` and the correlation id. It holds no user
+/// and no device.
+pub(super) fn anonymous_headers(headers: &HeaderMap, correlation_id: &str) -> HeaderMap {
+    let mut forwarded = cleaned(headers);
+    insert(&mut forwarded, HEADER_SESSION_KIND, ANONYMOUS_SESSION_KIND);
+    insert(
+        &mut forwarded,
+        platform_receipt::HEADER_CORRELATION_ID,
+        correlation_id,
+    );
+    forwarded
+}
+
+/// The headers of a client request without its credentials, its cookies, its reserved headers and
+/// its hop-by-hop fields.
+fn cleaned(headers: &HeaderMap) -> HeaderMap {
     let connection_tokens = connection_tokens(headers);
     let mut forwarded = HeaderMap::new();
     for (name, value) in headers {
@@ -54,25 +98,6 @@ pub(super) fn forwarded_headers(headers: &HeaderMap, claims: Claims<'_>) -> Head
         }
         forwarded.append(name.clone(), value.clone());
     }
-    let user_id = principal.user_id.to_string();
-    insert(&mut forwarded, platform_receipt::HEADER_USER_ID, &user_id);
-    if let Some(device_id) = principal.device_id {
-        let device_id = device_id.to_string();
-        insert(
-            &mut forwarded,
-            platform_receipt::HEADER_DEVICE_ID,
-            &device_id,
-        );
-    }
-    if let Some(device_kind) = device_kind {
-        insert(&mut forwarded, HEADER_DEVICE_KIND, device_kind);
-    }
-    insert(&mut forwarded, HEADER_SESSION_KIND, principal.kind.as_str());
-    insert(
-        &mut forwarded,
-        platform_receipt::HEADER_CORRELATION_ID,
-        correlation_id,
-    );
     forwarded
 }
 

@@ -163,7 +163,16 @@ pub(crate) async fn observe(
                 span.record("error.code", error.fault().code.as_str());
                 // The completion event, at the level the taxonomy chose, with the full source chain.
                 error.log();
-                fault::render(&error, &context)
+                // The envelope replaces the body and the headers of the refusal, except the time a
+                // client waits before it tries again (`429` of the `public` class, ADR-0017).
+                let retry_after = response.headers().get(http::header::RETRY_AFTER).cloned();
+                let mut rendered = fault::render(&error, &context);
+                if let Some(value) = retry_after {
+                    rendered
+                        .headers_mut()
+                        .insert(http::header::RETRY_AFTER, value);
+                }
+                rendered
             } else {
                 tracing::info!(
                     status = status.as_u16(),

@@ -45,6 +45,7 @@ pub mod notes_writes;
 pub mod oauth;
 pub mod operations;
 pub mod sessions;
+pub mod sites;
 pub mod status;
 pub mod stream;
 
@@ -95,6 +96,8 @@ pub struct ApiState {
     pub archive_max_bytes: u64,
     /// The typed client for the channel-digests read API, absent when the deployment has none.
     pub channel_digests: Option<Arc<channel_digests::ChannelDigestsClient>>,
+    /// The client and site buckets of the `public` route class (ADR-0017).
+    pub site_limits: Arc<sites::PublicLimits>,
 }
 
 impl ApiState {
@@ -127,6 +130,7 @@ impl ApiState {
             )),
             archive_max_bytes: platform_core::config::DEFAULT_MAX_ARCHIVE_BYTES,
             channel_digests: None,
+            site_limits: Arc::new(sites::PublicLimits::default()),
         }
     }
 
@@ -347,13 +351,20 @@ pub fn routes(state: Arc<ApiState>) -> Router {
     let router = state
         .gateway
         .routes()
-        .values()
-        .fold(router, |router, route| {
+        .iter()
+        .fold(router, |router, (service, route)| {
             let Some(budget) = state.gateway.budget(route) else {
                 return router;
             };
             let limit = usize::try_from(budget.max_body_bytes).unwrap_or(usize::MAX);
-            let handler = any(gateway::proxy).layer(RequestBodyLimitLayer::new(limit));
+            // The sites prefix holds routes of several classes (ADR-0017), so its own dispatcher
+            // decides each request before any credential is read.
+            let handler = if service == sites::SERVICE {
+                any(sites::dispatch)
+            } else {
+                any(gateway::proxy)
+            };
+            let handler = handler.layer(RequestBodyLimitLayer::new(limit));
             router
                 .route(&route.prefix, handler.clone())
                 .route(&format!("{}/{{*tail}}", route.prefix), handler)

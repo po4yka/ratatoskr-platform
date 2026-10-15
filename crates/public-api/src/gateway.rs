@@ -23,6 +23,7 @@ use ratatoskr_error_contracts::ErrorEnvelope;
 use crate::{ApiState, Principal};
 
 mod headers;
+mod public;
 
 use headers::{archive_headers, forwarded_headers, insert, response_headers};
 
