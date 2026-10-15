@@ -438,23 +438,23 @@ static IDEMPOTENCY_CONFLICT: LazyLock<PublicFault> = LazyLock::new(|| {
     )
 });
 
-/// `platform.manifest_digest_stale` — 409. Not retryable: the same digest stays stale until the
+/// `platform.site.manifest_digest_stale` — 409. Not retryable: the same digest stays stale until the
 /// owner approves the active manifest.
 static MANIFEST_DIGEST_STALE: LazyLock<PublicFault> = LazyLock::new(|| {
     entry(
         StatusCode::CONFLICT,
-        "platform.manifest_digest_stale",
+        "platform.site.manifest_digest_stale",
         "The manifest is not the active manifest of the site.",
         false,
     )
 });
 
-/// `platform.site_hostname_taken` — 409. Not retryable: the hostname stays taken until the other
+/// `platform.site.hostname_taken` — 409. Not retryable: the hostname stays taken until the other
 /// site's approval is withdrawn.
 static SITE_HOSTNAME_TAKEN: LazyLock<PublicFault> = LazyLock::new(|| {
     entry(
         StatusCode::CONFLICT,
-        "platform.site_hostname_taken",
+        "platform.site.hostname_taken",
         "Another approved site has this hostname.",
         false,
     )

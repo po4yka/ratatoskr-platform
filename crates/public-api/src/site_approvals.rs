@@ -452,8 +452,8 @@ pub const APPROVE_DOC: RouteDoc = RouteDoc {
 Approves the manifest that the sites service holds as the active manifest of the site. The body \
 names the SHA-256 of the manifest bytes that the owner read; Edge reads the active manifest from \
 the sites service and refuses a digest that is not the active one with \
-`platform.manifest_digest_stale`. A hostname belongs to one approved site: an approval that would \
-give a hostname to a second site is refused with `platform.site_hostname_taken`.\n\n\
+`platform.site.manifest_digest_stale`. A hostname belongs to one approved site: an approval that would \
+give a hostname to a second site is refused with `platform.site.hostname_taken`.\n\n\
 Platform stores the approval and announces it to the sites service in the same transaction. An \
 approval of the digest that is approved already changes nothing and announces nothing. Only a \
 primary session whose user holds the live `platform.owner` grant may call this route (class \
@@ -478,8 +478,8 @@ primary session whose user holds the live `platform.owner` grant may call this r
         ),
         response(
             409,
-            "`platform.manifest_digest_stale`: the digest is not the active manifest. \
-             `platform.site_hostname_taken`: another approved site has the hostname.",
+            "`platform.site.manifest_digest_stale`: the digest is not the active manifest. \
+             `platform.site.hostname_taken`: another approved site has the hostname.",
             "ErrorEnvelope",
         ),
         response(
