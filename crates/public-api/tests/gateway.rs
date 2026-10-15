@@ -550,3 +550,75 @@ async fn two_downstream_services_are_routed_by_their_public_prefixes() {
     github_task.abort();
     harness.cleanup().await.expect("cleanup");
 }
+
+/// Workspace task 4.3 of `add-site-publications` (SITE-025), the Platform half: the internal
+/// routes of the notes service (`/internal/…` on its listener) are not reachable from the public
+/// listener. A path under `/internal/`, a notes path that names `internal`, and an encoded or plain
+/// dot segment that would lead from `/v1/notes/` to `/internal/` reach the stub notes service never.
+#[tokio::test]
+async fn no_public_path_reaches_notes_internal() {
+    let harness = TestDatabase::create().await.expect("a test database");
+    seed(harness.pool()).await;
+    let received = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let record = Arc::clone(&received);
+    let (listener, _server) = stub(Router::new().route(
+        "/{*rest}",
+        any(move |request: axum::extract::Request| {
+            let record = Arc::clone(&record);
+            async move {
+                record
+                    .lock()
+                    .expect("the record")
+                    .push(request.uri().to_string());
+                StatusCode::OK
+            }
+        }),
+    ))
+    .await;
+    let notes = GatewayConfig {
+        routes: BTreeMap::from([(
+            "notes".to_owned(),
+            GatewayRouteConfig {
+                prefix: "/v1/notes".to_owned(),
+                listener,
+                class: Some(GatewayRouteClass::Control),
+                capabilities_path: "/v1/capabilities".to_owned(),
+                archive_receipt_path: "/v1/ai-archives/receipt".to_owned(),
+            },
+        )]),
+        ..GatewayConfig::default()
+    };
+    let app = app(&harness, notes, 30);
+
+    for path in [
+        "/internal/index",
+        "/v1/notes/internal/index",
+        "/v1/notes/internal",
+        "/v1/notes/../internal/index",
+        "/v1/notes/%2e%2e/internal/index",
+        "/v1/notes/%2E%2E%2Finternal/index",
+        "/v1/notes/connections/..%2F..%2F..%2Finternal/index",
+    ] {
+        for method in ["GET", "POST"] {
+            let request = Request::builder()
+                .method(method)
+                .uri(path)
+                .header("authorization", format!("Bearer {CREDENTIAL}"))
+                .header("content-type", "application/json")
+                .body(Body::from("{}"))
+                .expect("a request");
+            let (status, _) = send(&app, request).await;
+            assert!(
+                status.is_client_error(),
+                "{method} {path} must be refused at Edge, not {status}"
+            );
+        }
+    }
+    assert_eq!(
+        received.lock().expect("the record").as_slice(),
+        &[] as &[String],
+        "a public path reached the notes service"
+    );
+
+    harness.cleanup().await.expect("cleanup");
+}
