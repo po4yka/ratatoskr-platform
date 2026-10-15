@@ -201,3 +201,32 @@ async fn knowledge_timeout_is_retryable_unavailable() {
 
     harness.cleanup().await.expect("cleanup");
 }
+
+/// Review L10 of SITE-027: the knowledge search needs a query of 1 to 512 characters; without one
+/// it is refused before Knowledge.
+#[tokio::test]
+async fn knowledge_search_requires_a_query() {
+    let harness = TestDatabase::create().await.expect("a test database");
+    let knowledge = Stub::start().await;
+    let (app, cookie) = edge(&harness, knowledge.address).await;
+
+    for query in ["", "?q=", "?limit=5"] {
+        let request = from_site(
+            "GET",
+            &format!("/v1/sites/site-a/knowledge/search{query}"),
+            &cookie,
+            false,
+            None,
+            &Value::Null,
+        );
+        let (status, _, body) = send(&app, request).await;
+        assert_eq!(
+            (status.as_u16(), body["code"].as_str()),
+            (400, Some("platform.request.invalid")),
+            "the search {query:?}: {body}"
+        );
+    }
+    assert_eq!(knowledge.count(), 0, "Knowledge received a query");
+
+    harness.cleanup().await.expect("cleanup");
+}

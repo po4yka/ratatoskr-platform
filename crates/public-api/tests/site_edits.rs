@@ -762,3 +762,46 @@ async fn failed_edit_record_admits_nothing() {
 
     harness.cleanup().await.expect("cleanup");
 }
+
+/// Review L9 of SITE-027: only content over the bound is 413; a body that breaks off is an
+/// invalid request, and neither reaches notes as a chunk.
+#[tokio::test]
+async fn only_oversized_content_is_too_large() {
+    let harness = TestDatabase::create().await.expect("a test database");
+    let edge = edge(&harness).await;
+    let blobs = format!("/v1/sites/site-a/drafts/sources/{SOURCE}/blobs");
+    let send_body = |body: Body| {
+        Request::builder()
+            .method("POST")
+            .uri(&blobs)
+            .header("cookie", format!("{COOKIE}={}", edge.cookie))
+            .header("x-ratatoskr-site-request", "1")
+            .header("origin", origin())
+            .header("content-type", "text/markdown")
+            .body(body)
+            .expect("a request")
+    };
+
+    let broken = futures_util::stream::iter(vec![
+        Ok(axum::body::Bytes::from_static(b"# Start\n")),
+        Err(std::io::Error::other("the client went away")),
+    ]);
+    let (status, _, answer) = send(&edge.app, send_body(Body::from_stream(broken))).await;
+    assert_eq!(
+        (status.as_u16(), answer["code"].as_str()),
+        (400, Some("platform.request.invalid")),
+        "a broken body: {answer}"
+    );
+    let oversized = vec![b'a'; 16 * 1024 * 1024 + 1];
+    let (status, _, answer) = send(&edge.app, send_body(Body::from(oversized))).await;
+    assert_eq!(status.as_u16(), 413, "content over 16 MiB: {answer}");
+    assert!(
+        edge.notes
+            .received()
+            .iter()
+            .all(|request| !request.uri.contains("/chunks/")),
+        "a chunk reached notes"
+    );
+
+    harness.cleanup().await.expect("cleanup");
+}

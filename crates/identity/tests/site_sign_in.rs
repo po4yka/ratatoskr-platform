@@ -21,6 +21,7 @@ use uuid::Uuid;
 const SITE: &str = "site-a";
 const OTHER_SITE: &str = "site-b";
 const VERIFIER: &str = "a-pkce-verifier-of-the-site-0000000000000000000";
+const OWNER_GRANT: &str = "platform.owner";
 
 /// The instant the whole file runs at; the clock is a parameter of the library, so a later instant
 /// is the paused clock of the task.
@@ -69,6 +70,9 @@ async fn context(harness: &TestDatabase, kind: SessionKind) -> (Uuid, Uuid) {
     )
     .await
     .expect("a session");
+    platform_identity::grant::grant(pool, user.user_id, OWNER_GRANT, now(), None)
+        .await
+        .expect("the owner grant");
     (user.user_id, session.session_id)
 }
 
@@ -263,6 +267,67 @@ async fn only_the_digest_is_stored() {
     }
     assert_eq!(raw_rows, 0, "a row holds the code itself");
     assert_eq!(digest_rows, 1, "one row holds the digest of the code");
+
+    harness.cleanup().await.expect("cleanup");
+}
+
+/// Review L3 of SITE-027: only a browser session approves a sign-in. A Telegram Mini App session
+/// and a personal API token are not opened by a paired device, and still may not approve one.
+#[tokio::test]
+async fn only_a_browser_session_issues_a_code() {
+    let harness = TestDatabase::create().await.expect("a test database");
+    for kind in [SessionKind::TelegramMiniApp, SessionKind::ApiToken] {
+        let (owner, session) = context(&harness, kind).await;
+        assert_eq!(
+            issue(&harness, owner, session).await,
+            Err(site_sign_in::IssueRefused),
+            "a {} session issued a code",
+            kind.as_str()
+        );
+    }
+
+    harness.cleanup().await.expect("cleanup");
+}
+
+/// Review L4 of SITE-027: a code is redeemed only while the session that approved it is live.
+#[tokio::test]
+async fn code_of_a_revoked_session_is_not_redeemed() {
+    let harness = TestDatabase::create().await.expect("a test database");
+    let (owner, session) = context(&harness, SessionKind::Browser).await;
+    let code = issue(&harness, owner, session).await.expect("a code");
+    sqlx::query(
+        "update identity.sessions set revoked_at = issued_at + interval '1 second'
+          where session_id = $1",
+    )
+    .bind(session)
+    .execute(harness.pool())
+    .await
+    .expect("the session is revoked");
+
+    assert_eq!(
+        redeem(&harness, SITE, &code, VERIFIER, later(5)).await,
+        Err(Unauthenticated),
+        "a code of a revoked session opened a site session"
+    );
+
+    harness.cleanup().await.expect("cleanup");
+}
+
+/// Review L4 of SITE-027: a code is redeemed only while the owner still holds `platform.owner`.
+#[tokio::test]
+async fn code_without_the_owner_grant_is_not_redeemed() {
+    let harness = TestDatabase::create().await.expect("a test database");
+    let (owner, session) = context(&harness, SessionKind::Browser).await;
+    let code = issue(&harness, owner, session).await.expect("a code");
+    platform_identity::grant::revoke(harness.pool(), owner, OWNER_GRANT, later(1))
+        .await
+        .expect("the grant is revoked");
+
+    assert_eq!(
+        redeem(&harness, SITE, &code, VERIFIER, later(5)).await,
+        Err(Unauthenticated),
+        "a code of an owner without the grant opened a site session"
+    );
 
     harness.cleanup().await.expect("cleanup");
 }

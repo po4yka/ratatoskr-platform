@@ -598,6 +598,8 @@ async fn no_public_path_reaches_notes_internal() {
         "/v1/notes/%2e%2e/internal/index",
         "/v1/notes/%2E%2E%2Finternal/index",
         "/v1/notes/connections/..%2F..%2F..%2Finternal/index",
+        // Review L1 of SITE-027: a literal backslash is a separator too.
+        "/v1/notes/x\\..\\internal/index",
     ] {
         for method in ["GET", "POST"] {
             let request = Request::builder()

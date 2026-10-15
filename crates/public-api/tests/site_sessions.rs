@@ -312,3 +312,42 @@ async fn withdrawn_approval_revokes_site_sessions() {
 
     harness.cleanup().await.expect("cleanup");
 }
+
+/// Review L5 of SITE-027: the anonymous sign-in route takes a token of the public rate limit of
+/// its client, so a client cannot try codes without a bound.
+#[tokio::test]
+async fn sign_in_route_is_rate_limited_per_client() {
+    let harness = platform_persistence::test_support::TestDatabase::create()
+        .await
+        .expect("a test database");
+    let stub = Stub::start().await;
+    stub.manifest(SITE, HOSTNAME, &["pages.read", "notes.edit"]);
+    let owner = primary(harness.pool(), OWNER, true).await;
+    approval(
+        harness.pool(),
+        owner,
+        SITE,
+        HOSTNAME,
+        &["pages.read", "notes.edit"],
+        "approved",
+    )
+    .await;
+    let mut state = state(&harness, stub.address, &[]);
+    state.site_limits = std::sync::Arc::new(platform_public_api::sites::PublicLimits::new(1, 1000));
+    let app = app(state);
+
+    let origin = format!("https://{HOSTNAME}");
+    let (first, _, _) = site_owner_support::redeem(&app, SITE, "not-a-code", &origin).await;
+    assert_eq!(first, StatusCode::UNAUTHORIZED, "the first try");
+    let (second, _, body) = site_owner_support::redeem(&app, SITE, "not-a-code", &origin).await;
+    assert_eq!(
+        (second, body["code"].as_str()),
+        (
+            StatusCode::TOO_MANY_REQUESTS,
+            Some("platform.limit.rate_exceeded")
+        ),
+        "the second try of the client in one minute: {body}"
+    );
+
+    harness.cleanup().await.expect("cleanup");
+}

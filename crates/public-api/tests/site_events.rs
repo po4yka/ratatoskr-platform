@@ -586,3 +586,71 @@ async fn owner_streams_have_a_bound_per_site() {
 
     harness.cleanup().await.expect("cleanup");
 }
+
+/// Review L6 of SITE-027: the hub receives an event only after the consumer's transaction commits;
+/// a delivery that rolls back sends nothing, and its redelivery sends the event once.
+#[tokio::test]
+async fn rolled_back_delivery_sends_nothing() {
+    let harness = TestDatabase::create().await.expect("a test database");
+    let (app, _, hub) = edge(&harness, SiteStreamLimits::default()).await;
+    let response = open(&app, None, "6.6.6.6", None).await;
+    assert_eq!(response.status(), 200, "the anonymous stream");
+    let mut body = response.into_body();
+    for statement in [
+        "create function operations.refuse_inbox_finish() returns trigger language plpgsql
+           as $$ begin raise exception 'the inbox refuses'; end $$",
+        "create trigger refuse_inbox_finish before update on operations.inbox
+           for each row execute function operations.refuse_inbox_finish()",
+    ] {
+        sqlx::query(statement)
+            .execute(harness.pool())
+            .await
+            .expect("the fault");
+    }
+
+    let projection = SiteEventProjection {
+        hub: Arc::clone(&hub),
+    };
+    let failed = platform_eventing::consumer::deliver(
+        harness.pool(),
+        &projection,
+        &released('a'),
+        jiff::Timestamp::now(),
+    )
+    .await;
+    assert!(failed.is_err(), "the delivery rolls back");
+    assert_eq!(
+        next_block(&mut body, &mut String::new(), Duration::from_millis(800)).await,
+        None,
+        "a rolled-back delivery reached the stream"
+    );
+
+    harness.cleanup().await.expect("cleanup");
+}
+
+/// Review L6 of SITE-027: the hub keeps an event by its own time, so an event older than the
+/// window, delivered late, is not kept and the stream goes on with the next one.
+#[tokio::test]
+async fn event_older_than_the_window_is_not_kept() {
+    let harness = TestDatabase::create().await.expect("a test database");
+    let (app, _, hub) = edge(&harness, SiteStreamLimits::default()).await;
+    let response = open(&app, None, "6.6.6.6", None).await;
+    assert_eq!(response.status(), 200, "the anonymous stream");
+    let mut body = response.into_body();
+
+    let mut late = released('a');
+    let old = jiff::Timestamp::now() - jiff::SignedDuration::from_hours(25);
+    late.payload["occurred_at"] = json!(old.to_string());
+    deliver(harness.pool(), &hub, &late).await;
+    deliver(harness.pool(), &hub, &released('b')).await;
+
+    let event = next_event(&mut body, &mut String::new())
+        .await
+        .expect("an event");
+    assert!(
+        event.data.to_string().contains(&"b".repeat(64)),
+        "the first event is not the current one: {event:?}"
+    );
+
+    harness.cleanup().await.expect("cleanup");
+}

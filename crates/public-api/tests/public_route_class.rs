@@ -416,3 +416,40 @@ async fn per_client_limit_is_enforced_before_proxy() {
 
     harness.cleanup().await.expect("cleanup");
 }
+
+/// Review L2 of SITE-027: a content path of one site whose encoded dot segments resolve to another
+/// site under `/v1/sites` is refused before the sites service.
+#[tokio::test]
+async fn content_path_resolving_to_another_site_is_refused() {
+    let harness = TestDatabase::create().await.expect("a test database");
+    approve(harness.pool(), "demo-site").await;
+    let (listener, count) = stub_sites().await;
+    let app = app(&harness, listener);
+
+    for path in [
+        "/v1/sites/demo-site/content/pages/..%2f..%2f..%2fother-site%2fcontent%2fpages%2fhome",
+        "/v1/sites/demo-site/content/pages/%2e%2e/%2e%2e/%2e%2e/other-site/content/pages/home",
+    ] {
+        let (status, _, body) = send(
+            &app,
+            Request::builder()
+                .uri(path)
+                .body(Body::empty())
+                .expect("a request"),
+        )
+        .await;
+        assert_eq!(
+            (status, code(&body)),
+            (StatusCode::NOT_FOUND, "platform.route.not_found".to_owned()),
+            "{path}: {}",
+            String::from_utf8_lossy(&body)
+        );
+    }
+    assert_eq!(
+        count.load(Ordering::SeqCst),
+        0,
+        "a path of another site reached the sites service"
+    );
+
+    harness.cleanup().await.expect("cleanup");
+}
