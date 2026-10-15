@@ -3,8 +3,9 @@
 //!
 //! `/v1/sites` and every route under `/v1/sites/{site}/` have one row in [`ROUTES`], and the row
 //! has a class. The
-//! class decides the caller: `management` and `release` need the owner, and `site-origin` is the
-//! `public` class of the content routes, which reads no credential. A request that no row holds is
+//! class decides the caller: `management` and `release` need the owner, `deploy` needs the owner or
+//! the `site_deployer` device of the site, and `site-origin` is the `public` class of the content
+//! routes, which reads no credential. A request that no row holds is
 //! `404` at Edge, and a row without a class stops Edge at start-up ([`check_routes`]).
 
 use std::sync::Arc;
@@ -14,7 +15,7 @@ use axum::response::Response;
 use http::{HeaderValue, Method};
 use platform_core::FailureKind;
 use platform_http::{ActorLimiter, RequestContext};
-use platform_identity::SessionKind;
+use platform_identity::{DeviceKind, SessionKind};
 use uuid::Uuid;
 
 use crate::{ApiState, Principal, gateway, site_approvals, site_releases};
@@ -53,8 +54,8 @@ pub enum SiteRouteClass {
     /// `notes.edit`. No route issues a `site_owner` session yet (SITE-027), so only the first
     /// guard can pass.
     Release,
-    /// The upload and the activation of a deploy (workspace change `add-site-gateway-hosting`).
-    /// No route has it yet.
+    /// The upload and the activation of a deploy (workspace change `add-site-gateway-hosting`):
+    /// the guard of `Management`, or a `site_deployer` device that was paired for the site.
     Deploy,
 }
 
@@ -110,6 +111,16 @@ pub const ROUTES: &[SiteRoute] = &[
         methods: &[Method::POST],
         path: "/{site}/releases",
         class: Some(SiteRouteClass::Release),
+    },
+    SiteRoute {
+        methods: &[Method::POST],
+        path: "/{site}/deploys",
+        class: Some(SiteRouteClass::Deploy),
+    },
+    SiteRoute {
+        methods: &[Method::POST],
+        path: "/{site}/deploys/{commit}/activate",
+        class: Some(SiteRouteClass::Deploy),
     },
     SiteRoute {
         methods: &[Method::GET, Method::HEAD],
@@ -191,8 +202,9 @@ impl Default for PublicLimits {
 }
 
 /// Every request under `/v1/sites`. The row of [`ROUTES`] that holds the path decides: no row is
-/// `404`, a method that the row does not hold is `405`, `site-origin` is the `public` class, and
-/// `management` and `release` need the owner before the request reaches the sites service.
+/// `404`, a method that the row does not hold is `405`, `site-origin` is the `public` class,
+/// `management` and `release` need the owner, and `deploy` needs the owner or the deployer device
+/// of the site, before the request reaches the sites service.
 pub async fn dispatch(
     State(state): State<Arc<ApiState>>,
     Extension(context): Extension<RequestContext>,
@@ -242,9 +254,20 @@ pub async fn dispatch(
             )
             .await
         }
-        SiteRouteClass::SignIn | SiteRouteClass::Deploy => {
-            platform_http::reject(FailureKind::RouteNotFound)
+        SiteRouteClass::Deploy => {
+            let principal = match deployer(&state, &mut parts, &site).await {
+                Ok(principal) => principal,
+                Err(refusal) => return refusal,
+            };
+            gateway::proxy(
+                State(state),
+                principal,
+                Extension(context),
+                Request::from_parts(parts, body),
+            )
+            .await
         }
+        SiteRouteClass::SignIn => platform_http::reject(FailureKind::RouteNotFound),
     }
 }
 
@@ -304,6 +327,42 @@ async fn owner(
     }
     crate::admin::require_owner(state, principal).await?;
     Ok(principal)
+}
+
+/// The caller of a `deploy` route: the caller of a `management` route, or a `site_deployer` device
+/// that was paired for `site`. The device of another site gets `edge.capability_not_granted`, and
+/// every other device gets the stable forbidden error.
+async fn deployer(
+    state: &Arc<ApiState>,
+    parts: &mut http::request::Parts,
+    site: &str,
+) -> Result<Principal, Response> {
+    let principal = Principal::from_request_parts(parts, state).await?;
+    let Some(device_id) = principal.device_id else {
+        if principal.kind == SessionKind::Device {
+            return Err(platform_http::reject(FailureKind::Forbidden));
+        }
+        crate::admin::require_owner(state, principal).await?;
+        return Ok(principal);
+    };
+    match platform_identity::device::find_device(state.database.pool(), device_id).await {
+        Ok(Some(device))
+            if device.kind == DeviceKind::SiteDeployer
+                && device.user_id == principal.user_id
+                && device.is_active() =>
+        {
+            if device.site_id.as_deref() == Some(site) {
+                Ok(principal)
+            } else {
+                Err(platform_http::reject(FailureKind::CapabilityNotGranted))
+            }
+        }
+        Ok(_) => Err(platform_http::reject(FailureKind::Forbidden)),
+        Err(error) => {
+            tracing::error!(%error, "the deployer device could not be read");
+            Err(platform_http::reject(FailureKind::RequestTimeout))
+        }
+    }
 }
 
 /// `GET` and `HEAD /v1/sites/{site}/content/*`: the `public` class.

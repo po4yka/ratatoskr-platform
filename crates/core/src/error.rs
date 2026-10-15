@@ -177,6 +177,9 @@ pub enum FailureKind {
     Unauthenticated,
     /// The caller is authenticated but lacks the live authority required by this operation.
     Forbidden,
+    /// The credential is valid and grants a capability, but not this one: a `site_deployer`
+    /// device on a deploy route of another site (workspace spec `site-route-classes`).
+    CapabilityNotGranted,
     /// The resource does not exist, or exists and is not this principal's. Also deliberately one
     /// variant: S15 requires authorization before existence is disclosed, so "not yours" and "not
     /// there" must read the same from outside.
@@ -218,13 +221,14 @@ pub enum FailureKind {
 impl FailureKind {
     /// Every kind, in status order. The array length is the documented count, so adding a variant
     /// without updating it does not compile.
-    pub const ALL: [Self; 17] = [
+    pub const ALL: [Self; 18] = [
         Self::RouteNotFound,
         Self::MethodNotAllowed,
         Self::PayloadTooLarge,
         Self::RequestTimeout,
         Self::Unauthenticated,
         Self::Forbidden,
+        Self::CapabilityNotGranted,
         Self::NotFound,
         Self::InvalidRequest,
         Self::MissingIdempotencyKey,
@@ -266,6 +270,7 @@ impl FailureKind {
             Self::RequestTimeout => &REQUEST_TIMEOUT,
             Self::Unauthenticated => &UNAUTHENTICATED,
             Self::Forbidden => &FORBIDDEN,
+            Self::CapabilityNotGranted => &CAPABILITY_NOT_GRANTED,
             Self::NotFound => &NOT_FOUND,
             Self::InvalidRequest => &INVALID_REQUEST,
             Self::MissingIdempotencyKey => &MISSING_IDEMPOTENCY_KEY,
@@ -390,6 +395,17 @@ static FORBIDDEN: LazyLock<PublicFault> = LazyLock::new(|| {
         StatusCode::FORBIDDEN,
         "platform.auth.forbidden",
         "You are not allowed to perform this action.",
+        false,
+    )
+});
+
+/// `edge.capability_not_granted` — 403. The credential grants other capabilities, and repeating
+/// the request with it cannot succeed.
+static CAPABILITY_NOT_GRANTED: LazyLock<PublicFault> = LazyLock::new(|| {
+    entry(
+        StatusCode::FORBIDDEN,
+        "edge.capability_not_granted",
+        "This credential does not grant this capability.",
         false,
     )
 });

@@ -83,7 +83,10 @@ RATATOSKR__GATEWAY__ROUTES__NOTES__CLASS=control
 # below, are the public class of ADR-0017: GET and HEAD only, no credential read, an anonymous claim,
 # and a bucket for each client and for each site before the proxy. /v1/sites and every other route
 # under /v1/sites/{site}/ have a class in Edge's site route table and need the owner session; a path
-# that the table does not hold is 404 at Edge. The class below is the budget of the route.
+# that the table does not hold is 404 at Edge. The deploy routes POST /v1/sites/{site}/deploys and
+# .../deploys/{commit}/activate (SITE-026) have the class deploy: the owner session, or a
+# site_deployer device paired for that site. The upload takes the transfer budget. The class below
+# is the budget of the other routes.
 RATATOSKR__GATEWAY__ROUTES__SITES__PREFIX=/v1/sites
 RATATOSKR__GATEWAY__ROUTES__SITES__LISTENER=127.0.0.1:8100
 RATATOSKR__GATEWAY__ROUTES__SITES__CLASS=control

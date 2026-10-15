@@ -361,11 +361,12 @@ pub fn routes(state: Arc<ApiState>) -> Router {
             };
             let limit = usize::try_from(budget.max_body_bytes).unwrap_or(usize::MAX);
             // The sites prefix holds routes of several classes (ADR-0017), so its own dispatcher
-            // decides each request before any credential is read.
-            let handler = if service == sites::SERVICE {
-                any(sites::dispatch)
+            // decides each request before any credential is read. Its deploy upload takes the
+            // transfer limit here, and the proxy applies the smaller limit of every other path.
+            let (handler, limit) = if service == sites::SERVICE {
+                (any(sites::dispatch), limit.max(upload_limit))
             } else {
-                any(gateway::proxy)
+                (any(gateway::proxy), limit)
             };
             let handler = handler.layer(RequestBodyLimitLayer::new(limit));
             router
@@ -377,6 +378,8 @@ pub fn routes(state: Arc<ApiState>) -> Router {
     let transfer_paths = platform_core::config::GATEWAY_TRANSFER_PATHS;
     let router = transfer_paths
         .iter()
+        // The sites dispatcher serves its own transfer path, after it decides the caller.
+        .filter(|(service, _, _)| *service != sites::SERVICE)
         .filter(|(service, sub_path, _)| {
             !transfer_paths.iter().any(|(owner, outer, _)| {
                 owner == service

@@ -130,6 +130,14 @@ fn the_status_and_retryability_table_is_pinned() {
             "You are not allowed to perform this action.",
         ),
         (
+            // Not retryable: the credential grants other capabilities, never this one.
+            FailureKind::CapabilityNotGranted,
+            StatusCode::FORBIDDEN,
+            "edge.capability_not_granted",
+            false,
+            "This credential does not grant this capability.",
+        ),
+        (
             // The same status and the same words as RouteNotFound, and a different code. From
             // outside they are indistinguishable, which is what S15 requires; from inside they are
             // different facts, which is why the code differs.
