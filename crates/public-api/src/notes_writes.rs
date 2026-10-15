@@ -53,8 +53,12 @@ pub(crate) const WRITE_MODE_PATH: &str = "/v1/notes/connections/{connection}/wri
 
 /// The route strings that the idempotency ledger stores: plain segments, because the ledger refuses
 /// a template. The connection or the conflict in the path is part of the fingerprint instead.
-const WRITES_LEDGER_ROUTE: &str = "/v1/notes/connections/writes";
-const RESOLUTION_LEDGER_ROUTE: &str = "/v1/notes/conflicts/resolution";
+///
+/// A write and a resolution share one ledger route. Both are one `notes.file.write`, notes
+/// deduplicates a write by its key and connection, and the operations table holds one key per owner
+/// and kind. So a key that one route took is refused on the other as a conflict, and never becomes a
+/// second operation.
+const FILE_WRITE_LEDGER_ROUTE: &str = "/v1/notes/writes";
 const WRITE_MODE_LEDGER_ROUTE: &str = "/v1/notes/connections/write-mode";
 
 /// The kind of the operation that a write or a resolution mints.
@@ -158,9 +162,8 @@ pub async fn write(
         Ok(prepared) => prepared,
         Err(kind) => return platform_http::reject(kind),
     };
-    let fingerprint = fingerprint(&connection, &body);
+    let fingerprint = fingerprint(&format!("writes/{connection}"), &body);
     let submission = Submission {
-        route: WRITES_LEDGER_ROUTE,
         key: &key,
         fingerprint: &fingerprint,
     };
@@ -193,9 +196,8 @@ pub async fn resolve(
         Ok(prepared) => prepared,
         Err(kind) => return platform_http::reject(kind),
     };
-    let fingerprint = fingerprint(&conflict, &body);
+    let fingerprint = fingerprint(&format!("resolution/{conflict}"), &body);
     let submission = Submission {
-        route: RESOLUTION_LEDGER_ROUTE,
         key: &key,
         fingerprint: &fingerprint,
     };
@@ -269,10 +271,10 @@ fn admissible(principal: Principal, headers: &HeaderMap) -> Result<String, Failu
         .ok_or(FailureKind::MissingIdempotencyKey)
 }
 
-/// The path member that selects what the body acts on, and the body: the same key and body for
-/// another connection or conflict is a conflict, not a replay.
-fn fingerprint(in_path: &str, body: &[u8]) -> Vec<u8> {
-    let mut fingerprint = in_path.as_bytes().to_vec();
+/// What the request acts on, and the body: the same key and body for another connection, another
+/// conflict or the other write route is a conflict, not a replay.
+fn fingerprint(selector: &str, body: &[u8]) -> Vec<u8> {
+    let mut fingerprint = selector.as_bytes().to_vec();
     fingerprint.push(b'\n');
     fingerprint.extend_from_slice(body);
     fingerprint
@@ -298,9 +300,8 @@ fn command(
     Ok(command)
 }
 
-/// Where a write is recorded in the idempotency ledger.
+/// How a write is recorded in the idempotency ledger.
 struct Submission<'a> {
-    route: &'static str,
     key: &'a str,
     fingerprint: &'a [u8],
 }
@@ -315,7 +316,7 @@ async fn submit(
 ) -> Response {
     let correlation = crate::correlation_of(context);
     let intake = Intake {
-        route: submission.route,
+        route: FILE_WRITE_LEDGER_ROUTE,
         kind: WRITE_KIND,
         audit_action: WRITE_KIND,
         key: submission.key,
@@ -475,7 +476,8 @@ Content never travels in this request. Upload the bytes first to \
 `notes.connection.not_found` for a connection that the caller does not own, and with \
 `notes.write.disabled` while the write mode of the connection is off.\n\n\
 `Idempotency-Key` is required. The same key and body return the ORIGINAL operation; the same key \
-with another body or another connection is refused.",
+with another body, another connection, or on `POST /v1/notes/conflicts/{conflict_id}/resolution` \
+is refused with `409`.",
     tag: "notes",
     security: Security::Session,
     parameters: &[CONNECTION_PARAMETER, IDEMPOTENCY_PARAMETER],
@@ -499,7 +501,8 @@ The body names the connection of the conflict, as `GET /v1/notes/conflicts/{conf
 because Edge holds no notes data. The notes service fails the operation with \
 `notes.connection.not_found` when the caller does not own the connection or the connection does \
 not hold the conflict.\n\n\
-`Idempotency-Key` is required, as on the write route.",
+`Idempotency-Key` is required, as on the write route, and one key names one write across both \
+routes: a key that a write took is refused here with `409`.",
     tag: "notes",
     security: Security::Session,
     parameters: &[
