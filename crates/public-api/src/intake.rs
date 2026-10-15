@@ -46,6 +46,16 @@ pub(crate) struct Prepared {
     pub(crate) payload: serde_json::Value,
 }
 
+/// The edit of a site owner session (SITE-027): a row of `operations.site_edits` that commits in
+/// the transaction of its operation and its command, so that no command exists whose success or
+/// conflict cannot reach the site.
+pub(crate) struct SiteEditRow<'a> {
+    pub(crate) site_id: &'a str,
+    pub(crate) source_ref: &'a str,
+    /// The content hash of the edit: the note's revision when the operation succeeds.
+    pub(crate) revision: &'a str,
+}
+
 /// What [`mint`] did with one request.
 pub(crate) enum Minted {
     /// A new operation exists, and the caller does the work that follows it.
@@ -70,7 +80,7 @@ pub(crate) async fn accept<F>(
 where
     F: FnOnce(&platform_operations::Operation, jiff::Timestamp) -> Result<Prepared, FailureKind>,
 {
-    match admit(state, principal, intake, |operation, now| {
+    match admit(state, principal, intake, None, |operation, now| {
         prepare(operation, now).map(Some)
     })
     .await
@@ -87,15 +97,17 @@ pub(crate) async fn mint(
     principal: Principal,
     intake: &Intake<'_>,
 ) -> Result<Minted, FailureKind> {
-    admit(state, principal, intake, |_, _| Ok(None)).await
+    admit(state, principal, intake, None, |_, _| Ok(None)).await
 }
 
 /// The one transaction of [`accept`] and [`mint`]. `prepare` returns the command to enqueue, or
-/// `None` when the route enqueues none. `Err` is the refusal to answer.
+/// `None` when the route enqueues none; `site_edit` is the row of a site edit, written with them.
+/// `Err` is the refusal to answer.
 pub(crate) async fn admit<F>(
     state: &ApiState,
     principal: Principal,
     intake: &Intake<'_>,
+    site_edit: Option<&SiteEditRow<'_>>,
     prepare: F,
 ) -> Result<Minted, FailureKind>
 where
@@ -172,6 +184,10 @@ where
         return Err(FailureKind::RequestTimeout);
     }
 
+    if let Some(row) = site_edit {
+        record(&mut transaction, operation.operation_id, row).await?;
+    }
+
     if let Err(error) = platform_idempotency::complete(
         &mut *transaction,
         record_id,
@@ -207,6 +223,29 @@ where
     }
 
     Ok(Minted::Fresh(operation.operation_id))
+}
+
+/// Write the row of a site edit in the transaction of its operation.
+async fn record(
+    transaction: &mut sqlx::PgTransaction<'_>,
+    operation_id: Uuid,
+    row: &SiteEditRow<'_>,
+) -> Result<(), FailureKind> {
+    sqlx::query(
+        "insert into operations.site_edits (operation_id, site_id, source_ref, revision, created_at)
+         values ($1, $2, $3, $4, now())",
+    )
+    .bind(operation_id)
+    .bind(row.site_id)
+    .bind(row.source_ref)
+    .bind(row.revision)
+    .execute(&mut **transaction)
+    .await
+    .map(drop)
+    .map_err(|error| {
+        tracing::error!(%error, "the site edit could not be recorded");
+        FailureKind::RequestTimeout
+    })
 }
 
 /// The audit record of one accepted request.

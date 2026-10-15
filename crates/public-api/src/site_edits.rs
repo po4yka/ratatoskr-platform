@@ -32,7 +32,7 @@ use sha2::{Digest as _, Sha256};
 use uuid::Uuid;
 
 use crate::gateway::{Claims, claim_headers};
-use crate::intake::{Intake, Minted, admit};
+use crate::intake::{Intake, Minted, SiteEditRow, admit};
 use crate::site_docs::{
     SiteBlobUploaded, SiteConflict, SiteConflictTexts, SiteEditAccepted, SiteEditRequest,
     SiteMergeProposal,
@@ -311,29 +311,17 @@ async fn accept_edit(
         correlation,
         reporter: Some(notes_writes::NOTES_PRODUCER),
     };
-    let minted = admit(state, principal, &intake, |operation, now| {
+    let row = SiteEditRow {
+        site_id: site,
+        source_ref: &request.source_ref,
+        revision: &request.content_hash,
+    };
+    let minted = admit(state, principal, &intake, Some(&row), |operation, now| {
         command.operation_id = ratatoskr_identifiers::OperationId(operation.operation_id);
         notes_writes::envelope(&command, principal.user_id, now).map(Some)
     })
     .await?;
-    let operation_id = match minted {
-        Minted::Fresh(id) | Minted::Replayed(id) => id,
-    };
-    sqlx::query(
-        "insert into operations.site_edits (operation_id, site_id, source_ref, revision, created_at)
-         values ($1, $2, $3, $4, now())
-         on conflict (operation_id) do nothing",
-    )
-    .bind(operation_id)
-    .bind(site)
-    .bind(&request.source_ref)
-    .bind(&request.content_hash)
-    .execute(state.database.pool())
-    .await
-    .map_err(|error| {
-        tracing::error!(%error, "a site edit could not be recorded");
-        FailureKind::RequestTimeout
-    })?;
+    let (Minted::Fresh(operation_id) | Minted::Replayed(operation_id)) = minted;
     Ok(operation_id)
 }
 
