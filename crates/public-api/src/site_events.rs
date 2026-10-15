@@ -54,6 +54,10 @@ pub struct SiteStreamLimits {
     pub per_client: usize,
     /// Anonymous connections on one site.
     pub per_site: usize,
+    /// Connections of the owner sessions of one site.
+    pub per_site_owner: usize,
+    /// How often an owner connection checks that its session is still live.
+    pub owner_check: Duration,
 }
 
 impl Default for SiteStreamLimits {
@@ -61,6 +65,8 @@ impl Default for SiteStreamLimits {
         Self {
             per_client: 4,
             per_site: 64,
+            per_site_owner: 16,
+            owner_check: KEEP_ALIVE * 4,
         }
     }
 }

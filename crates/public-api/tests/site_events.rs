@@ -430,6 +430,7 @@ async fn anonymous_bound_spares_owner() {
     let limits = SiteStreamLimits {
         per_client: 4,
         per_site: 2,
+        ..SiteStreamLimits::default()
     };
     let (app, cookie, _) = edge(&harness, limits).await;
     let first = open(&app, None, "1.1.1.1", None).await;
@@ -494,6 +495,93 @@ async fn anonymous_stream_is_rate_limited_before_the_manifest_read() {
         reads,
         "a refused request made Edge read the manifest"
     );
+    drop(first);
+
+    harness.cleanup().await.expect("cleanup");
+}
+
+/// Whether `body` ends within `wait`, after any events and keep-alive comments.
+async fn ends_within(body: &mut Body, wait: Duration) -> bool {
+    tokio::time::timeout(wait, async {
+        while let Some(frame) = body.frame().await {
+            if frame.is_err() {
+                break;
+            }
+        }
+    })
+    .await
+    .is_ok()
+}
+
+/// Review M3 of SITE-027: an owner stream checks its session, so revoking the site's sessions (as
+/// `revoke-site` and a withdrawal do) ends it within one check.
+#[tokio::test]
+async fn owner_stream_ends_when_site_sessions_are_revoked() {
+    let harness = TestDatabase::create().await.expect("a test database");
+    let limits = SiteStreamLimits {
+        owner_check: Duration::from_millis(200),
+        ..SiteStreamLimits::default()
+    };
+    let (app, cookie, _) = edge(&harness, limits).await;
+    let response = open(&app, Some(&cookie), "6.6.6.6", None).await;
+    assert_eq!(response.status(), 200, "the owner stream");
+    let mut body = response.into_body();
+
+    let revoke = Request::builder()
+        .method("POST")
+        .uri("/v1/sessions/revoke-site")
+        .header("authorization", format!("Bearer {OWNER}"))
+        .header("content-type", "application/json")
+        .body(Body::from(r#"{"site_id":"site-a"}"#))
+        .expect("a request");
+    let revoked = app.clone().oneshot(revoke).await.expect("a response");
+    assert_eq!(revoked.status(), 200, "revoke-site");
+    assert!(
+        ends_within(&mut body, Duration::from_secs(3)).await,
+        "the owner stream outlived the revocation of its session"
+    );
+
+    harness.cleanup().await.expect("cleanup");
+}
+
+/// Review M3 of SITE-027: an owner stream ends when its session expires, without a revocation.
+#[tokio::test]
+async fn owner_stream_ends_at_session_expiry() {
+    let harness = TestDatabase::create().await.expect("a test database");
+    let (app, cookie, _) = edge(&harness, SiteStreamLimits::default()).await;
+    sqlx::query(
+        "update identity.sessions set expires_at = now() + interval '2 seconds'
+          where kind = 'site_owner'",
+    )
+    .execute(harness.pool())
+    .await
+    .expect("the session expires soon");
+    let response = open(&app, Some(&cookie), "6.6.6.6", None).await;
+    assert_eq!(response.status(), 200, "the owner stream");
+    let mut body = response.into_body();
+    assert!(
+        ends_within(&mut body, Duration::from_secs(5)).await,
+        "the owner stream outlived its session"
+    );
+
+    harness.cleanup().await.expect("cleanup");
+}
+
+/// Review M3 of SITE-027: the owner streams of one site have a bound too.
+#[tokio::test]
+async fn owner_streams_have_a_bound_per_site() {
+    let harness = TestDatabase::create().await.expect("a test database");
+    let limits = SiteStreamLimits {
+        per_site_owner: 1,
+        ..SiteStreamLimits::default()
+    };
+    let (app, cookie, _) = edge(&harness, limits).await;
+    let first = open(&app, Some(&cookie), "6.6.6.6", None).await;
+    assert_eq!(first.status(), 200, "the first owner stream");
+    let second = open(&app, Some(&cookie), "6.6.6.6", None).await;
+    assert_eq!(second.status(), 503, "the second owner stream of the site");
+    let (_, body) = refusal(second).await;
+    assert_eq!(body["code"], "platform.limit.overloaded", "{body}");
     drop(first);
 
     harness.cleanup().await.expect("cleanup");
