@@ -34,24 +34,30 @@ fn now() -> jiff::Timestamp {
     jiff::Timestamp::now() // wall-clock: the handlers under test read the clock themselves
 }
 
-/// The class table of the spec, as `(methods, path below /v1/sites/{site}, class)`.
+/// The class table of the spec, as `(methods, path below /v1/sites, class)`. `GET /v1/sites` and
+/// `GET .../manifest` are the two reads of the web client (workspace task 6.14).
 fn listed() -> Vec<(Vec<Method>, &'static str, SiteRouteClass)> {
     use SiteRouteClass::{Management, Release, SiteOrigin};
     let read_write = vec![Method::GET, Method::PUT, Method::DELETE];
     vec![
-        (vec![Method::PUT], "/manifest", Management),
+        (vec![Method::GET], "", Management),
         (
-            vec![Method::POST, Method::DELETE],
-            "/manifest/approval",
+            vec![Method::GET, Method::PUT],
+            "/{site}/manifest",
             Management,
         ),
-        (read_write.clone(), "/publications", Management),
-        (read_write, "/publications/{publication}", Management),
-        (vec![Method::GET], "/releases", Management),
-        (vec![Method::POST], "/releases", Release),
+        (
+            vec![Method::POST, Method::DELETE],
+            "/{site}/manifest/approval",
+            Management,
+        ),
+        (read_write.clone(), "/{site}/publications", Management),
+        (read_write, "/{site}/publications/{publication}", Management),
+        (vec![Method::GET], "/{site}/releases", Management),
+        (vec![Method::POST], "/{site}/releases", Release),
         (
             vec![Method::GET, Method::HEAD],
-            "/content/{*rest}",
+            "/{site}/content/{*rest}",
             SiteOrigin,
         ),
     ]
@@ -63,7 +69,7 @@ fn listed() -> Vec<(Vec<Method>, &'static str, SiteRouteClass)> {
 fn unclassified_site_route_fails_start_up() {
     const UNCLASSIFIED: [SiteRoute; 1] = [SiteRoute {
         methods: &[Method::PUT],
-        path: "/manifest",
+        path: "/{site}/manifest",
         class: None,
     }];
     let refusal = check_routes(&UNCLASSIFIED);
@@ -91,7 +97,7 @@ fn site_routes_have_their_listed_classes() {
             assert_eq!(
                 rows,
                 [Some(*class)],
-                "{method} /v1/sites/{{site}}{path} must have exactly the class {class:?}"
+                "{method} /v1/sites{path} must have exactly the class {class:?}"
             );
         }
     }
@@ -101,7 +107,7 @@ fn site_routes_have_their_listed_classes() {
                 listed
                     .iter()
                     .any(|(methods, path, _)| *path == row.path && methods.contains(method)),
-                "{method} /v1/sites/{{site}}{} is not in the class list",
+                "{method} /v1/sites{} is not in the class list",
                 row.path
             );
         }
@@ -161,16 +167,16 @@ async fn session(
 async fn stub_sites() -> (std::net::SocketAddr, Arc<AtomicUsize>) {
     let count = Arc::new(AtomicUsize::new(0));
     let seen = Arc::clone(&count);
-    let router = Router::new().route(
-        "/v1/sites/{*rest}",
-        any(move || {
-            let seen = Arc::clone(&seen);
-            async move {
-                seen.fetch_add(1, Ordering::SeqCst);
-                StatusCode::OK
-            }
-        }),
-    );
+    let handler = any(move || {
+        let seen = Arc::clone(&seen);
+        async move {
+            seen.fetch_add(1, Ordering::SeqCst);
+            StatusCode::OK
+        }
+    });
+    let router = Router::new()
+        .route("/v1/sites", handler.clone())
+        .route("/v1/sites/{*rest}", handler);
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("a loopback listener");
@@ -325,6 +331,21 @@ async fn management_route_needs_live_owner_grant() {
     assert_eq!(call(&app, "PUT", manifest, owner).await.0, 200);
     assert_eq!(count.load(Ordering::SeqCst), 1, "the owner reaches sites");
 
+    // Workspace task 6.14: the two reads of the web client are management routes too.
+    for path in ["/v1/sites", manifest] {
+        assert_eq!(
+            call(&app, "GET", path, Some("site-classes-member-0000000000")).await,
+            (403, "platform.auth.forbidden".to_owned()),
+            "GET {path} with a session without the grant"
+        );
+        assert_eq!(
+            call(&app, "GET", path, owner).await.0,
+            200,
+            "GET {path} for the owner"
+        );
+    }
+    assert_eq!(count.load(Ordering::SeqCst), 3, "both reads reach sites");
+
     assert_eq!(
         call(&app, "GET", "/v1/sites/demo-site/unlisted", owner).await,
         (404, "platform.route.not_found".to_owned()),
@@ -335,7 +356,7 @@ async fn management_route_needs_live_owner_grant() {
         (405, "platform.route.method_not_allowed".to_owned()),
         "a method that the row does not hold is not proxied"
     );
-    assert_eq!(count.load(Ordering::SeqCst), 1);
+    assert_eq!(count.load(Ordering::SeqCst), 3);
 
     harness.cleanup().await.expect("cleanup");
 }
