@@ -163,6 +163,12 @@ impl FixedConsumerSpec {
         }
     }
 
+    /// Every filter subject of the durable.
+    #[must_use]
+    pub fn filters(&self) -> Vec<&'static str> {
+        vec![self.filter_subject]
+    }
+
     /// The same durable with another ack wait.
     #[must_use]
     pub const fn with_ack_wait_seconds(mut self, seconds: u64) -> Self {
