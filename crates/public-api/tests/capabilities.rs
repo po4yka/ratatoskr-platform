@@ -684,3 +684,58 @@ async fn archive_receiver_is_available_only_for_its_own_receipt_document() {
         "a 404 on the capability path is not a receiver"
     );
 }
+
+/// A gateway that routes the notes service, as the shipped Edge example does.
+fn notes_gateway() -> GatewayConfig {
+    GatewayConfig {
+        routes: BTreeMap::from([(
+            "notes".to_owned(),
+            GatewayRouteConfig {
+                prefix: "/v1/notes".to_owned(),
+                listener: "127.0.0.1:8099".parse().expect("a socket address"),
+                class: Some(GatewayRouteClass::Control),
+                capabilities_path: "/v1/capabilities".to_owned(),
+                archive_receipt_path: "/v1/ai-archives/receipt".to_owned(),
+            },
+        )]),
+        ..GatewayConfig::default()
+    }
+}
+
+/// `notes.vaults` (workspace change `add-notes-vault-connections`, task 9.24) is reported where the
+/// deployment routes the notes service and the database is reachable, and nowhere else. The web
+/// client shows its notes section only on this name.
+#[tokio::test]
+async fn notes_vaults_follows_the_notes_route() {
+    let harness = TestDatabase::create().await.expect("a test database");
+    seed(harness.pool(), CREDENTIAL).await;
+    let routed = |database_reachable: bool| {
+        let mut state = deployment(&harness, database_reachable, true);
+        state.gateway = platform_public_api::gateway::Gateway::from_config(&notes_gateway());
+        app(state)
+    };
+
+    let (status, body) = send(&routed(true), ask(Some(CREDENTIAL))).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(
+        names(&body).contains(&"notes.vaults".to_owned()),
+        "a deployment that routes notes must report notes.vaults: {body}"
+    );
+
+    let (_, body) = send(
+        &app(deployment(&harness, true, true)),
+        ask(Some(CREDENTIAL)),
+    )
+    .await;
+    assert!(
+        !names(&body).contains(&"notes.vaults".to_owned()),
+        "a deployment without the notes route must not report notes.vaults: {body}"
+    );
+
+    let (_, body) = send(&routed(false), ask(Some(CREDENTIAL))).await;
+    assert!(
+        !names(&body).contains(&"notes.vaults".to_owned()),
+        "an unreachable database must remove notes.vaults: {body}"
+    );
+    harness.cleanup().await.expect("cleanup");
+}

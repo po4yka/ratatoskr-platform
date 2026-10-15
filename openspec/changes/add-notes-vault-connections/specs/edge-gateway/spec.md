@@ -62,6 +62,15 @@ The generic proxy SHALL answer a redirect of a domain service (`301`, `302`, `30
 - **WHEN** the stub notes upstream answers a file read of the owner with `301`, `302`, `303`, `307` and `308`, each with a `Location` header
 - **THEN** Edge answers each with `502` and `edge.upstream_invalid_response` and no `Location` header, verified by `crates/public-api/tests/notes_device_routes.rs::redirect_from_a_notes_route_is_not_relayed`
 
+### Requirement: Edge reports the notes capability where it routes notes
+
+`GET /v1/capabilities` SHALL list `notes.vaults` to an authenticated caller when the deployment routes the notes service and the database is reachable, and SHALL NOT list it otherwise. The notes service serves no capability document, so the name does not depend on a sample of notes.
+
+#### Scenario: The capability follows the notes route
+
+- **WHEN** the owner reads the capabilities of a deployment with the notes route, of one without it, and of one with the route and an unreachable database
+- **THEN** only the first answer lists `notes.vaults`, verified by `crates/public-api/tests/capabilities.rs::notes_vaults_follows_the_notes_route`
+
 ### Requirement: The connect proxy keeps no part of the body
 
 `POST /v1/notes/connections` SHALL mint an operation of kind `notes.connection.connect`, forward the body to the notes upstream unchanged with `x-ratatoskr-operation-id`, and answer `202` with the operation id. Edge SHALL NOT write any part of the body to its database, its outbox, its idempotency records, its audit records or its logs.
