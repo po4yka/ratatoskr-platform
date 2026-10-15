@@ -616,6 +616,10 @@ create unique index site_approvals_hostname_is_unique_while_approved
 -- ---------------------------------------------------------------------------------------------
 -- site_sign_in_codes: the single-use code that opens a site owner session (SITE-027)
 -- ---------------------------------------------------------------------------------------------
+--
+-- Workspace change add-site-owner-editing-and-live, design D1. The owner's primary session approves
+-- a sign-in for one site; the site's callback page redeems the code with its PKCE verifier. Like
+-- every other secret in this file, the code is stored only as its digest.
 
 create table identity.site_sign_in_codes (
     code_id               uuid        primary key,
@@ -628,8 +632,32 @@ create table identity.site_sign_in_codes (
     hostname              text        not null,
     created_at            timestamptz not null,
     expires_at            timestamptz not null,
-    consumed_at           timestamptz
+    consumed_at           timestamptz,
+
+    constraint site_sign_in_codes_code_hash_is_a_digest
+        check (length(code_hash) = 32),
+    constraint site_sign_in_codes_site_id_is_a_site_id
+        check (site_id ~ '^[a-z0-9-]{3,40}$'),
+    -- The S256 challenge: 32 bytes in base64url without padding.
+    constraint site_sign_in_codes_challenge_is_s256
+        check (challenge ~ '^[A-Za-z0-9_-]{43}$'),
+    constraint site_sign_in_codes_return_path_is_a_path
+        check (return_path ~ '^/' and length(return_path) <= 1024),
+    constraint site_sign_in_codes_hostname_is_bounded
+        check (length(hostname) between 1 and 253),
+    constraint site_sign_in_codes_expires_after_it_is_created
+        check (expires_at > created_at),
+    constraint site_sign_in_codes_consumed_at_is_not_before_created_at
+        check (consumed_at is null or consumed_at >= created_at)
 );
+
+comment on table identity.site_sign_in_codes is
+    'The single-use, 60-second code that opens a site_owner session for one site (workspace spec '
+    'site-owner-session). A presentation of a live code consumes it, accepted or not.';
+
+-- The lookup when a code is presented.
+create unique index site_sign_in_codes_code_hash_key
+    on identity.site_sign_in_codes (code_hash);
 
 -- =================================================================================================
 -- operations
