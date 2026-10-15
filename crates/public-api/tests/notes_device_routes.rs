@@ -15,7 +15,10 @@ use std::time::Duration;
 
 use axum::body::Body;
 use http::{Method, Request, StatusCode};
-use notes_support::{answering, app, device_credential, notes_route, seed_plugin, send, stub};
+use notes_support::{
+    OWNER_CREDENTIAL, answering, app, device_credential, notes_route, seed_owner, seed_plugin,
+    send, stub, values,
+};
 use platform_core::config::GatewayConfig;
 use platform_persistence::test_support::TestDatabase;
 
@@ -131,6 +134,82 @@ async fn change_batch_and_manifest_take_the_transfer_timeout() {
             StatusCode::OK,
             "{path}: an answer within the transfer budget must reach the device: {body}"
         );
+    }
+    task.abort();
+    harness.cleanup().await.expect("cleanup");
+}
+
+#[tokio::test]
+async fn owner_session_is_refused_on_device_routes() {
+    let (address, mut seen, task) = stub().await;
+    let harness = TestDatabase::create().await.expect("a test database");
+    let owner = seed_owner(harness.pool()).await;
+    let app = app(&harness, &notes_route(address));
+    let request = |method: Method, uri: &str| {
+        Request::builder()
+            .method(method)
+            .uri(uri)
+            .header("authorization", format!("Bearer {OWNER_CREDENTIAL}"))
+            .header("content-type", "application/json")
+            .body(Body::from("{}"))
+            .expect("a request")
+    };
+
+    for (method, path) in [
+        (Method::POST, "/changes"),
+        (Method::POST, "/manifest"),
+        (Method::POST, "/blobs"),
+        (Method::PUT, "/blobs/session-1/chunks/0"),
+        (Method::GET, "/blobs/session-1/status"),
+        (Method::POST, "/blobs/session-1/finalize"),
+    ] {
+        let (status, body) = send(&app, request(method, &format!("{CONNECTION}{path}"))).await;
+        assert_eq!(
+            status,
+            StatusCode::FORBIDDEN,
+            "{path}: a device route must refuse a session that is not a device: {body}"
+        );
+        assert_eq!(body["code"], "platform.auth.forbidden");
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), seen.recv())
+                .await
+                .is_err(),
+            "{path}: a request without a device reached the notes service"
+        );
+    }
+
+    let revision = "a".repeat(64);
+    for (method, path, query) in [
+        (Method::GET, "/v1/notes/connections".to_owned(), None),
+        (Method::GET, format!("{CONNECTION}/files"), None),
+        (
+            Method::GET,
+            format!("{CONNECTION}/files/Daily/2024-01-01.md"),
+            Some(format!("revision={revision}")),
+        ),
+        (
+            Method::GET,
+            format!("{CONNECTION}/index/Daily/2024-01-01.md"),
+            None,
+        ),
+        (Method::PUT, format!("{CONNECTION}/excluded-folders"), None),
+        (Method::DELETE, CONNECTION.to_owned(), None),
+    ] {
+        let uri = query
+            .as_ref()
+            .map_or_else(|| path.clone(), |query| format!("{path}?{query}"));
+        let (status, body) = send(&app, request(method.clone(), &uri)).await;
+        assert_eq!(status, StatusCode::OK, "{uri}: {body}");
+        let forwarded = seen.recv().await.expect("the owner request is forwarded");
+        assert_eq!(forwarded.method, method);
+        assert_eq!(forwarded.path, path);
+        assert_eq!(forwarded.query, query);
+        assert_eq!(
+            values(&forwarded.headers, "x-ratatoskr-user-id"),
+            [owner.to_string()]
+        );
+        assert!(forwarded.headers.get("x-ratatoskr-device-id").is_none());
+        assert!(forwarded.headers.get("x-ratatoskr-device-kind").is_none());
     }
     task.abort();
     harness.cleanup().await.expect("cleanup");
