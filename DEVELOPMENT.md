@@ -49,6 +49,14 @@ ends every session including the caller. Pairing has both the authenticated acto
 unauthenticated process-wide limit, and a durable five-attempt code budget; grants and handler
 denials are recorded in `identity.audit_events`.
 
+Present since the site owner session (workspace change `add-site-owner-editing-and-live`): a
+one-time PKCE sign-in code and a `site_owner` session per approved site, the site event stream with
+its bounds, the draft, upload, edit, conflict, library and knowledge routes of that session, and
+`operations.site_edits`, from which Edge sends `edit.completed` and `edit.conflicted`. The suites are
+`site_sign_in.rs` and `site_owner_session.rs` in `crates/identity/tests/`, and `site_sessions.rs`,
+`sessions.rs`, `site_route_classes.rs`, `site_capabilities.rs`, `site_events.rs`, `site_routes.rs`,
+`site_edits.rs` and `site_library.rs` in `crates/public-api/tests/`.
+
 Present since milestone 7: `GET /v1/capabilities`; the `platform_ingest` schema and the generic
 webhook adapter at `POST /v1/ingest/webhooks/{source_id}`, served by `ratatoskr-ingest` on a public
 listener of its own; and the generated public `OpenAPI` document in `openapi/openapi.json`, written

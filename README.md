@@ -230,6 +230,32 @@ name follows the route and not a sample of notes.
 (`RATATOSKR__GATEWAY__ROUTES__SITES__*`), by the same rule. The routes behind it still need the owner
 (ADR-0017).
 
+A site that the owner approved can open a site owner session for its own hostname (ADR-0017;
+workspace change `add-site-owner-editing-and-live`). The primary session issues a one-time code, and
+the site exchanges it with its PKCE verifier for a `__Host-` cookie that is valid only for that site:
+
+```text
+POST /v1/sites/{site}/sign-in-codes                       primary session
+POST /v1/sites/{site}/sessions                            the code and the verifier
+POST /v1/sessions/revoke-site                             primary session
+GET  /v1/sites/{site}/events                              anonymous, or the site owner session
+GET  /v1/sites/{site}/drafts/pages/{slug}                 draft.read
+GET  /v1/sites/{site}/drafts/sources/{source_ref}         draft.read
+POST /v1/sites/{site}/drafts/sources/{source_ref}/blobs   notes.edit
+POST /v1/sites/{site}/edits                               notes.edit
+GET  /v1/sites/{site}/conflicts/{conflict_id}             notes.edit
+POST /v1/sites/{site}/releases                            live.release
+GET  /v1/sites/{site}/library                             library.read
+GET  /v1/sites/{site}/knowledge/search                    knowledge.search
+```
+
+Each route of the site owner session needs the cookie, `X-Ratatoskr-Site-Request` and the site's
+`Origin` on a state change, and a capability in the site's effective set: the capabilities that the
+owner approved and that the active manifest declares. An edit names its content by a notes
+`BlobRef` from the upload route and becomes one `cmd.notes.file.write_requested.v1` with the origin
+`site:<site id>`; Edge publishes no build command for it. The owner's library and knowledge search
+answer what `GET /v1/library/search` answers, and name no tenant.
+
 `GET /v1/status` is the anonymous public availability surface. It returns four stable groups: API,
 storage, command delivery, and connected services. Cached observations supply every value. It preserves
 `degraded`, `unavailable`, `unknown`, and stale states, sets `Cache-Control: no-store`, and never
