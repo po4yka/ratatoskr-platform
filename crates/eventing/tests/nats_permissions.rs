@@ -1,5 +1,6 @@
 //! Real-broker proof for the least-privilege Telegram notification identity, and for the `NOTES`
-//! identity of the deployed ACL with the two Knowledge durables that read note events.
+//! identity of the deployed ACL with the two Knowledge durables that read note events and the
+//! conflict events of the notes write path.
 
 #![allow(
     clippy::expect_used,
@@ -359,4 +360,75 @@ async fn notes_identity_publishes_its_events_and_knowledge_reads_its_durables() 
             .await
             .unwrap_or_else(|error| panic!("KNOWLEDGE cannot acknowledge on {durable}: {error}"));
     }
+}
+
+/// Publish `subject` as `client` and wait for the stream's acknowledgement. `Err` is the observable
+/// form of a refusal: a denied publish is never acknowledged.
+async fn acknowledged(client: &async_nats::Client, subject: &str) -> Result<(), String> {
+    timeout(REQUEST_TIMEOUT + Duration::from_millis(500), async {
+        jetstream::new(client.clone())
+            .publish(subject.to_owned(), "{}".into())
+            .await
+            .map_err(|error| error.to_string())?
+            .await
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|_| format!("{subject} was not acknowledged in time"))?
+}
+
+/// Workspace OBS-024 task 10.9: on a broker that runs the rendered deployed ACL, `NOTES` publishes
+/// the two conflict events and no command; only EDGE publishes the write command.
+#[tokio::test]
+async fn notes_publishes_conflicts_and_no_command() {
+    const COMMAND: &str = "cmd.notes.file.write_requested.v1";
+    let rendered =
+        platform_nats_profile::render(include_str!("../../../deploy/nats/ratatoskr.conf"))
+            .expect("the deployed ACL renders");
+    let seed = |identity: &str| {
+        rendered
+            .seeds
+            .iter()
+            .find(|seed| seed.name == identity)
+            .map_or_else(
+                || panic!("the deployed ACL has no {identity} seed"),
+                |seed| seed.seed.clone(),
+            )
+    };
+    let broker = Container::start("notes-conflicts", &rendered.conf, &["--user", "root"]);
+    let edge = connect(&broker.url, &seed("EDGE"), None).await.0;
+    let provisioning = jetstream::new(edge.clone());
+    for spec in [StreamSpec::command_stream(), StreamSpec::event_stream()] {
+        provisioning
+            .get_or_create_stream(spec.config())
+            .await
+            .expect("EDGE creates the streams");
+    }
+    ensure_fixed_topology(&provisioning)
+        .await
+        .expect("EDGE provisions every fixed durable");
+    let notes = connect(&broker.url, &seed("NOTES"), Some("_INBOX_notes"))
+        .await
+        .0;
+
+    for subject in [
+        "evt.notes.conflict.raised.v1",
+        "evt.notes.conflict.resolved.v1",
+    ] {
+        let outcome = acknowledged(&notes, subject).await;
+        assert!(
+            outcome.is_ok(),
+            "NOTES could not publish {subject}: {outcome:?}"
+        );
+    }
+    assert!(
+        acknowledged(&notes, COMMAND).await.is_err(),
+        "NOTES published the write command"
+    );
+    let outcome = acknowledged(&edge, COMMAND).await;
+    assert!(
+        outcome.is_ok(),
+        "EDGE could not publish the write command: {outcome:?}"
+    );
 }
