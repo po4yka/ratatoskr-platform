@@ -426,3 +426,48 @@ async fn device_credential_is_refused_on_owner_routes() {
     task.abort();
     harness.cleanup().await.expect("cleanup");
 }
+
+#[tokio::test]
+async fn streamed_change_batch_and_manifest_past_the_notes_maximum_are_refused_with_413() {
+    let (address, mut seen, task) = stub().await;
+    let harness = TestDatabase::create().await.expect("a test database");
+    let (_, device) = seed_plugin(harness.pool()).await;
+    let app = app(&harness, &wide_route(address));
+    let credential = device_credential(&app, device).await;
+
+    for (path, maximum) in [
+        ("/changes", MAX_BATCH_BYTES),
+        ("/manifest", MAX_MANIFEST_BYTES),
+    ] {
+        // No length is declared, so only the limit of the stream can stop the body. It is one MiB
+        // over the maximum and far under the transfer budget of 100 MiB.
+        let chunks = (0..=maximum / 1_048_576)
+            .map(|_| Ok::<_, std::io::Error>(axum::body::Bytes::from(vec![b'x'; 1_048_576])));
+        let (status, body) = send(
+            &app,
+            Request::builder()
+                .method("POST")
+                .uri(format!("{CONNECTION}{path}"))
+                .header("authorization", format!("Bearer {credential}"))
+                .header("content-type", "application/json")
+                .body(Body::from_stream(futures_util::stream::iter(chunks)))
+                .expect("a request"),
+        )
+        .await;
+
+        assert_eq!(
+            status,
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "{path}: a streamed body past the maximum of notes must be refused: {body}"
+        );
+        assert_eq!(body["code"], "platform.request.payload_too_large");
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), seen.recv())
+                .await
+                .is_err(),
+            "{path}: notes took a streamed body past its maximum"
+        );
+    }
+    task.abort();
+    harness.cleanup().await.expect("cleanup");
+}

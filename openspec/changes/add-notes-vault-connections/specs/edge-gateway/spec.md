@@ -44,6 +44,11 @@ Edge SHALL forward a change batch up to 2 MiB, a manifest up to 32 MiB and an up
 - **WHEN** a paired plugin sends a change batch of 2 MiB, a manifest of 32 MiB and an upload chunk of 16 MiB, and then each of them with one byte more
 - **THEN** the stub upstream receives each body of the largest size unchanged, and Edge refuses each larger body with `413` (`platform.request.payload_too_large`) before it reaches the stub, verified by `crates/public-api/tests/notes_device_routes.rs::change_batch_admits_the_notes_maximum`, `manifest_admits_the_notes_maximum` and `chunk_admits_the_contract_maximum`
 
+#### Scenario: A streamed body grows past the largest size that notes takes
+
+- **WHEN** a paired plugin sends a change batch and a manifest without `Content-Length` that stream one MiB more than 2 MiB and 32 MiB, under a `transfer` budget of 100 MiB
+- **THEN** Edge answers each with `413` (`platform.request.payload_too_large`), and the stub upstream records no request, verified by `crates/public-api/tests/notes_device_routes.rs::streamed_change_batch_and_manifest_past_the_notes_maximum_are_refused_with_413`
+
 ### Requirement: A notes device route needs a device credential
 
 Edge SHALL refuse with `403` (`platform.auth.forbidden`), and SHALL NOT forward, a request to `/v1/notes/connections/{id}/changes`, `/v1/notes/connections/{id}/manifest` or a path under `/v1/notes/connections/{id}/blobs` whose credential is not the credential of an active paired device. Notes answers such a request with `401`, which Edge does not relay. The other notes routes SHALL go to notes with the user id claim of an authenticated session of the owner that is not a device.
