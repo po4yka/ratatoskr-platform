@@ -100,28 +100,69 @@ pub async fn register_device<'e, E>(
 where
     E: PgExecutor<'e>,
 {
+    let new = NewDevice {
+        user_id,
+        kind,
+        display_name,
+        site_id: None,
+    };
+    register_site_device(executor, new, digest, now).await
+}
+
+/// Who a new device belongs to and what it is.
+#[derive(Debug, Clone, Copy)]
+pub struct NewDevice<'a> {
+    /// Its owner.
+    pub user_id: Uuid,
+    /// Which client.
+    pub kind: DeviceKind,
+    /// A human label the user chose.
+    pub display_name: Option<&'a str>,
+    /// The one site of a `site_deployer`, required for that kind and refused for every other kind
+    /// by the schema.
+    pub site_id: Option<&'a str>,
+}
+
+/// Register a device that may name a site: [`register_device`] with the site of a
+/// `site_deployer`.
+///
+/// # Errors
+///
+/// [`PersistenceError::Query`] if the insert fails, including when the site does not satisfy the
+/// schema's rule for the kind.
+pub async fn register_site_device<'e, E>(
+    executor: E,
+    new: NewDevice<'_>,
+    digest: SecretDigest,
+    now: jiff::Timestamp,
+) -> Result<Device, PersistenceError>
+where
+    E: PgExecutor<'e>,
+{
     let device_id = Uuid::now_v7();
     sqlx::query(
         "insert into identity.registered_devices
-             (device_id, user_id, kind, display_name, secret_hash, created_at, last_seen_at)
-         values ($1, $2, $3, $4, $5, $6, $6)",
+             (device_id, user_id, kind, display_name, secret_hash, created_at, last_seen_at,
+              site_id)
+         values ($1, $2, $3, $4, $5, $6, $6, $7)",
     )
     .bind(device_id)
-    .bind(user_id)
-    .bind(kind.as_str())
-    .bind(display_name)
+    .bind(new.user_id)
+    .bind(new.kind.as_str())
+    .bind(new.display_name)
     .bind(digest.as_bytes().as_slice())
     .bind(to_offset(now))
+    .bind(new.site_id)
     .execute(executor)
     .await
     .map_err(PersistenceError::Query)?;
 
     Ok(Device {
         device_id,
-        user_id,
-        kind,
-        display_name: display_name.map(str::to_owned),
-        site_id: None,
+        user_id: new.user_id,
+        kind: new.kind,
+        display_name: new.display_name.map(str::to_owned),
+        site_id: new.site_id.map(str::to_owned),
         created_at: now,
         revoked_at: None,
     })
@@ -140,7 +181,7 @@ where
     E: PgExecutor<'e>,
 {
     let row = sqlx::query(
-        "select device_id, user_id, kind, display_name, created_at, revoked_at
+        "select device_id, user_id, kind, display_name, created_at, revoked_at, site_id
            from identity.registered_devices where device_id = $1",
     )
     .bind(device_id)
@@ -162,7 +203,7 @@ where
             display_name: row
                 .try_get("display_name")
                 .map_err(PersistenceError::Query)?,
-            site_id: None,
+            site_id: row.try_get("site_id").map_err(PersistenceError::Query)?,
             created_at: from_offset(row.try_get("created_at").map_err(PersistenceError::Query)?),
             revoked_at: revoked_at.map(from_offset),
         })

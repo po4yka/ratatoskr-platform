@@ -37,6 +37,8 @@ pub struct PairingCode {
     pub created_by_session_id: Uuid,
     /// What the initiator pinned, when they pinned a kind at all.
     pub expected_kind: Option<DeviceKind>,
+    /// The one site of a `site_deployer` code.
+    pub site_id: Option<String>,
     /// The initiator's human note.
     pub label: Option<String>,
     /// When it was minted.
@@ -124,8 +126,8 @@ pub async fn create_code(
     sqlx::query(
         "insert into identity.pairing_codes
              (pairing_code_id, user_id, created_by_session_id, code_hash, expected_kind, label,
-              created_at, expires_at)
-         values ($1, $2, $3, $4, $5, $6, $7, $8)",
+              created_at, expires_at, site_id)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
     )
     .bind(pairing_code_id)
     .bind(new.user_id)
@@ -135,6 +137,7 @@ pub async fn create_code(
     .bind(new.label)
     .bind(to_offset(new.now))
     .bind(to_offset(new.expires_at))
+    .bind(new.site_id)
     .execute(&mut **transaction)
     .await
     .map_err(PersistenceError::Query)?;
@@ -144,6 +147,7 @@ pub async fn create_code(
         user_id: new.user_id,
         created_by_session_id: new.created_by_session_id,
         expected_kind: new.expected_kind,
+        site_id: new.site_id.map(str::to_owned),
         label: new.label.map(str::to_owned),
         created_at: new.now,
         expires_at: new.expires_at,
@@ -171,7 +175,7 @@ where
 {
     let row = sqlx::query(
         "select pairing_code_id, user_id, created_by_session_id, expected_kind, label,
-                created_at, expires_at, superseded_at, consumed_at, consumed_by_device_id
+                created_at, expires_at, superseded_at, consumed_at, consumed_by_device_id, site_id
            from identity.pairing_codes
           where code_hash = $1
           order by created_at desc
@@ -231,6 +235,9 @@ pub struct Redeemed {
 /// against races. A pinned expected kind differing from the declared one refuses WITHOUT
 /// consuming: the initiator approved a kind of device, and a typo should not burn their grant.
 ///
+/// A `site_deployer` pairs only from a code that pins that kind, because only such a code names
+/// the one site that the device deploys. The device records that site.
+///
 /// # Errors
 ///
 /// [`PersistenceError::Query`] if a statement fails. A refusal is `Ok(Err(PairRefused))`: an
@@ -240,7 +247,7 @@ pub async fn redeem(
     request: &PairRequest<'_>,
 ) -> Result<Result<Redeemed, PairRefused>, PersistenceError> {
     let row = sqlx::query(
-        "select pairing_code_id, user_id, expected_kind
+        "select pairing_code_id, user_id, expected_kind, site_id
            from identity.pairing_codes
           where code_hash = $1
             and consumed_at is null
@@ -259,37 +266,21 @@ pub async fn redeem(
         return Ok(Err(PairRefused));
     };
 
-    // A pinned kind is part of what the initiator approved. Refusing a mismatch here leaves the
-    // code live: a corrected presentation may still succeed within its lifetime.
-    let pinned: Option<String> = row
-        .try_get("expected_kind")
-        .map_err(PersistenceError::Query)?;
-    if let Some(pinned) = pinned.as_deref()
-        && DeviceKind::from_str_opt(pinned) != Some(request.declared_kind)
-    {
-        sqlx::query(
-            "update identity.pairing_codes
-                set failed_attempts = failed_attempts + 1
-              where pairing_code_id = $1 and failed_attempts < 5",
-        )
-        .bind(
-            row.try_get::<Uuid, _>("pairing_code_id")
-                .map_err(PersistenceError::Query)?,
-        )
-        .execute(&mut **transaction)
-        .await
-        .map_err(PersistenceError::Query)?;
-        tracing::info!("a pairing code was presented with a kind its initiator did not pin");
+    if kind_refused(transaction, &row, request.declared_kind).await? {
         return Ok(Err(PairRefused));
     }
+    let site_id: Option<String> = row.try_get("site_id").map_err(PersistenceError::Query)?;
 
     let user_id: Uuid = row.try_get("user_id").map_err(PersistenceError::Query)?;
 
-    let device = crate::device::register_device(
+    let device = crate::device::register_site_device(
         &mut **transaction,
-        user_id,
-        request.declared_kind,
-        request.display_name,
+        crate::device::NewDevice {
+            user_id,
+            kind: request.declared_kind,
+            display_name: request.display_name,
+            site_id: site_id.as_deref(),
+        },
         request.device_secret,
         request.now,
     )
@@ -349,6 +340,45 @@ pub async fn redeem(
     }))
 }
 
+/// Whether the code refuses the declared kind.
+///
+/// A pinned kind is part of what the initiator approved. A mismatch counts against the code's
+/// attempt budget and leaves the code live: a corrected presentation may still succeed within its
+/// lifetime. A `site_deployer` needs a code that names its site, which only a code that pins that
+/// kind does.
+async fn kind_refused(
+    transaction: &mut PgTransaction<'_>,
+    row: &sqlx::postgres::PgRow,
+    declared: DeviceKind,
+) -> Result<bool, PersistenceError> {
+    let pinned: Option<String> = row
+        .try_get("expected_kind")
+        .map_err(PersistenceError::Query)?;
+    if let Some(pinned) = pinned.as_deref()
+        && DeviceKind::from_str_opt(pinned) != Some(declared)
+    {
+        sqlx::query(
+            "update identity.pairing_codes
+                set failed_attempts = failed_attempts + 1
+              where pairing_code_id = $1 and failed_attempts < 5",
+        )
+        .bind(
+            row.try_get::<Uuid, _>("pairing_code_id")
+                .map_err(PersistenceError::Query)?,
+        )
+        .execute(&mut **transaction)
+        .await
+        .map_err(PersistenceError::Query)?;
+        tracing::info!("a pairing code was presented with a kind its initiator did not pin");
+        return Ok(true);
+    }
+    if declared == DeviceKind::SiteDeployer && pinned.is_none() {
+        tracing::info!("a site_deployer was presented with a code that names no site");
+        return Ok(true);
+    }
+    Ok(false)
+}
+
 fn decode(row: &sqlx::postgres::PgRow) -> Result<PairingCode, PersistenceError> {
     let expected_kind: Option<String> = row
         .try_get("expected_kind")
@@ -369,6 +399,7 @@ fn decode(row: &sqlx::postgres::PgRow) -> Result<PairingCode, PersistenceError> 
             .try_get("created_by_session_id")
             .map_err(PersistenceError::Query)?,
         expected_kind: expected_kind.as_deref().and_then(DeviceKind::from_str_opt),
+        site_id: row.try_get("site_id").map_err(PersistenceError::Query)?,
         label: row.try_get("label").map_err(PersistenceError::Query)?,
         created_at: from_offset(row.try_get("created_at").map_err(PersistenceError::Query)?),
         expires_at: from_offset(row.try_get("expires_at").map_err(PersistenceError::Query)?),

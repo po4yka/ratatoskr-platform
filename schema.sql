@@ -119,9 +119,17 @@ create table identity.registered_devices (
     created_at    timestamptz not null,
     last_seen_at  timestamptz,
     revoked_at    timestamptz,
+    site_id       text,
 
     constraint registered_devices_kind_is_known
-        check (kind in ('mobile', 'browser_extension', 'export_agent', 'obsidian_plugin')),
+        check (kind in ('mobile', 'browser_extension', 'export_agent', 'obsidian_plugin',
+                        'site_deployer')),
+    -- A `site_deployer` deploys exactly one site, and no other kind has a site (workspace spec
+    -- `site-bundles`).
+    constraint registered_devices_site_id_matches_kind
+        check ((kind = 'site_deployer') = (site_id is not null)),
+    constraint registered_devices_site_id_is_a_site_id
+        check (site_id is null or site_id ~ '^[a-z0-9-]{3,40}$'),
     constraint registered_devices_display_name_is_bounded
         check (display_name is null or length(display_name) between 1 and 120),
     -- A 32-byte Argon2id/HMAC output. The length is checked so a plaintext secret, which would be
@@ -135,6 +143,9 @@ create table identity.registered_devices (
 comment on table identity.registered_devices is
     'A registered installation with constrained credentials (DOMAIN.md, Device). The device secret '
     'is never stored, only its hash.';
+comment on column identity.registered_devices.site_id is
+    'The one site whose deploy routes a site_deployer reaches, from its pairing code. Edge names it '
+    'in the claims of the device and refuses the device on every other route.';
 
 create index registered_devices_user_id_idx
     on identity.registered_devices (user_id)
@@ -492,12 +503,20 @@ create table identity.pairing_codes (
     superseded_at         timestamptz,
     consumed_at           timestamptz,
     consumed_by_device_id uuid        references identity.registered_devices (device_id),
+    site_id               text,
 
     -- What the initiating session approved. Null means "any kind"; a value must be honoured at
     -- consumption, which is what makes the approval UX contract more than decoration.
     constraint pairing_codes_expected_kind_is_known
         check (expected_kind is null or expected_kind in
-               ('mobile', 'browser_extension', 'export_agent', 'obsidian_plugin')),
+               ('mobile', 'browser_extension', 'export_agent', 'obsidian_plugin',
+                'site_deployer')),
+    -- A code for a `site_deployer` names its one site, and a code of any other kind, or of no
+    -- pinned kind, names none. So only a pinned code can pair a `site_deployer`.
+    constraint pairing_codes_site_id_matches_kind
+        check ((expected_kind is not distinct from 'site_deployer') = (site_id is not null)),
+    constraint pairing_codes_site_id_is_a_site_id
+        check (site_id is null or site_id ~ '^[a-z0-9-]{3,40}$'),
     constraint pairing_codes_label_is_bounded
         check (label is null or length(label) between 1 and 120),
     constraint pairing_codes_code_hash_is_a_digest
@@ -525,6 +544,8 @@ comment on table identity.pairing_codes is
 comment on column identity.pairing_codes.expected_kind is
     'What the initiator approved pairing, when they pinned one. A presentation whose declared kind '
     'differs is refused exactly as an unknown code is.';
+comment on column identity.pairing_codes.site_id is
+    'The one site of a site_deployer code. The device that the code pairs records it.';
 comment on column identity.pairing_codes.failed_attempts is
     'The durable, five-presentation brute-force budget for mismatched basic device attestation. '
     'A code at five is refused even when a later presentation has the matching attestation.';
