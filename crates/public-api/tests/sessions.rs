@@ -26,6 +26,8 @@ use ring::signature::{Ed25519KeyPair, KeyPair as _};
 use tower::ServiceExt as _;
 use uuid::Uuid;
 
+mod site_owner_support;
+
 const AUDIENCE: &str = "edge";
 
 /// The handlers read the wall clock themselves — the API state carries no clock — so a session
@@ -313,4 +315,123 @@ async fn both_outcomes_are_audited() {
         rows[1].1.is_none(),
         "a denied exchange has no actor, which is exactly why it is worth recording"
     );
+}
+
+/// An Edge with the approved sites `site-a` and `site-b` of the owner, and the stub sites service.
+async fn sites_edge(harness: &TestDatabase) -> Router {
+    use site_owner_support as support;
+    let stub = support::Stub::start().await;
+    let owner = support::primary(harness.pool(), support::OWNER, true).await;
+    for (site, hostname) in [
+        (support::SITE, support::HOSTNAME),
+        (support::OTHER_SITE, support::OTHER_HOSTNAME),
+    ] {
+        stub.manifest(site, hostname, &["pages.read", "notes.edit"]);
+        support::approval(
+            harness.pool(),
+            owner,
+            site,
+            hostname,
+            &["pages.read"],
+            "approved",
+        )
+        .await;
+    }
+    support::app(support::state(harness, stub.address, &[]))
+}
+
+/// Whether the cookie `cookie` authenticates a site owner session of `site` now.
+async fn site_session_live(pool: &sqlx::PgPool, cookie: &str, site: &str) -> bool {
+    platform_identity::session::authenticate(
+        pool,
+        platform_identity::SecretDigest::of(cookie),
+        &platform_identity::session::site_audience(site),
+        now(),
+    )
+    .await
+    .expect("authentication runs")
+    .is_some()
+}
+
+/// Spec `site-owner-session`, "The session list": a live `site_owner` session is listed with its
+/// site id, hostname, issue time and last use, and with no credential data.
+#[tokio::test]
+async fn site_owner_sessions_are_listed_without_credentials() {
+    use site_owner_support as support;
+    let harness = TestDatabase::create().await.expect("a test database");
+    let app = sites_edge(&harness).await;
+    let cookie = support::sign_in(&app, support::SITE, support::HOSTNAME).await;
+
+    let request = Request::builder()
+        .uri("/v1/sessions")
+        .header("authorization", format!("Bearer {}", support::OWNER))
+        .body(Body::empty())
+        .expect("a request");
+    let (status, body) = send(&app, request).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let site_sessions: Vec<&serde_json::Value> = body["sessions"]
+        .as_array()
+        .expect("a list")
+        .iter()
+        .filter(|session| session["kind"] == "site_owner")
+        .collect();
+    assert_eq!(site_sessions.len(), 1, "one site_owner entry: {body}");
+    let listed = site_sessions[0];
+    assert_eq!(listed["site_id"], support::SITE, "{listed}");
+    assert_eq!(listed["hostname"], support::HOSTNAME, "{listed}");
+    assert!(listed["issued_at"].is_string(), "{listed}");
+    assert!(listed["last_seen_at"].is_string(), "{listed}");
+    let text = body.to_string();
+    let digest = platform_identity::SecretDigest::of(&cookie)
+        .as_bytes()
+        .iter()
+        .fold(String::new(), |mut hex, byte| {
+            use std::fmt::Write as _;
+            let _ = write!(hex, "{byte:02x}");
+            hex
+        });
+    assert!(!text.contains(&cookie), "the list holds the cookie value");
+    assert!(
+        !text.contains(&digest),
+        "the list holds the credential digest"
+    );
+
+    harness.cleanup().await.expect("cleanup");
+}
+
+/// Spec `site-owner-session`, "The owner revokes all sessions of a site".
+#[tokio::test]
+async fn revoke_all_for_one_site_spares_other_sites() {
+    use site_owner_support as support;
+    let harness = TestDatabase::create().await.expect("a test database");
+    let app = sites_edge(&harness).await;
+    let first = support::sign_in(&app, support::SITE, support::HOSTNAME).await;
+    let second = support::sign_in(&app, support::SITE, support::HOSTNAME).await;
+    let other = support::sign_in(&app, support::OTHER_SITE, support::OTHER_HOSTNAME).await;
+
+    let request = Request::builder()
+        .method("POST")
+        .uri("/v1/sessions/revoke-site")
+        .header("authorization", format!("Bearer {}", support::OWNER))
+        .header("content-type", "application/json")
+        .body(Body::from(r#"{"site_id":"site-a"}"#))
+        .expect("a request");
+    let (status, body) = send(&app, request).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["revoked"], 2, "{body}");
+    let pool = harness.pool();
+    assert!(
+        !site_session_live(pool, &first, support::SITE).await,
+        "the first session of site-a lives"
+    );
+    assert!(
+        !site_session_live(pool, &second, support::SITE).await,
+        "the second session of site-a lives"
+    );
+    assert!(
+        site_session_live(pool, &other, support::OTHER_SITE).await,
+        "the session of site-b ended"
+    );
+
+    harness.cleanup().await.expect("cleanup");
 }
