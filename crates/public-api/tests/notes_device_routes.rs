@@ -16,8 +16,8 @@ use std::time::Duration;
 use axum::body::Body;
 use http::{Method, Request, StatusCode};
 use notes_support::{
-    OWNER_CREDENTIAL, answering, app, device_credential, notes_route, seed_owner, seed_plugin,
-    send, stub, values,
+    OWNER_CREDENTIAL, answering, answering_with, app, device_credential, notes_route, seed_owner,
+    seed_plugin, send, send_with_headers, stub, values,
 };
 use platform_core::config::GatewayConfig;
 use platform_persistence::test_support::TestDatabase;
@@ -212,5 +212,51 @@ async fn owner_session_is_refused_on_device_routes() {
         assert!(forwarded.headers.get("x-ratatoskr-device-kind").is_none());
     }
     task.abort();
+    harness.cleanup().await.expect("cleanup");
+}
+
+#[tokio::test]
+async fn redirect_from_a_notes_route_is_not_relayed() {
+    let harness = TestDatabase::create().await.expect("a test database");
+    seed_owner(harness.pool()).await;
+    for status in [
+        StatusCode::MOVED_PERMANENTLY,
+        StatusCode::FOUND,
+        StatusCode::SEE_OTHER,
+        StatusCode::TEMPORARY_REDIRECT,
+        StatusCode::PERMANENT_REDIRECT,
+    ] {
+        let (address, task) = answering_with(
+            status,
+            vec![("location", "https://elsewhere.invalid/vault")],
+            serde_json::json!({}),
+            Duration::ZERO,
+        )
+        .await;
+        let app = app(&harness, &notes_route(address));
+
+        let (answer, headers, body) = send_with_headers(
+            &app,
+            Request::builder()
+                .method("GET")
+                .uri(format!("{CONNECTION}/files/Daily/2024-01-01.md"))
+                .header("authorization", format!("Bearer {OWNER_CREDENTIAL}"))
+                .body(Body::empty())
+                .expect("a request"),
+        )
+        .await;
+
+        assert_eq!(
+            answer,
+            StatusCode::BAD_GATEWAY,
+            "a {status} from notes must not reach the client: {body}"
+        );
+        assert_eq!(body["code"], "edge.upstream_invalid_response");
+        assert!(
+            headers.get("location").is_none(),
+            "{status}: Edge relayed the Location"
+        );
+        task.abort();
+    }
     harness.cleanup().await.expect("cleanup");
 }

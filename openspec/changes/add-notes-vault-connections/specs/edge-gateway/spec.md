@@ -53,6 +53,15 @@ Edge SHALL refuse with `403` (`platform.auth.forbidden`), and SHALL NOT forward,
 - **WHEN** the owner's browser session sends a change batch, a manifest and each upload request, and then reads the connections, the files, a file at a revision and its index, sets the excluded folders and removes the connection
 - **THEN** Edge answers each device request with `403` and the stub upstream does not receive it, and the stub receives each other request with its method, path and query unchanged, the owner's user id and no device claim, verified by `crates/public-api/tests/notes_device_routes.rs::owner_session_is_refused_on_device_routes`
 
+### Requirement: Edge does not relay a redirect of a domain service
+
+The generic proxy SHALL answer a redirect of a domain service (`301`, `302`, `303`, `307`, `308`, and every other `3xx` except `304`) with `502` (`edge.upstream_invalid_response`), and SHALL NOT relay its `Location` header. A `304` has no body and no `Location`, and it SHALL be relayed.
+
+#### Scenario: Notes answers a file read with a redirect
+
+- **WHEN** the stub notes upstream answers a file read of the owner with `301`, `302`, `303`, `307` and `308`, each with a `Location` header
+- **THEN** Edge answers each with `502` and `edge.upstream_invalid_response` and no `Location` header, verified by `crates/public-api/tests/notes_device_routes.rs::redirect_from_a_notes_route_is_not_relayed`
+
 ### Requirement: The connect proxy keeps no part of the body
 
 `POST /v1/notes/connections` SHALL mint an operation of kind `notes.connection.connect`, forward the body to the notes upstream unchanged with `x-ratatoskr-operation-id`, and answer `202` with the operation id. Edge SHALL NOT write any part of the body to its database, its outbox, its idempotency records, its audit records or its logs.
