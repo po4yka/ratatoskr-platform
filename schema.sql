@@ -168,7 +168,12 @@ create table identity.sessions (
     token_hash    bytea,
 
     constraint sessions_kind_is_known
-        check (kind in ('browser', 'device', 'telegram_mini_app', 'service', 'api_token')),
+        check (kind in ('browser', 'device', 'telegram_mini_app', 'service', 'api_token',
+                        'site_owner')),
+    -- A site owner session is valid only at the audience of its one site (workspace spec
+    -- site-owner-session), and no other kind has such an audience.
+    constraint sessions_site_owner_has_a_site_audience
+        check ((kind = 'site_owner') = (audience ~ '^site:[a-z0-9-]{3,40}$')),
     constraint sessions_audience_is_bounded
         check (length(audience) between 1 and 120),
     constraint sessions_expires_after_it_is_issued

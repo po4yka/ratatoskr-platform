@@ -174,6 +174,8 @@ async fn new_sign_in_does_not_extend_old_session() {
         assert!(present(harness.pool(), first, &audience, minutes(step * 10)).await);
     }
     site_session(harness.pool(), second, minutes(11 * 60)).await;
+    // The second session is used too, so that its idle limit plays no part.
+    assert!(present(harness.pool(), second, &audience, minutes(11 * 60 + 30)).await);
 
     assert!(
         !present(harness.pool(), first, &audience, minutes(12 * 60 + 1)).await,

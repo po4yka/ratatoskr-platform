@@ -246,6 +246,10 @@ where
 /// audience is the one this listener serves. All three in one query, because a caller that fetched
 /// the session and then checked liveness itself would eventually forget one of them.
 ///
+/// A `site_owner` session also ends [`SITE_OWNER_IDLE`] after its last use. Its audience is
+/// `site:<site id>`, so it authenticates only where the caller asks for that audience: the routes
+/// of its own site (workspace spec `site-owner-session`).
+///
 /// A wrong credential, a revoked session, an expired session and a wrong audience are deliberately
 /// indistinguishable to the caller: `ARCHITECTURE.md` S15 requires authorization before existence is
 /// disclosed, and four different answers here would be an oracle.
@@ -269,11 +273,13 @@ where
           where token_hash = $1
             and audience = $2
             and revoked_at is null
-            and expires_at > $3",
+            and expires_at > $3
+            and (kind <> 'site_owner' or coalesce(last_seen_at, issued_at) > $4)",
     )
     .bind(presented.as_bytes().as_slice())
     .bind(audience)
     .bind(to_offset(now))
+    .bind(to_offset(now - SITE_OWNER_IDLE))
     .fetch_optional(executor)
     .await
     .map_err(PersistenceError::Query)?;
