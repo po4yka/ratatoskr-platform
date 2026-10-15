@@ -2628,6 +2628,25 @@
         ],
         "type": "object"
       },
+      "SiteReleaseBuildAccepted": {
+        "description": "What a client gets back from an accepted build request.",
+        "properties": {
+          "operation_id": {
+            "description": "The operation to poll at `/v1/operations/{id}`.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "status": {
+            "description": "Always `accepted` here.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation_id",
+          "status"
+        ],
+        "type": "object"
+      },
       "SocialCaptureProvenance": {
         "description": "The social provenance a browser extension must assert explicitly.",
         "properties": {
@@ -7030,6 +7049,113 @@
           }
         ],
         "summary": "Approve the active manifest of a site",
+        "tags": [
+          "sites"
+        ]
+      }
+    },
+    "/v1/sites/{site}/releases": {
+      "post": {
+        "description": "Accepts a request to build a release of the site durably and returns the operation of kind `sites.release.build` that tracks it; the sites service builds the release and reports the outcome on the operation. A build that makes no new release succeeds and names the current release.\n\nThe first release that holds a publication is always requested here, whatever the release mode of the publication. `Idempotency-Key` is required: the same key for the same site returns the ORIGINAL operation. Only a primary session whose user holds the live `platform.owner` grant may call this route (class `release`, ADR-0017).",
+        "operationId": "requestSiteReleaseBuild",
+        "parameters": [
+          {
+            "description": "The site id: 3 to 40 lower-case ASCII letters, digits and `-`.",
+            "in": "path",
+            "name": "site",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "A client-chosen key, 1 to 255 characters, unique per distinct request. It is hashed before it is stored.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SiteReleaseBuildAccepted"
+                }
+              }
+            },
+            "description": "Accepted durably. The body carries the operation to poll."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No `Idempotency-Key`."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No credential, or one that does not authenticate here."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The session is not a primary session whose user holds the live `platform.owner` grant."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The site id is not a valid site id."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The key is in use for a different request, or an earlier attempt with it has not finished."
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "A dependency did not answer in time. Nothing was written; retrying with the same key is safe."
+          }
+        },
+        "security": [
+          {
+            "sessionBearer": []
+          }
+        ],
+        "summary": "Request a release build of a site",
         "tags": [
           "sites"
         ]

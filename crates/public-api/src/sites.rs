@@ -16,7 +16,7 @@ use platform_http::{ActorLimiter, RequestContext};
 use platform_identity::SessionKind;
 use uuid::Uuid;
 
-use crate::{ApiState, Principal, gateway, site_approvals};
+use crate::{ApiState, Principal, gateway, site_approvals, site_releases};
 
 /// The name of the sites route in the gateway route table.
 pub const SERVICE: &str = "sites";
@@ -200,6 +200,17 @@ pub async fn dispatch(
                 Err(refusal) => return refusal,
             };
             let correlation = context.correlation_id.to_string();
+            if class == SiteRouteClass::Release {
+                // Only Edge publishes commands, so Edge serves every route of this class.
+                return site_releases::request_build(
+                    &state,
+                    principal,
+                    &correlation,
+                    &site,
+                    &parts.headers,
+                )
+                .await;
+            }
             let below = parts
                 .uri
                 .path()
