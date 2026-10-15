@@ -232,11 +232,13 @@ fn expected_notes() -> (&'static str, Vec<String>) {
     ("NOTES", allow)
 }
 
-/// The SITES identity of SITE-025: the release event, the report subject and its four durables.
+/// The SITES identity of SITE-025: the release event, the report subject and its four durables;
+/// and the draft change of SITE-027.
 fn expected_sites() -> (&'static str, Vec<String>) {
     let mut allow: Vec<String> = [
         subjects(&[
             "evt.sites.release.published.v1",
+            "evt.sites.draft.changed.v1",
             "evt.platform.operation.reported.v1",
         ]),
         trio(CMD, "ratatoskr_sites_release_builds"),
