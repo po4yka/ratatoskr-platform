@@ -212,8 +212,8 @@ pub struct GatewayRouteBudget {
 /// error envelope. The limit is never above the transfer budget, and the validation refuses a
 /// transfer budget below the largest limit of a configured route. The notes limits are
 /// `MAX_BATCH_BYTES` and `MAX_MANIFEST_BYTES` of its channel routes, and `CHUNK_SIZE_MAX_BYTES` of
-/// the shared transfer contract. The sites deploy path has no limit of its own: the sites service
-/// owns the bundle size limit, and the transfer budget bounds the body at Edge.
+/// the shared transfer contract. The sites deploy path carries a bounded JSON proof; the Sites
+/// service fetches and bounds the archive separately. Its transfer deadline covers verification.
 pub const GATEWAY_TRANSFER_PATHS: [(&str, &str, Option<u64>); 6] = [
     ("notes", "/connections/{connection}/blobs", None),
     (
@@ -231,7 +231,7 @@ pub const GATEWAY_TRANSFER_PATHS: [(&str, &str, Option<u64>); 6] = [
         "/connections/{connection}/manifest",
         Some(32 * 1024 * 1024),
     ),
-    ("sites", "/{site}/deploys", None),
+    ("sites", "/{site}/deploys", Some(1_048_576)),
     ("sites", "/{site}/drafts/sources/{source_ref}/blobs", None),
 ];
 

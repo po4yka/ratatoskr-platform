@@ -34,7 +34,7 @@ const DEPLOYER: &str = "deploy-routes-deployer-0000000";
 const SITE: &str = "site-a";
 const OTHER_SITE: &str = "site-b";
 const COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
-const BUNDLE: &[u8] = b"a tar archive of the bundle";
+const BUNDLE: &[u8] = br#"{"commit":"0123456789abcdef0123456789abcdef01234567","artifact_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","attestation_bundle":{}}"#;
 
 fn now() -> jiff::Timestamp {
     jiff::Timestamp::now() // wall-clock: the handlers under test read the clock themselves
@@ -105,7 +105,7 @@ fn app(harness: &TestDatabase, sites: std::net::SocketAddr, notes: std::net::Soc
     let config = PublicConfig {
         bind: "127.0.0.1:0".parse().expect("a socket address"),
         request_timeout_seconds: 30,
-        max_body_bytes: 1_048_576,
+        max_body_bytes: 104_857_600,
         max_concurrent_requests: 64,
         actor_requests_per_minute: 1200,
     };
@@ -190,7 +190,7 @@ async fn call(
     let request = Request::builder()
         .method(method)
         .uri(path)
-        .header("content-type", "application/x-tar")
+        .header("content-type", "application/json")
         .header("authorization", format!("Bearer {credential}"))
         .body(Body::from(body))
         .expect("a request");
@@ -346,7 +346,7 @@ async fn a_deployer_device_deploys_its_site() {
     assert_eq!(path, &deploys(SITE));
     assert_eq!(body.as_slice(), BUNDLE, "the bundle passes unchanged");
     let header = |name: &str| headers.get(name).and_then(|value| value.to_str().ok());
-    assert_eq!(header("content-type"), Some("application/x-tar"));
+    assert_eq!(header("content-type"), Some("application/json"));
     assert_eq!(header("x-ratatoskr-session-kind"), Some("device"));
     assert_eq!(
         header("x-ratatoskr-device-id"),
@@ -422,7 +422,7 @@ async fn a_forged_site_claim_never_reaches_the_sites_service() {
     let request = Request::builder()
         .method("POST")
         .uri(deploys(SITE))
-        .header("content-type", "application/x-tar")
+        .header("content-type", "application/json")
         .header("authorization", format!("Bearer {OWNER}"))
         .header("x-ratatoskr-site-id", OTHER_SITE)
         .body(Body::from(BUNDLE))
@@ -505,4 +505,65 @@ async fn a_deploy_path_resolving_to_another_site_never_reaches_the_sites_service
     );
 
     harness.cleanup().await.expect("cleanup");
+}
+
+/// SITE-028: an immutable request keeps per-site authority; raw tar is refused at Edge.
+#[tokio::test]
+async fn digest_request_keeps_deploy_authority() {
+    let harness = TestDatabase::create().await.expect("a test database");
+    deployer(harness.pool()).await;
+    let (sites, seen) = stub("/v1/sites").await;
+    let (notes, _) = stub("/v1/notes").await;
+    let app = app(&harness, sites, notes);
+    assert_eq!(
+        call(&app, "POST", &deploys(SITE), DEPLOYER, BUNDLE).await.0,
+        200
+    );
+    assert_eq!(
+        call(&app, "POST", &deploys(OTHER_SITE), DEPLOYER, BUNDLE)
+            .await
+            .0,
+        403
+    );
+    let (content_type, bytes) = {
+        let received = seen.lock().expect("the record");
+        (received[0].1["content-type"].clone(), received[0].2.clone())
+    };
+    assert_eq!(content_type, "application/json");
+    assert_eq!(bytes, BUNDLE);
+    let raw = Request::builder()
+        .method("POST")
+        .uri(deploys(SITE))
+        .header("authorization", format!("Bearer {DEPLOYER}"))
+        .header("content-type", "application/x-tar")
+        .body(Body::from("a raw tar archive"))
+        .expect("a request");
+    let response = app.oneshot(raw).await.expect("a response");
+    let status = response.status();
+    let forwarded = count(&seen);
+    harness.cleanup().await.expect("cleanup");
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(forwarded, 1, "raw tar must not reach the sites service");
+}
+
+#[tokio::test]
+async fn provenance_body_is_bounded_before_proxying() {
+    let harness = TestDatabase::create().await.expect("a test database");
+    deployer(harness.pool()).await;
+    let (sites, seen) = stub("/v1/sites").await;
+    let (notes, _) = stub("/v1/notes").await;
+    let app = app(&harness, sites, notes);
+    let request = Request::builder()
+        .method("POST")
+        .uri(deploys(SITE))
+        .header("authorization", format!("Bearer {DEPLOYER}"))
+        .header("content-type", "application/json")
+        .body(Body::from(vec![b' '; 1_048_577]))
+        .expect("a request");
+    let response = app.oneshot(request).await.expect("a response");
+    let status = response.status();
+    let forwarded = count(&seen);
+    harness.cleanup().await.expect("cleanup");
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(forwarded, 0);
 }

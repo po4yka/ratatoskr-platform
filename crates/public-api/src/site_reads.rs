@@ -58,6 +58,9 @@ pub struct ActiveSiteManifest {
     pub publications: Vec<String>,
     /// The capabilities that the manifest requests.
     pub capabilities: Vec<String>,
+    /// The canonical GitHub repository and immutable repository id of the manifest.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub github_repository: Option<ratatoskr_sites_contracts::GitHubRepositoryBinding>,
 }
 
 /// One documented answer.

@@ -24,7 +24,8 @@ use ratatoskr_identifiers::{
     DigestHex, EntityRef, EventId, Extensions, TenantRef, UserId, WireTimestamp,
 };
 use ratatoskr_sites_contracts::{
-    ApprovalState, Hostname, PublicationId, SiteApprovalChanged, SiteCapability, SiteId,
+    ApprovalState, GitHubRepositoryBinding, Hostname, PublicationId, SiteApprovalChanged,
+    SiteCapability, SiteId,
 };
 use sqlx::Row as _;
 use uuid::Uuid;
@@ -64,6 +65,9 @@ pub struct SiteApproval {
     pub hostname: String,
     /// `approved` or `withdrawn`.
     pub state: String,
+    /// The approved canonical GitHub repository and immutable repository id.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub github_repository: Option<GitHubRepositoryBinding>,
 }
 
 /// The answer of `GET /internal/sites/{site}/manifest` on the sites listener: the active manifest.
@@ -78,6 +82,7 @@ struct ActiveManifest {
     )]
     publications: Vec<PublicationId>,
     capabilities: Vec<SiteCapability>,
+    github_repository: Option<GitHubRepositoryBinding>,
 }
 
 /// The stored row of a site, read under a lock in the transaction that changes it.
@@ -86,6 +91,7 @@ struct Stored {
     capabilities: Vec<String>,
     hostname: String,
     state: String,
+    github_repository: Option<GitHubRepositoryBinding>,
 }
 
 impl Stored {
@@ -96,6 +102,7 @@ impl Stored {
             capabilities: self.capabilities,
             hostname: self.hostname,
             state: self.state,
+            github_repository: self.github_repository,
         })
         .into_response()
     }
@@ -124,12 +131,16 @@ pub(crate) async fn approve(
     if active.manifest_sha256.as_str() != requested.as_str() {
         return platform_http::reject(FailureKind::ManifestDigestStale);
     }
+    if active.github_repository.is_none() {
+        return platform_http::reject(FailureKind::InvalidRequest);
+    }
     let change = SiteApprovalChanged {
         site_id: active.site_id,
         manifest_sha256: active.manifest_sha256,
         capabilities: active.capabilities,
         hostname: active.hostname,
         state: ApprovalState::Approved,
+        github_repository: active.github_repository,
     };
     match store(state, principal, correlation, &change).await {
         Ok(response) => response,
@@ -223,18 +234,25 @@ async fn locked(
     site: &str,
 ) -> Result<Option<Stored>, FailureKind> {
     let row = sqlx::query(
-        "select manifest_sha256, capabilities, hostname, state
+        "select manifest_sha256, capabilities, hostname, state, github_repository
            from identity.site_approvals where site_id = $1 for update",
     )
     .bind(site)
     .fetch_optional(&mut **transaction)
     .await
     .map_err(|error| failed(&error))?;
-    Ok(row.map(|row| Stored {
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    let binding: Option<sqlx::types::Json<GitHubRepositoryBinding>> = row
+        .try_get("github_repository")
+        .map_err(|error| failed(&error))?;
+    Ok(Some(Stored {
         manifest_sha256: row.get("manifest_sha256"),
         capabilities: row.get("capabilities"),
         hostname: row.get("hostname"),
         state: row.get("state"),
+        github_repository: binding.map(|binding| binding.0),
     }))
 }
 
@@ -256,6 +274,9 @@ async fn store(
     if let Some(stored) = stored.filter(|stored| {
         stored.state == "approved" && stored.manifest_sha256 == change.manifest_sha256.as_str()
     }) {
+        if stored.github_repository != change.github_repository {
+            return Err(FailureKind::UpstreamInvalidResponse);
+        }
         return Ok(stored.answer(site));
     }
     let capabilities: Vec<&str> = change
@@ -266,12 +287,14 @@ async fn store(
     let now = jiff::Timestamp::now();
     let written = sqlx::query(
         "insert into identity.site_approvals
-             (site_id, changed_by, manifest_sha256, capabilities, hostname, state, changed_at)
-         values ($1, $2, $3, $4, $5, 'approved', $6)
+             (site_id, changed_by, manifest_sha256, capabilities, hostname, state, changed_at,
+              github_repository)
+         values ($1, $2, $3, $4, $5, 'approved', $6, $7)
          on conflict (site_id) do update
             set changed_by = excluded.changed_by, manifest_sha256 = excluded.manifest_sha256,
                 capabilities = excluded.capabilities, hostname = excluded.hostname,
-                state = 'approved', changed_at = excluded.changed_at",
+                state = 'approved', changed_at = excluded.changed_at,
+                github_repository = excluded.github_repository",
     )
     .bind(site)
     .bind(principal.user_id)
@@ -279,6 +302,7 @@ async fn store(
     .bind(&capabilities)
     .bind(change.hostname.as_str())
     .bind(to_offset(now))
+    .bind(change.github_repository.as_ref().map(sqlx::types::Json))
     .execute(&mut *transaction)
     .await;
     match written {
@@ -295,6 +319,7 @@ async fn store(
         capabilities: capabilities.into_iter().map(str::to_owned).collect(),
         hostname: change.hostname.as_str().to_owned(),
         state: "approved".to_owned(),
+        github_repository: change.github_repository.clone(),
     }
     .answer(site))
 }
@@ -375,6 +400,7 @@ fn withdrawal(site: &str, stored: &Stored) -> Result<SiteApprovalChanged, Failur
         capabilities,
         hostname: Hostname::parse(&stored.hostname).map_err(corrupt)?,
         state: ApprovalState::Withdrawn,
+        github_repository: stored.github_repository.clone(),
     })
 }
 

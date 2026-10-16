@@ -399,6 +399,9 @@ pub async fn dispatch(
                 Ok(principal) => principal,
                 Err(refusal) => return refusal,
             };
+            if parts.uri.path().ends_with("/deploys") && !is_deploy_json(&parts.headers) {
+                return platform_http::reject(FailureKind::InvalidRequest);
+            }
             // The activation takes no body, so it never streams under the transfer budget of the
             // upload that it sits below.
             if parts.uri.path().ends_with("/activate")
@@ -422,6 +425,15 @@ pub async fn dispatch(
             site_sessions::open_session(&state, &site, &parts.headers, body).await
         }
     }
+}
+
+/// Whether a deploy request declares the JSON proof protocol.
+fn is_deploy_json(headers: &http::HeaderMap) -> bool {
+    headers
+        .get(http::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .is_some_and(|value| value.trim().eq_ignore_ascii_case("application/json"))
 }
 
 /// Whether `path` is a route of the Content Delivery API, the `public` class of ADR-0017.

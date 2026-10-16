@@ -46,6 +46,17 @@
             },
             "type": "array"
           },
+          "github_repository": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GitHubRepositoryBinding"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The canonical GitHub repository and immutable repository id of the manifest."
+          },
           "hostname": {
             "description": "The hostname of the manifest.",
             "type": "string"
@@ -1039,6 +1050,45 @@
         ],
         "type": "object",
         "x-ratatoskr-unknown-policy": "preserve"
+      },
+      "GitHubRepositoryBinding": {
+        "additionalProperties": false,
+        "description": "One repository whose signed builds the owner approves for a site.\n\nBoth fields are part of the manifest digest and the approval event. A changed name or id needs\na new owner approval. Absence in a legacy manifest grants no deploy authority.",
+        "properties": {
+          "repository": {
+            "$ref": "#/components/schemas/GitHubRepositoryName",
+            "description": "The canonical public GitHub repository name that the owner approves."
+          },
+          "repository_id": {
+            "$ref": "#/components/schemas/GitHubRepositoryId",
+            "description": "Its immutable GitHub repository id; a reused name does not keep this identity."
+          }
+        },
+        "required": [
+          "repository",
+          "repository_id"
+        ],
+        "type": "object"
+      },
+      "GitHubRepositoryId": {
+        "description": "The immutable positive GitHub repository id, in decimal with no leading zero.\n\nA string keeps the exact integer in generated JavaScript clients. This is public identity,\nnot a credential. Verification compares it with the signed certificate claim.",
+        "examples": [
+          "1420131804"
+        ],
+        "maxLength": 20,
+        "pattern": "^[1-9][0-9]{0,19}$",
+        "title": "GitHubRepositoryId",
+        "type": "string"
+      },
+      "GitHubRepositoryName": {
+        "description": "The canonical lower-case GitHub repository in an approval, as `owner/name`.\n\nIt names one public GitHub repository. The numeric id also has to match its signed identity.",
+        "examples": [
+          "owner/docs-site"
+        ],
+        "maxLength": 140,
+        "pattern": "^[a-z0-9][a-z0-9-]{0,38}/[a-z0-9._-]{1,100}$",
+        "title": "GitHubRepositoryName",
+        "type": "string"
       },
       "InspectionCursor": {
         "description": "Opaque service-generated pagination cursor.",
@@ -2718,6 +2768,17 @@
               "type": "string"
             },
             "type": "array"
+          },
+          "github_repository": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GitHubRepositoryBinding"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The approved canonical GitHub repository and immutable repository id."
           },
           "hostname": {
             "description": "The hostname of the approved manifest.",

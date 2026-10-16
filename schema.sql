@@ -589,6 +589,14 @@ create table identity.site_approvals (
     capabilities     text[]      not null,
     hostname         text        not null,
     state            text        not null,
+    github_repository jsonb      check (github_repository is null or (
+        jsonb_typeof(github_repository) = 'object'
+        and github_repository ?& array['repository', 'repository_id']
+        and jsonb_typeof(github_repository->'repository') = 'string'
+        and jsonb_typeof(github_repository->'repository_id') = 'string'
+        and github_repository->>'repository' ~ '^[a-z0-9][a-z0-9-]{0,38}/[a-z0-9_.-]{1,100}$'
+        and github_repository->>'repository_id' ~ '^[1-9][0-9]{0,19}$'
+    )),
     changed_at       timestamptz not null,
 
     constraint site_approvals_site_id_is_a_site_id

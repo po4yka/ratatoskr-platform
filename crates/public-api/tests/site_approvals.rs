@@ -78,6 +78,7 @@ fn manifest(site: &str, digest: &str, hostname: &str) -> Value {
         "hostname": hostname,
         "publications": ["garden"],
         "capabilities": ["pages.read", "assets.read"],
+        "github_repository": {"repository": "owner/docs-site", "repository_id": "12345"},
     })
 }
 
@@ -219,6 +220,60 @@ async fn announced(pool: &sqlx::PgPool) -> Vec<Value> {
     .expect("the outbox")
 }
 
+/// SITE-028: the authoritative internal manifest supplies the approved immutable identity.
+#[tokio::test]
+async fn approval_event_covers_the_repository() {
+    let harness = TestDatabase::create().await.expect("a test database");
+    seed_owner(harness.pool()).await;
+    let manifests = Manifests::default();
+    let binding = json!({"repository": "owner/docs-site", "repository_id": "12345"});
+    let mut active = manifest("demo-site", FIRST, "garden.example.org");
+    active["github_repository"] = binding.clone();
+    manifests
+        .lock()
+        .unwrap()
+        .insert("demo-site".to_owned(), active);
+    let app = app(&harness, stub_sites(Arc::clone(&manifests)).await);
+    let (status, body) = approve(&app, "demo-site", FIRST).await;
+    assert_eq!(status, 200, "{body}");
+    let events = announced(harness.pool()).await;
+    let result = (
+        body["github_repository"].clone(),
+        events[0]["payload"]["github_repository"].clone(),
+    );
+    let (status, withdrawn) = call(&app, "DELETE", "demo-site", None).await;
+    assert_eq!(status, 200, "{withdrawn}");
+    let events = announced(harness.pool()).await;
+    let withdrawal = events[1]["payload"]["github_repository"].clone();
+    harness.cleanup().await.expect("cleanup");
+    assert_eq!(result, (binding.clone(), binding.clone()));
+    assert_eq!(withdrawal, binding);
+}
+
+/// SITE-028: approving a manifest without a repository cannot create deploy authority.
+#[tokio::test]
+async fn new_approval_requires_repository_binding() {
+    let harness = TestDatabase::create().await.expect("a test database");
+    seed_owner(harness.pool()).await;
+    let manifests = Manifests::default();
+    let mut active = manifest("demo-site", FIRST, "garden.example.org");
+    active
+        .as_object_mut()
+        .expect("a manifest object")
+        .remove("github_repository");
+    manifests
+        .lock()
+        .unwrap()
+        .insert("demo-site".to_owned(), active);
+    let app = app(&harness, stub_sites(manifests).await);
+    let (status, body) = approve(&app, "demo-site", FIRST).await;
+    let rows = approvals(harness.pool()).await;
+    let events = announced(harness.pool()).await;
+    harness.cleanup().await.expect("cleanup");
+    assert_eq!(status, 400, "an unbound manifest must be refused: {body}");
+    assert!(rows.is_empty() && events.is_empty());
+}
+
 /// Spec `site-manifest`, "An approval is stored in Platform and announced once".
 #[tokio::test]
 async fn approval_is_stored_and_announced() {
@@ -261,6 +316,7 @@ async fn approval_is_stored_and_announced() {
             "capabilities": ["pages.read", "assets.read"],
             "hostname": "garden.example.org",
             "state": "approved",
+            "github_repository": {"repository": "owner/docs-site", "repository_id": "12345"},
         })
     );
 
@@ -381,6 +437,7 @@ async fn withdrawal_is_stored_and_announced() {
             "capabilities": ["pages.read", "assets.read"],
             "hostname": "garden.example.org",
             "state": "withdrawn",
+            "github_repository": {"repository": "owner/docs-site", "repository_id": "12345"},
         })
     );
 
