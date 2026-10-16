@@ -172,6 +172,16 @@ async fn upload_content(
     let hash = format!("{:x}", Sha256::digest(&content));
     let blobs = format!("/v1/notes/connections/{}/blobs", scoped.connection_id);
     let claims = site_claims(principal, correlation, site);
+    let mut json_claims = claims.clone();
+    json_claims.insert(
+        http::header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json"),
+    );
+    let mut chunk_claims = claims.clone();
+    chunk_claims.insert(
+        http::header::CONTENT_TYPE,
+        HeaderValue::from_static("application/octet-stream"),
+    );
     let declared = serde_json::json!({
         "declared_size_bytes": content.len(),
         "media_type": "text/markdown",
@@ -182,7 +192,7 @@ async fn upload_content(
         state,
         http::Method::POST,
         &blobs,
-        &claims,
+        &json_claims,
         json_body(&declared),
     )
     .await?;
@@ -195,7 +205,7 @@ async fn upload_content(
         state,
         http::Method::PUT,
         &format!("{blobs}/{token}/chunks/0"),
-        &claims,
+        &chunk_claims,
         Body::from(content),
     )
     .await;
@@ -205,7 +215,7 @@ async fn upload_content(
                 state,
                 http::Method::POST,
                 &format!("{blobs}/{token}/finalize"),
-                &claims,
+                &json_claims,
                 json_body(&serde_json::json!({"resumption_token": token})),
             )
             .await
