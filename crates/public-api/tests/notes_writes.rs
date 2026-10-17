@@ -172,6 +172,23 @@ async fn invalid_body_is_refused() {
         // A path that leaves the vault, and one in the vault configuration.
         serde_json::json!({ "operation": update("../secrets.md", &markdown) }).to_string(),
         serde_json::json!({ "operation": update(".obsidian/app.json", &markdown) }).to_string(),
+        // Portable write names: both source and destination use the contract path type.
+        serde_json::json!({ "operation": update("Notes./x.md", &markdown) }).to_string(),
+        serde_json::json!({ "operation": update(".obsidian./app.json", &markdown) }).to_string(),
+        serde_json::json!({ "operation": update("Notes /x.md", &markdown) }).to_string(),
+        serde_json::json!({ "operation": update("A:B.md", &markdown) }).to_string(),
+        serde_json::json!({ "operation": { "rename": {
+            "path": "Projects/Plan.md", "base_hash": BASE_HASH, "target_path": "Notes/B:C.md",
+        } } })
+        .to_string(),
+        serde_json::json!({ "operation": { "rename": {
+            "path": "Projects/Plan.md", "base_hash": BASE_HASH, "target_path": "Notes./Plan.md",
+        } } })
+        .to_string(),
+        serde_json::json!({ "operation": { "rename": {
+            "path": "Projects/Plan.md", "base_hash": BASE_HASH, "target_path": "Notes /Plan.md",
+        } } })
+        .to_string(),
         // An update without its base.
         serde_json::json!({ "operation": { "update": {
             "path": "Projects/Plan.md", "blob": markdown,

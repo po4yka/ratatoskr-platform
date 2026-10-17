@@ -195,3 +195,38 @@ async fn a_conflict_from_another_lane_tenant_or_kind_is_rejected() {
 
     harness.cleanup().await.expect("cleanup");
 }
+
+/// A producer can name every stale member of a write group after the consumer expands.
+#[tokio::test]
+async fn a_group_conflict_with_stale_paths_is_applied() {
+    let harness = TestDatabase::create().await.expect("a test database");
+    let pool = harness.pool();
+    let write = write_operation(pool, "notes.file.write").await;
+    let conflict = Uuid::now_v7();
+    let mut payload = raised(write, conflict);
+    payload["stale_paths"] = serde_json::json!(["Projects/Plan.md", "Index.md"]);
+    let incoming = event(
+        "evt.notes.conflict.raised.v1",
+        "ratatoskr-notes",
+        OWNER,
+        payload.clone(),
+    );
+    assert_eq!(delivered(pool, &incoming).await, Some(Outcome::Applied));
+    assert_eq!(
+        results(pool, write).await,
+        [(
+            "notes.conflict.raised".to_owned(),
+            format!("notes_conflict:{conflict}")
+        )]
+    );
+    assert_eq!(delivered(pool, &incoming).await, None);
+    let again = event(
+        "evt.notes.conflict.raised.v1",
+        "ratatoskr-notes",
+        OWNER,
+        payload,
+    );
+    assert_eq!(delivered(pool, &again).await, Some(Outcome::Duplicate));
+    assert_eq!(results(pool, write).await.len(), 1);
+    harness.cleanup().await.expect("cleanup");
+}
